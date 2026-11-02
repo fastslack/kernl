@@ -13,7 +13,7 @@
   import {
     computeFloorPlan, initHumanoid, initOffice, initFurniture, initWalkers, initAmbiance,
     initHumanoidPool, createSittingHumanoidPool, type SittingHumanoidPool,
-    initAllSkins, resolveSkin, listSkins, type SkinDefinition,
+    initAllSkins, resolveSkin, listSkins, agentSkinId, type SkinDefinition,
     buildFloor, buildStreets, buildCorridorGrid, buildRooms, paintOfficePower, buildMeetingRooms, buildMyOffice, buildCentralHall, buildHallExtension, buildReception, buildCommunicationsOffice, buildDataCenterOffice, updateDataCenter, buildDesks, buildHallways,
     setupLighting,
     buildAmbiance, buildWallClock, buildActivityBoard, buildDoorLeds, updateDoorLeds, buildElevator, updateAmbiance,
@@ -1715,7 +1715,7 @@
     // Seated humanoid — we use the default skin's createHumanoid (not the
     // shared InstancedMesh pool) so this one figure can carry per-instance
     // gold trim without forcing a pool-level change.
-    const skin = resolveSkin((holder as { skin_id?: string }).skin_id);
+    const skin = resolveSkin(agentSkinId(holder as Parameters<typeof agentSkinId>[0]));
     const palette = skin.pickPalette(holder.id);
     const human = skin.createHumanoid({
       flowColor: topRank?.color ?? '#7c3aed',

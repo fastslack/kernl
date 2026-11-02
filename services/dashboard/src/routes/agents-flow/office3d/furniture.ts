@@ -6,6 +6,7 @@ import { resolveFlowColor, type FlowData } from './types.js';
 import type { SittingHumanoidPool } from './humanoid-pool.js';
 import type { SittingWorkerEntry } from './walkers/index.js';
 import { resolveSkin } from './skins/index.js';
+import { agentSkinId } from './types.js';
 import { applyPBR, bakeVertexAO } from './office/_materials.js';
 import { applyWorldTexture, getScreenTexture } from './textures.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
@@ -382,7 +383,7 @@ export function buildDesks(
     if (isActive) {
       // Resolve the agent's visual skin. The default goes into the pool when
       // available; alternate skins always render per-mesh.
-      const skin = resolveSkin(agent.skin_id);
+      const skin = resolveSkin(agentSkinId(agent));
       const palette = skin.pickPalette(agent.id);
       const phase = Math.random() * Math.PI * 2;
       const canUsePool = pool && skin.manifest.id === DEFAULT_SKIN_ID;

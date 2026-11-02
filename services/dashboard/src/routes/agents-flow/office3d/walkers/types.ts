@@ -26,7 +26,7 @@ export interface WalkerToPointOpts {
   deskPos: Map<string, Vec3>;
   rooms: Map<string, RoomInfo>;
   corridorGrid: CorridorGrid;
-  agents: Array<{ id: string; flow_id: string; skin_id?: string }>;
+  agents: Array<{ id: string; flow_id: string; skin_id?: string; builtin_handler?: string }>;
   color: string;
   message?: string;
   deskAabbs?: Map<string, Aabb2D>;
@@ -43,7 +43,7 @@ export interface CommuteWalkerOpts {
   deskPos: Map<string, Vec3>;
   rooms: Map<string, RoomInfo>;
   corridorGrid: CorridorGrid;
-  agents: Array<{ id: string; flow_id: string; skin_id?: string }>;
+  agents: Array<{ id: string; flow_id: string; skin_id?: string; builtin_handler?: string }>;
   color: string;
   deskAabbs?: Map<string, Aabb2D>;
   sittingWorkers?: SittingWorkers;

@@ -13,6 +13,12 @@ export interface AgentData {
   skin_id?: string;
 }
 
+/** Script handlers use the robot skin by default; an explicit skin_id wins. */
+export function agentSkinId(agent: { builtin_handler?: string; skin_id?: string } | null | undefined): string | undefined {
+  if (agent?.skin_id) return agent.skin_id;
+  return agent?.builtin_handler?.startsWith('script:') ? 'robot-2d' : undefined;
+}
+
 /** Backend default when a claude_code agent leaves `model` empty. */
 export const CLAUDE_CODE_DEFAULT_MODEL = 'claude-opus-4-6';
 

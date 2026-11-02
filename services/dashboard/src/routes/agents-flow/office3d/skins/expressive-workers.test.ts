@@ -1,6 +1,7 @@
 import {expect,test} from 'bun:test';
 import {characterExpression} from './expressive-atlas.js';
 import {resolveSkin,listSkins} from './index.js';
+import {agentSkinId} from '../types.js';
 
 test('2D expressions include readable focus, blinking, surprise and multiple speech shapes',()=>{
   expect(characterExpression('typing',0)).toBe('focused');
@@ -16,4 +17,10 @@ test('the three new characters coexist with the original skins',()=>{
 
 test('saved robot selections now resolve to the redesigned 1990s cyborg',()=>{
   expect(resolveSkin('robot-2d').manifest.name).toBe('Cyborg 94 2D');
+});
+
+test('script agents default to the robot skin while explicit choices are preserved',()=>{
+  expect(agentSkinId({builtin_handler:'script:agents:skill-suggest'})).toBe('robot-2d');
+  expect(agentSkinId({builtin_handler:'script:agents:skill-suggest',skin_id:'detective-2d'})).toBe('detective-2d');
+  expect(agentSkinId({builtin_handler:'check:low-stock'})).toBeUndefined();
 });

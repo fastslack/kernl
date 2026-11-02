@@ -131,6 +131,10 @@ export function drawExpressiveAtlas(opts: SkinCreateOpts, separateArms: boolean,
       rect(mx-3,25,2,1,hairShade);
     } else {
       // A clipped jaw and minimal speech shapes emphasize the mechanical face.
+      // Segmented temple plates and a lit status strip make the cyborg read at
+      // office-camera distance, even when the animation is idle.
+      rect(18,18,3,8,'#394c5e');rect(19,19,2,5,'#9eb5b7');
+      rect(18,26,3,2,'#d27359');rect(33,18,2,7,'#526d7d');
       rect(mx-1,28,7,1,ink);
       if(talking) {rect(mx+1,29,expression==='talk-open'?4:2,1,ink);rect(mx+2,28,2,1,cream);}
       if(surprise)rect(mx+2,29,2,2,ink);
@@ -177,7 +181,7 @@ export function drawExpressiveAtlas(opts: SkinCreateOpts, separateArms: boolean,
         poly([[21,15],[24,15],[25,17],[24,23],[22,25],[21,22]],'#a7b4b3');
         rect(21,16,1,5,'#dde0c9');rect(22,24,2,3,'#394c5b');
         rect(23,28,3,2,'#879b9e');rect(21,18,1,1,'#d9d6b8');
-        rect(20,25,1,3,'#bd644e');
+        rect(20,25,1,3,'#bd644e');rect(24,13,3,2,'#d1ded0');
       }
       features(profile,expression,frame);
     }
@@ -204,7 +208,14 @@ export function drawExpressiveAtlas(opts: SkinCreateOpts, separateArms: boolean,
       // Each outfit carries a readable prop rather than relying on palette alone.
       if(kind==='inventor') {rect(19,48,3,9,'#d5b464');rect(20,47,3,2,ink);rect(31,50,3,5,'#dfb062');}
       if(kind==='detective') {rect(26,40,2,13,'#67404b');rect(25,51,4,3,'#67404b');rect(31,44,3,4,'#e3c879');}
-      if(kind==='robot') {rect(21,43,11,12,'#29394f');rect(22,44,9,3,'#879b9e');rect(23,45,6,1,'#b4c4bd');rect(23,49,7,1,'#596b79');rect(23,52,3,1,'#d27359');rect(19,57,3,4,'#617786');rect(32,55,2,5,'#617786');}
+      if(kind==='robot') {
+        rect(19,42,3,12,'#405a70');rect(30,42,3,12,'#405a70');
+        rect(21,41,11,14,'#29394f');rect(22,42,9,3,'#879b9e');
+        rect(23,43,6,1,'#dce5d5');rect(22,47,9,1,'#596b79');
+        rect(24,49,5,1,'#728f98');rect(23,52,3,1,'#d27359');
+        rect(19,57,3,4,'#617786');rect(32,55,2,5,'#617786');
+        rect(22,55,9,2,'#384c61');
+      }
       ctx.restore();
     }
   });

@@ -4,7 +4,7 @@ import { drawExpressiveAtlas, type ExpressiveCharacter } from './expressive-atla
 
 function character(kind: ExpressiveCharacter,name:string,skin:number,hair:number,pants:number,sleeve:number):SkinDefinition {
   return {
-    manifest:{id:`${kind}-2d`,name,description:'1990s adventure-game pixel art with angular shading, expressive brows and animated speech.',author:'core',version:'1.0.0',category:'humanoid'},
+    manifest:{id:`${kind}-2d`,name,description:'Hand-shaded 1990s pixel character with a distinct silhouette, expressive face and animated speech.',author:'core',version:'1.1.0',category:kind==='robot'?'mech':'humanoid'},
     init:initAdventureWorker,
     pickPalette:()=>({skin,hair,pants}),
     createHumanoid:(opts)=>createAdventureWorker(opts,(o,separate)=>drawExpressiveAtlas(o,separate ?? false,kind),sleeve),
