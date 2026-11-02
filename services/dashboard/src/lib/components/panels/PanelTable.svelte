@@ -5,15 +5,23 @@
    * state with its count, plus the rows missing an email), a fixed layout that
    * never scrolls sideways, and a second line per cell when the field names a
    * `sub` (the place under the name, "vencido" under the next step).
+   *
+   * A view that declares `actions` gets those buttons on every row (a record action keyed "up:{{key}}" shows as
+   * an arrow), and one that declares `action` lets rows be dragged; the drop runs it with { key, pos }. The new
+   * order shows at once and holds until the office's data catches up with it.
    */
   import { createEventDispatcher } from 'svelte';
   import { locale } from '$lib/i18n/index.js';
   import { textOf } from '$lib/panels/template.js';
   import { kindOf, hrefOf, tone, humanize, RED, type FieldKind } from '$lib/panels/look.js';
-  import type { PanelView } from '$lib/panels/types.js';
+  import type { PanelAction, PanelView } from '$lib/panels/types.js';
+  import { runAction } from '$lib/panels/client.js';
+  import { moveKey, moveOf, actionGlyph, targetOf } from '$lib/panels/reorder.js';
   import Icon from '$lib/components/ui/Icon.svelte';
   export let view: PanelView;
   export let rows: Array<Record<string, unknown>> = [];
+  export let flowId = '';
+  export let actions: Record<string, PanelAction> = {};
   const dispatch = createEventDispatcher<{ open: string }>();
 
   type Filter = { key: string; value: string } | { missing: string } | null;
@@ -40,13 +48,55 @@
 
   const matches = (r: Record<string, unknown>, f: Filter) =>
     !f || ('missing' in f ? cell(r[f.missing]) === '' : cell(r[f.key]) === f.value);
-  $: shown = rows.filter((r) => matches(r, filter) && (!q || JSON.stringify(r).toLowerCase().includes(q.toLowerCase())));
+  // ── moving rows in place ──
+  $: rowActions = flowId ? (view.actions ?? []).filter((a) => actions[a]) : [];
+  $: dragAction = flowId && view.action && actions[view.action] ? view.action : '';
+  /** The order the operator just set, shown until the polled rows arrive in it (or a minute passes). */
+  let pending: { keys: string[]; until: number } | null = null;
+  let busyKey = '';
+  let moveMsg = '';
+  $: keysOf = (list: Array<Record<string, unknown>>) => list.map((r) => String(r.key ?? ''));
+  $: if (pending && (Date.now() > pending.until || keysOf(rows).join('|') === pending.keys.join('|'))) pending = null;
+  $: ordered = pending
+    ? [...rows].sort((a, b) => pending!.keys.indexOf(String(a.key ?? '')) - pending!.keys.indexOf(String(b.key ?? '')))
+    : rows;
+  async function move(actionId: string, values: Record<string, unknown>, keys: string[]) {
+    pending = { keys, until: Date.now() + 60_000 };
+    busyKey = String(values.key);
+    moveMsg = '';
+    try { await runAction(flowId, actionId, values); }
+    catch (e) { pending = null; moveMsg = e instanceof Error ? e.message : String(e); }
+    finally { busyKey = ''; }
+  }
+  function rowMove(actionId: string, r: Record<string, unknown>) {
+    const m = moveOf(actions[actionId].key);
+    const keys = keysOf(ordered);
+    const key = String(r.key ?? '');
+    void move(actionId, { key }, m ? moveKey(keys, key, targetOf(m, keys.indexOf(key), keys.length)) : keys);
+  }
+  let dragKey = '';
+  let overKey = '';
+  $: canDrag = !!dragAction && !q && !filter;
+  function drop(target: Record<string, unknown>) {
+    const key = dragKey, to = String(target.key ?? '');
+    dragKey = ''; overKey = '';
+    if (!key || key === to) return;
+    const keys = keysOf(ordered);
+    const pos = keys.indexOf(to);
+    void move(dragAction, { key, pos: pos + 1 }, moveKey(keys, key, pos));
+  }
+
+  $: shown = ordered.filter((r) => matches(r, filter) && (!q || JSON.stringify(r).toLowerCase().includes(q.toLowerCase())));
   const isOn = (f: Filter, g: Filter) => JSON.stringify(f) === JSON.stringify(g);
   function toggle(g: Filter) { filter = isOn(filter, g) ? null : g; }
 
   const open = (r: Record<string, unknown>) => view.detail && dispatch('open', String(r.key ?? ''));
-  const width = (key: string, i: number) =>
-    i === 0 ? '26%' : kinds[key] === 'number' ? '76px' : kinds[key] === 'status' ? '108px' : kinds[key] === 'phone' ? '128px' : 'auto';
+  // The wide column is the row's name: the field with a second line (sub), else the first one that is not a number.
+  // 28/10: a leading position number (#) took 26% of the Acme queue while the issue's name was cut off.
+  $: mainKey = (fields.find((f) => f.sub) ?? fields.find((f) => kinds[f.key] !== 'number') ?? fields[0])?.key;
+  $: width = (key: string, _i: number) =>
+    key === mainKey ? '40%' : kinds[key] === 'number' ? (/^(pos|#|n|nro)$/i.test(key) ? '44px' : '76px')
+      : kinds[key] === 'status' ? '124px' : kinds[key] === 'phone' ? '128px' : 'auto';
 </script>
 
 <div class="pt-bar">
@@ -79,13 +129,23 @@
   </div>
 {/if}
 
+{#if moveMsg}<div class="pt-movemsg" role="alert">{moveMsg}</div>{/if}
 <div class="pt-wrap">
   <table class="pt" class:pt--open={!!view.detail}>
-    <colgroup>{#each fields as f, i (f.key)}<col style="width:{width(f.key, i)}" />{/each}</colgroup>
-    <thead><tr>{#each fields as f (f.key)}<th>{textOf(f.label, $locale) || humanize(f.key)}</th>{/each}</tr></thead>
+    <colgroup>{#if canDrag}<col style="width:26px" />{/if}{#each fields as f, i (f.key)}<col style="width:{width(f.key, i)}" />{/each}{#if rowActions.length}<col style="width:{rowActions.length * 30 + 12}px" />{/if}</colgroup>
+    <thead><tr>{#if canDrag}<th aria-label={en ? 'Drag' : 'Arrastrar'}></th>{/if}{#each fields as f (f.key)}<th>{textOf(f.label, $locale) || humanize(f.key)}</th>{/each}{#if rowActions.length}<th>{en ? 'Move' : 'Mover'}</th>{/if}</tr></thead>
     <tbody>
       {#each shown as r, i (r.key ?? i)}
-        <tr tabindex="0" on:click={() => open(r)} on:keydown={(e) => e.key === 'Enter' && open(r)}>
+        <tr tabindex="0" on:click={() => open(r)} on:keydown={(e) => e.key === 'Enter' && open(r)}
+          class:pt-dragging={dragKey === String(r.key ?? '')} class:pt-over={overKey === String(r.key ?? '') && dragKey !== overKey}
+          class:pt-busy={busyKey === String(r.key ?? '')}
+          draggable={canDrag}
+          on:dragstart={(e) => { dragKey = String(r.key ?? ''); e.dataTransfer?.setData('text/plain', dragKey); }}
+          on:dragover|preventDefault={() => { if (dragKey) overKey = String(r.key ?? ''); }}
+          on:dragleave={() => { if (overKey === String(r.key ?? '')) overKey = ''; }}
+          on:drop|preventDefault={() => drop(r)}
+          on:dragend={() => { dragKey = ''; overKey = ''; }}>
+          {#if canDrag}<td class="pt-grip" title={en ? 'Drag to reorder' : 'Arrastrá para reordenar'} aria-hidden="true">⠿</td>{/if}
           {#each fields as f, fi (f.key)}
             {@const text = cell(r[f.key])}
             {@const kind = text ? kindOf(f.key, r[f.key]) : kinds[f.key]}
@@ -112,9 +172,17 @@
               {/if}
             </td>
           {/each}
+          {#if rowActions.length}
+            <td class="pt-moves">
+              {#each rowActions as a (a)}
+                <button type="button" class="pt-move" title={textOf(actions[a].label, $locale)} aria-label={`${textOf(actions[a].label, $locale)} ${String(r.key ?? '')}`}
+                  disabled={!!busyKey} on:click|stopPropagation={() => rowMove(a, r)}>{actionGlyph(actions[a].key) ?? textOf(actions[a].label, $locale)}</button>
+              {/each}
+            </td>
+          {/if}
         </tr>
       {:else}
-        <tr><td colspan={fields.length || 1} class="pt-empty">
+        <tr><td colspan={(fields.length || 1) + (canDrag ? 1 : 0) + (rowActions.length ? 1 : 0)} class="pt-empty">
           <Icon name="inbox" size={22} />
           <span>{q || filter ? (en ? 'Nothing matches.' : 'Nada coincide.') : (en ? 'Nothing here yet.' : 'Todavía no hay nada.')}</span>
         </td></tr>
@@ -185,6 +253,20 @@
   .pt-num { font-weight: 800; color: #FBBF24; font-variant-numeric: tabular-nums; }
   .pt-num--zero { color: var(--text-3); font-weight: 600; }
   .pt-none { color: var(--text-3); opacity: .6; }
+  .pt-moves { white-space: nowrap; text-align: right; }
+  .pt-move {
+    width: 26px; height: 26px; margin-left: 2px; border-radius: 7px; cursor: pointer; font: 800 13px 'Manrope', sans-serif; line-height: 1;
+    color: #22D3EE; background: color-mix(in srgb, #22D3EE 10%, transparent); border: 1px solid color-mix(in srgb, #22D3EE 30%, transparent);
+    transition: background .15s, border-color .15s, transform .15s ease-out;
+  }
+  .pt-move:hover:not(:disabled) { background: color-mix(in srgb, #22D3EE 24%, transparent); border-color: #22D3EE; transform: translateY(-1px); }
+  .pt-move:focus-visible { outline: 2px solid #22D3EE; outline-offset: 2px; }
+  .pt-move:disabled { opacity: .4; cursor: default; }
+  .pt-grip { cursor: grab; color: var(--text-3); text-align: center; font-size: 14px; user-select: none; }
+  .pt tbody tr.pt-dragging { opacity: .45; }
+  .pt tbody tr.pt-over { box-shadow: inset 0 2px 0 #22D3EE; }
+  .pt tbody tr.pt-busy { opacity: .7; }
+  .pt-movemsg { margin-top: 8px; padding: 6px 10px; border-radius: 8px; font: 600 11.5px 'Manrope', sans-serif; color: #fecdd3; background: rgba(244,63,94,.12); border: 1px solid rgba(244,63,94,.35); }
   .pt-empty { text-align: center; padding: 28px 10px !important; color: var(--text-3) !important; }
   .pt-empty :global(svg) { display: block; margin: 0 auto 6px; color: #A78BFA; }
   @media (prefers-reduced-motion: reduce) {
