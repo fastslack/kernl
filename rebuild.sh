@@ -24,8 +24,8 @@
 #     kernel. Sin esto, un kernel recreado deja a nginx apuntando a la IP vieja
 #     y todo responde 502.
 #   • Espera a que /api/health devuelva 200 antes de dar OK.
-#   • Opera SIEMPRE sobre el stack público (docker-compose.yml). Para el stack
-#     full usá `scripts/dev.sh`.
+#   • Conserva los overlays del stack público existente, incluidos los mounts
+#     del host. COMPOSE_FILE permite elegir explícitamente otra configuración.
 # ──────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -65,6 +65,29 @@ command -v docker >/dev/null 2>&1 || die "docker no encontrado"
 docker compose version >/dev/null 2>&1 || die "docker compose v2 requerido"
 [[ -f docker-compose.yml ]] || die "docker-compose.yml no está en $ROOT"
 
+# Compose no recuerda overlays al recrear servicios. Recuperarlos del container
+# evita quitar silenciosamente los mounts del host durante un rebuild normal.
+COMPOSE=(docker compose)
+COMPOSE_FILES=()
+if [[ ${COMPOSE_FILE+x} ]]; then
+  [[ -n "$COMPOSE_FILE" ]] || die "COMPOSE_FILE está vacío"
+  IFS="${COMPOSE_PATH_SEPARATOR:-:}" read -r -a COMPOSE_FILES <<< "$COMPOSE_FILE"
+else
+  if compose_files_label="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' kernl-public-kernel 2>/dev/null)"; then
+    [[ -n "$compose_files_label" && "$compose_files_label" != '<no value>' ]] \
+      || die "el kernel existente no tiene el label config_files; indicá COMPOSE_FILE"
+    IFS=',' read -r -a COMPOSE_FILES <<< "$compose_files_label"
+  else
+    COMPOSE_FILES=(docker-compose.yml)
+  fi
+fi
+for compose_file in "${COMPOSE_FILES[@]}"; do
+  [[ -n "$compose_file" && -f "$compose_file" && -r "$compose_file" ]] \
+    || die "archivo Compose inexistente o ilegible: $compose_file"
+  COMPOSE+=(-f "$compose_file")
+done
+step "Configuración Compose: ${COMPOSE_FILES[*]}"
+
 PORT="${DASHBOARD_PORT:-3086}"
 HEALTH="http://localhost:${PORT}/api/health"
 
@@ -90,12 +113,12 @@ fi
 
 # ── 2) Build de imágenes ────────────────────────────────────────────
 step "Reconstruyendo: ${SERVICES[*]} ${NOCACHE:+(--no-cache)}"
-docker compose build $NOCACHE "${SERVICES[@]}" || die "docker compose build falló"
+"${COMPOSE[@]}" build $NOCACHE "${SERVICES[@]}" || die "docker compose build falló"
 ok "imágenes construidas"
 
 # ── 3) Recrear containers ───────────────────────────────────────────
 step "Levantando containers"
-docker compose up -d "${SERVICES[@]}" || die "docker compose up falló"
+"${COMPOSE[@]}" up -d "${SERVICES[@]}" || die "docker compose up falló"
 
 # ── 4) nginx DNS refresh ────────────────────────────────────────────
 # El dashboard (nginx) resuelve la IP del kernel al arrancar y la cachea. Si el
@@ -113,7 +136,7 @@ for i in $(seq 1 60); do
   if [[ "$code" == "200" ]]; then
     ok "kernel healthy — dashboard en ${B}http://localhost:${PORT}${Z}"
     echo "${DIM}   Refrescá el navegador con Ctrl+Shift+R (el hard refresh evita chunks JS cacheados).${Z}"
-    [[ $FOLLOW_LOGS -eq 1 ]] && { echo; exec docker compose logs -f kernel; }
+    [[ $FOLLOW_LOGS -eq 1 ]] && { echo; exec "${COMPOSE[@]}" logs -f kernel; }
     exit 0
   fi
   sleep 2
