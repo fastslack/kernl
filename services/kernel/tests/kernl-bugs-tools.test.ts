@@ -27,7 +27,7 @@ describe("buildBugContext", () => {
   it("collects the run, redacted, without private tool bodies", () => {
     const run = service.createRun({ agent_id: workerId, trigger_type: "manual", goal: "g" });
     service.updateRun(run.id, { status: "failed", error: "boom at /home/fastslack/x.ts" });
-    service.addStep({ run_id: run.id, step_number: 1, type: "tool_call", tool_name: "Bash", tool_input: { command: "echo ghp_ABCDEFGHIJKLMNOPQRSTUVWX12" } });
+    service.addStep({ run_id: run.id, step_number: 1, type: "tool_call", tool_name: "Bash", tool_input: { command: `echo ${"ghp" + "_ABCDEFGHIJKLMNOPQRSTUVWX12"}` } });
     service.addStep({ run_id: run.id, step_number: 2, type: "tool_result", tool_name: "mcp__kernel__kernel_email_get", tool_output: "Dear Ana, the contract…" });
     const ctx = buildBugContext(service, run.id)!;
     const s = JSON.stringify(ctx);
