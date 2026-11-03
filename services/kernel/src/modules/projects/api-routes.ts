@@ -5,6 +5,7 @@ import { HttpError } from "../../sdk/http-error.js";
 import type { ProjectsService } from "./projects-service.js";
 import type { OutboxService } from "./outbox-service.js";
 import type { ConnectorService } from "./connector-service.js";
+import { ACCOUNT_PROVIDERS, type AccountProvider, type ProjectAccountsService } from "./accounts.js";
 import { ProjectBriefSchema, SLUG_RE } from "./brief.js";
 import { PROJECT_LINK_KINDS, type OutboxStatus, type ProjectLinkKind, type ProjectStatus } from "./types.js";
 
@@ -12,6 +13,7 @@ export interface ProjectsRouteDeps {
   projects: ProjectsService;
   outbox: OutboxService;
   connector: ConnectorService;
+  accounts: ProjectAccountsService;
   flowName: (flowId: string) => string;
   listFlows: () => Array<{ id: string; name: string; active?: number }>;
 }
@@ -70,7 +72,7 @@ function readRaw(req: IncomingMessage, maxBytes: number): Promise<string> {
 
 /** Everything the dashboard needs for /projects, /outbox and the office panel. */
 export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsRouteDeps): void {
-  const { projects, outbox, connector } = deps;
+  const { projects, outbox, connector, accounts } = deps;
 
   const mustProject = (idOrSlug: string) => {
     const p = projects.get(idOrSlug);
@@ -139,6 +141,37 @@ export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsR
     const b = parse(LinkBody, body);
     projects.link(p.id, b.kind as ProjectLinkKind, b.ref_id);
     return { links: projects.links(p.id) };
+  });
+
+  // ── The project's own accounts (Cloudflare, Datadog, AWS, git identity) ──
+  const mustProvider = (p: string): AccountProvider => {
+    if (!(ACCOUNT_PROVIDERS as readonly string[]).includes(p)) throw new HttpError(404, `Unknown account type: ${p}`);
+    return p as AccountProvider;
+  };
+
+  server.route("GET", "/api/projects/:id/accounts", ({ params }) => {
+    const p = mustProject(params.id);
+    return { accounts: accounts.list(p.id) };
+  });
+
+  // Tested against the service before it is saved; a refusal leaves the stored account as it was.
+  server.route("PUT", "/api/projects/:id/accounts/:provider", async ({ params, body }) => {
+    const p = mustProject(params.id);
+    const provider = mustProvider(params.provider);
+    try {
+      return { account: await accounts.set(p.id, provider, (body ?? {}) as Record<string, unknown>) };
+    } catch (err) { return asHttp(err); }
+  });
+
+  server.route("POST", "/api/projects/:id/accounts/:provider/test", async ({ params }) => {
+    const p = mustProject(params.id);
+    return await accounts.test(p.id, mustProvider(params.provider));
+  });
+
+  server.route("DELETE", "/api/projects/:id/accounts/:provider", ({ params }) => {
+    const p = mustProject(params.id);
+    accounts.remove(p.id, mustProvider(params.provider));
+    return { accounts: accounts.list(p.id) };
   });
 
   server.route("DELETE", "/api/projects/:id/links", ({ params, query }) => {

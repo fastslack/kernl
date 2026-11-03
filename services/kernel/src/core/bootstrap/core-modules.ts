@@ -50,6 +50,7 @@ import { dispatchPlanPeerCall } from "../peer-proxy.js";
 import { useProjects } from "../host-runtime.js";
 import { setOfficeSchedulesChangedHook } from "../../modules/agents/extension-facade.js";
 import { projectsHostFor } from "../../modules/projects/sdk-host.js";
+import { projectOfRepo } from "../../modules/projects/accounts.js";
 import { configureAudit as configurePromptSanitizerAudit } from "../prompt-sanitizer.js";
 import { applyPerformanceIndexes } from "../db/performance-indexes.js";
 import type { MeshModule } from "../types/extensions/index.js";
@@ -347,7 +348,9 @@ export async function initCoreModules(args: {
     const outbox = projectsModule.getOutbox();
     const connector = projectsModule.getConnector();
     if (outbox) {
-      useProjects(() => projectsHostFor(projectsService, outbox, (pid, kind) => connector?.records(pid, kind) ?? []));
+      const accounts = projectsModule.getAccounts?.() ?? null;
+      useProjects(() => projectsHostFor(projectsService, outbox, (pid, kind) => connector?.records(pid, kind) ?? [],
+        accounts, (pathOrRemote) => projectOfRepo(ctx.sqlite, pathOrRemote)));
     }
     // MCP dispatch refuses outbound tools to callers whose run has a project — and to any
     // run of an agent whose office works for a project (inbox letters, panel runs): such an

@@ -14,6 +14,8 @@ import { OutboxService } from "../src/modules/projects/outbox-service.js";
 import { ConnectorService } from "../src/modules/projects/connector-service.js";
 import { sign } from "../src/modules/projects/connector-contract.js";
 import { registerProjectsRoutes } from "../src/modules/projects/api-routes.js";
+import { ProjectAccountsService } from "../src/modules/projects/accounts.js";
+import { generateKey } from "../src/sdk/crypto.js";
 import { AgentService } from "../src/modules/agents/service.js";
 import { EventBus } from "../src/core/event-bus.js";
 
@@ -38,7 +40,7 @@ outbox.registerChannel("fake", {
 const server = new KernelHttpServer({
   config: { dashboard: { port: 0, bind: "127.0.0.1" }, auth: { token: TOKEN }, cors: { allowedOrigins: [] } } as unknown as KernelConfig,
 });
-registerProjectsRoutes(server, { projects, outbox, connector, flowName: (id) => agents.getFlow(id)?.name ?? id, listFlows: () => agents.listFlows() });
+registerProjectsRoutes(server, { projects, outbox, connector, accounts: new ProjectAccountsService(db, generateKey()), flowName: (id) => agents.getFlow(id)?.name ?? id, listFlows: () => agents.listFlows() });
 
 let base = "";
 const auth = { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" };

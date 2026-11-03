@@ -9,6 +9,7 @@ import { ConnectorService } from "./connector-service.js";
 import { DraftNotifier } from "./draft-notifier.js";
 import { placesTool } from "./places.js";
 import { outboxTools, projectTools, type RunLookup, type FlowOfAgent } from "./tools.js";
+import { ProjectAccountsService } from "./accounts.js";
 import { registerProjectsRoutes } from "./api-routes.js";
 
 /** data/projects/{slug}/ — each project's home (BRIEF.md, MEMORY.md, assets/). */
@@ -37,6 +38,7 @@ export interface ProjectsModule extends ExtensibleModule {
   getService(): ProjectsService | null;
   getOutbox(): OutboxService | null;
   getConnector(): ConnectorService | null;
+  getAccounts(): ProjectAccountsService | null;
   /** How this module reads runs and agents' offices; bootstrap wires it after agents init. */
   setAgentLookups(lookups: {
     getRun: RunLookup;
@@ -55,6 +57,7 @@ export function createProjectsModule(): ProjectsModule {
   let service: ProjectsService | null = null;
   let outbox: OutboxService | null = null;
   let connector: ConnectorService | null = null;
+  let accounts: ProjectAccountsService | null = null;
   let connectorTimer: ReturnType<typeof setInterval> | null = null;
   let tools: ToolDefinition[] = [];
   let dashboard: DashboardDescriptor | null = null;
@@ -95,6 +98,7 @@ export function createProjectsModule(): ProjectsModule {
       }, OUTBOX_TICK_MS);
       tickTimer.unref?.();
       connector = new ConnectorService(ctx.sqlite, ctx.events, service);
+      accounts = new ProjectAccountsService(ctx.sqlite, ctx.config.encryption.key);
       connectorTimer = setInterval(() => {
         void connector?.pullAllDue().catch((err) => log.warn(`projects: connector pull failed: ${String(err)}`));
       }, CONNECTOR_CHECK_MS);
@@ -109,11 +113,13 @@ export function createProjectsModule(): ProjectsModule {
       const svc = service;
       const ob = outbox;
       const cn = connector;
+      const ac = accounts;
       dashboard = {
         registerRoutes: (server) => registerProjectsRoutes(server, {
           projects: svc,
           outbox: ob,
           connector: cn,
+          accounts: ac,
           flowName: (id) => lookups.flowName?.(id) ?? id,
           listFlows: () => lookups.listFlows?.() ?? [],
         }),
@@ -128,6 +134,7 @@ export function createProjectsModule(): ProjectsModule {
     getService() { return service; },
     getOutbox() { return outbox; },
     getConnector() { return connector; },
+    getAccounts() { return accounts; },
     setAgentLookups(l) { lookups = l; },
     async shutdown() {
       if (tickTimer) clearInterval(tickTimer);

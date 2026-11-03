@@ -43,7 +43,15 @@ export interface ProjectsHost {
   registerOutboxPolicy?(name: string, fn: OutboxPolicy): void;
   /** Optional: older kernels lack it. */
   unregisterOutboxPolicy?(name: string): void;
+  /** The project a repo belongs to (registered path or git remote). Optional: older kernels lack it. */
+  ofRepo?(pathOrRemote: string): string | undefined;
+  /** The environment a deploy for the project runs with (its own Cloudflare, Datadog, AWS, git). Optional. */
+  accountEnv?(projectId: string): Record<string, string>;
+  /** One of the project's accounts, secrets in the clear, or undefined. Optional. */
+  account?(projectId: string, provider: ProjectAccountProvider): { config: Record<string, string>; secrets: Record<string, string>; identity: string } | undefined;
 }
+
+export type ProjectAccountProvider = "cloudflare" | "datadog" | "aws" | "git";
 
 function host(): ProjectsHost {
   const h = getHost().projects?.();
@@ -57,6 +65,11 @@ export const projects = {
   list: (filter?: { flowId?: string }): ProjectInfo[] => host().list(filter),
   records: (projectId: string, kind: string) => host().records(projectId, kind),
   officeSettings: (flowId: string, projectId: string): Record<string, unknown> => host().officeSettings(flowId, projectId),
+  /** The project a repo belongs to; undefined when none or several, or on an older kernel. */
+  ofRepo: (pathOrRemote: string): string | undefined => host().ofRepo?.(pathOrRemote),
+  /** The project's deploy environment: only its own accounts, never another project's ({} on an older kernel). */
+  accountEnv: (projectId: string): Record<string, string> => host().accountEnv?.(projectId) ?? {},
+  account: (projectId: string, provider: ProjectAccountProvider) => host().account?.(projectId, provider),
 };
 
 /** Register how a channel validates, previews and sends an approved draft. */

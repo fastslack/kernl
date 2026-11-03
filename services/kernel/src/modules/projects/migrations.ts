@@ -188,4 +188,25 @@ export const projectsMigrations: Migration[] = [
       ALTER TABLE project_links_v9 RENAME TO project_links;
     `,
   },
+  {
+    // A project's own Cloudflare, Datadog, AWS and git identity (accounts.ts):
+    // one per service, owned by the project; secrets sealed with the kernel key.
+    version: 10,
+    sql: `
+      CREATE TABLE IF NOT EXISTS project_accounts (
+        id              TEXT PRIMARY KEY,
+        project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        provider        TEXT NOT NULL CHECK(provider IN ('cloudflare','datadog','aws','git')),
+        config          TEXT NOT NULL DEFAULT '{}',
+        secrets         TEXT NOT NULL DEFAULT '',
+        identity        TEXT NOT NULL DEFAULT '',
+        last_test_at    TEXT,
+        last_test_ok    INTEGER,
+        last_test_error TEXT NOT NULL DEFAULT '',
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        UNIQUE(project_id, provider)
+      );
+    `,
+  },
 ];

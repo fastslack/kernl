@@ -12,6 +12,7 @@
   import ViewHeader from '$shared/components/ViewHeader.svelte';
   import Skeleton from '$shared/components/Skeleton.svelte';
   import BriefFields, { emptyBrief, type BriefDraft } from '$lib/components/projects/BriefFields.svelte';
+  import DeployAccounts from '$lib/components/projects/DeployAccounts.svelte';
 
   type Status = 'active' | 'paused' | 'archived';
   interface Brief {
@@ -553,6 +554,7 @@
             <li class="no-links">Todavía no vinculaste nada. Empezá por la red social o el correo desde el que querés que trabajen los agentes.</li>
           {/each}
         </ul>
+        <DeployAccounts projectId={detail.project.id} projectName={detail.project.name} />
       {:else if tab === 'offices'}
       <div class="offices-box">
         <h3>¿Qué oficinas trabajan para {detail.project.name}?</h3>
