@@ -23,6 +23,17 @@ const toItem = (r: Row): OutboxItem => ({ ...r, payload: JSON.parse(r.payload ||
  * double approve or a tick racing an approve can never publish twice. Nothing
  * is ever retried automatically: a failed send waits for a human.
  */
+/**
+ * The item's project, inside what the channel receives when the draft did not carry it. A channel only sees
+ * the payload: Growth's web_change could not tell which project a change was for when Growth works on several
+ * (16/10: three approved requests to Desarrollo failed with "falta project_id").
+ */
+export function withProject(payload: unknown, projectId: string | null | undefined): unknown {
+  if (!projectId || !payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
+  const p = payload as Record<string, unknown>;
+  return typeof p.project_id === "string" && p.project_id ? p : { ...p, project_id: projectId };
+}
+
 export class OutboxService {
   private channels = new Map<string, OutboxChannelHandler>();
   private policies = new Map<string, OutboxPolicy>();
@@ -263,7 +274,7 @@ export class OutboxService {
     if (Number(claim.changes) === 0) return this.mustGet(id);
     const it = this.mustGet(id);
     try {
-      const { ref } = await this.handler(it.channel).send(it.payload, it.account_ref);
+      const { ref } = await this.handler(it.channel).send(withProject(it.payload, it.project_id), it.account_ref);
       const now = isoNow();
       this.db.prepare("UPDATE outbox_items SET status = 'sent', sent_ref = ?, sent_at = ?, updated_at = ? WHERE id = ?")
         .run(ref, now, now, id);

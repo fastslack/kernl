@@ -149,6 +149,8 @@ export interface ForgeReadToolsSpec<C extends ForgeConnectionRow & { host?: stri
   connections: () => C[];
   /** The forge's host for a connection, to match a project URL to it ("gitlab.com"). */
   hostOf: (c: C) => string;
+  /** The connections this project's repo may use (see scope.ts); all of them when absent. */
+  scope?: (all: C[], host: string, path: string) => C[];
 }
 
 /**
@@ -184,7 +186,12 @@ export function forgeReadTools<C extends ForgeConnectionRow & { host?: string }>
   const run = async (which: "issue" | "change", a: { project: string; number: number; notes?: number; connection?: string; patch?: boolean }) => {
     const parsed = parseForgeProject(a.project);
     if (!parsed) return errorResult(`Not a ${label} project: ${a.project}`);
-    const picked = pickConnection(spec.connections(), a.connection, parsed.host, spec.hostOf, label);
+    const all = spec.connections();
+    const allowed = spec.scope ? spec.scope(all, parsed.host, parsed.path) : all;
+    if (all.length > 0 && allowed.length === 0) {
+      return errorResult(`Every ${label} connection is reserved for another project. Link one to the project that owns ${parsed.path}.`);
+    }
+    const picked = pickConnection(allowed, a.connection, parsed.host, spec.hostOf, label);
     if (!picked.ok) return errorResult(picked.error);
     const opts: ReadOptions = { notes: a.notes ?? 15, patch: a.patch === true };
     try {

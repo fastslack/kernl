@@ -8,7 +8,7 @@
     from, and the optional data connection. Every field says what it is for.
   */
   import { onMount, tick } from 'svelte';
-  import { apiFetchRaw, readApiError } from '$lib/api.js';
+  import { apiFetchRaw, readApiError, rpcPost } from '$lib/api.js';
   import ViewHeader from '$shared/components/ViewHeader.svelte';
   import Skeleton from '$shared/components/Skeleton.svelte';
   import BriefFields, { emptyBrief, type BriefDraft } from '$lib/components/projects/BriefFields.svelte';
@@ -33,29 +33,45 @@
     { id: 'email', kind: 'email_account', label: 'Correo', pick: true, hint: '', help: 'La casilla desde la que Ventas y Marketing escriben mails para este proyecto.', empty: 'No hay cuentas de correo. Agregá una desde Social → Comms.' },
     { id: 'linkedin', kind: 'social_account', label: 'LinkedIn', pick: true, hint: '', help: 'La cuenta desde la que Marketing publica posts.', empty: 'No hay cuentas de LinkedIn conectadas. Conectá una desde Social → LinkedIn.' },
     { id: 'whatsapp', kind: 'social_account', label: 'WhatsApp', pick: true, hint: '', help: 'Para escribirle a quien ya te dejó su número o te escribió. Nunca en frío.', empty: 'WhatsApp no está conectado. Vinculalo desde Ajustes → Canales.' },
+    { id: 'github', kind: 'github_connection', label: 'GitHub', pick: true, hint: '', help: 'La cuenta de GitHub con la que la oficina y Growth leen y abren issues en los repos de este proyecto. Queda reservada: ningún otro proyecto la usa.', empty: 'No hay conexiones de GitHub. Creá una acá abajo.' },
+    { id: 'gitlab', kind: 'gitlab_connection', label: 'GitLab', pick: true, hint: '', help: 'La cuenta de GitLab con la que la oficina y Growth leen y abren issues en los repos de este proyecto. Queda reservada: ningún otro proyecto la usa.', empty: 'No hay conexiones de GitLab. Creá una acá abajo.' },
     { id: 'repo', kind: 'repo', label: 'Repositorio', pick: false, hint: 'Nombre del repo registrado', help: 'Código del producto, para que los agentes lo consulten.', empty: '' },
     { id: 'task_project', kind: 'task_project', label: 'Proyecto de tareas', pick: false, hint: 'Nombre del proyecto de tareas', help: 'Dónde las oficinas anotan tareas de este proyecto.', empty: '' },
     { id: 'workspace', kind: 'workspace', label: 'Workspace', pick: false, hint: 'Nombre del workspace', help: 'Carpeta compartida con material del proyecto.', empty: '' },
     { id: 'other', kind: 'social_account', label: 'Otra cuenta (avanzado)', pick: false, hint: 'tipo:id, ej. twitter:mi_cuenta', help: 'Referencia manual para una integración sin selector.', empty: '' },
   ];
 
-  let accountOptions: Record<string, Array<{ ref: string; label: string }>> = { email: [], linkedin: [], whatsapp: [] };
+  let accountOptions: Record<string, Array<{ ref: string; label: string }>> = { email: [], linkedin: [], whatsapp: [], github: [], gitlab: [] };
+
+  interface ForgeConn { id: string; name: string; details: Record<string, string>; lastTestOk: boolean | null }
+  const forgeOptions = (r: { connections?: ForgeConn[] } | null) =>
+    (r?.connections ?? []).map((c) => ({
+      ref: c.id,
+      label: [c.name, c.details.host?.replace(/^https?:\/\//, ''), c.details.auth === 'token' ? 'token personal' : c.details.app_id ? 'GitHub App' : '', c.lastTestOk === false ? 'última prueba falló' : '']
+        .filter(Boolean).join(' · '),
+    }));
 
   async function loadAccountOptions() {
-    const [mail, li, wa] = await Promise.all([
+    const [mail, li, wa, gh, gl] = await Promise.all([
       call('/api/email-accounts').catch(() => []),
       call('/api/linkedin/accounts').catch(() => ({ accounts: [] })),
       call('/api/channels/whatsapp/status').catch(() => null),
+      rpcPost('github.connections.list').catch(() => null),
+      rpcPost('gitlab.connections.list').catch(() => null),
     ]);
     accountOptions = {
       email: (Array.isArray(mail) ? mail : []).map((a: { id: string; label: string; email: string }) => ({ ref: `comms:${a.id}`, label: `${a.label} · ${a.email}` })),
       linkedin: (li?.accounts ?? []).filter((a: { status: string }) => a.status === 'active').map((a: { id: string; display_name: string }) => ({ ref: `linkedin:${a.id}`, label: a.display_name })),
       whatsapp: wa?.bridge_connected && wa?.jid ? [{ ref: 'whatsapp:default', label: `Número vinculado (${String(wa.jid).split('@')[0]})` }] : [],
+      github: forgeOptions(gh),
+      gitlab: forgeOptions(gl),
     };
   }
 
   /** A linked ref as a person reads it. */
   function linkLabel(l: Link, opts: Record<string, Array<{ ref: string; label: string }>>): { kind: string; text: string } {
+    const forge = LINK_KINDS.find((k) => k.kind === l.kind && (k.id === 'github' || k.id === 'gitlab'));
+    if (forge) return { kind: forge.label, text: opts[forge.id]?.find((o) => o.ref === l.ref_id)?.label ?? `Conexión de ${forge.label} (ya no existe)` };
     for (const k of ['email', 'linkedin', 'whatsapp']) {
       const hit = opts[k]?.find((o) => o.ref === l.ref_id);
       if (hit) return { kind: LINK_KINDS.find((x) => x.id === k)!.label, text: hit.label };
@@ -234,6 +250,21 @@
     linkRef = '';
     await load();
   }, 'Vinculado');
+
+  // A new GitHub/GitLab connection, tested by the forge before it is kept, then linked here.
+  let newConn = { name: '', token: '', host: '' };
+  const addConnection = () => run(async () => {
+    if (!detail || !newConn.token.trim()) return;
+    const forge = kind.id;
+    const created = await rpcPost(`${forge}.connections.add`, {
+      name: newConn.name.trim() || `${detail.project.slug}-${forge}`,
+      token: newConn.token.trim(),
+      ...(forge === 'gitlab' && newConn.host.trim() ? { host: newConn.host.trim() } : {}),
+    });
+    await call(`/api/projects/${detail.project.id}/links`, { method: 'POST', body: JSON.stringify({ kind: kind.kind, ref_id: created.id }) });
+    newConn = { name: '', token: '', host: '' };
+    await Promise.all([load(), loadAccountOptions()]);
+  }, 'Conexión creada y vinculada');
 
   const removeLink = (l: Link) => run(async () => {
     if (!detail) return;
@@ -481,6 +512,33 @@
           <button class="btn" disabled={saving || !linkRef.trim()}>Vincular</button>
         </form>
         <p class="help">{kind.help}</p>
+        {#if kind.id === 'github' || kind.id === 'gitlab'}
+          <details class="new-conn" open={options.length === 0}>
+            <summary>Conexión nueva de {kind.label}</summary>
+            <form class="link-form" on:submit|preventDefault={addConnection}>
+              <div class="field">
+                <label for="conn-name">Nombre</label>
+                <input id="conn-name" bind:value={newConn.name} placeholder="{detail.project.slug}-{kind.id}" />
+              </div>
+              {#if kind.id === 'gitlab'}
+                <div class="field">
+                  <label for="conn-host">Servidor</label>
+                  <input id="conn-host" bind:value={newConn.host} placeholder="https://gitlab.com" />
+                </div>
+              {/if}
+              <div class="field grow">
+                <label for="conn-token">Token</label>
+                <input id="conn-token" type="password" autocomplete="off" bind:value={newConn.token} />
+              </div>
+              <button class="btn" disabled={saving || !newConn.token.trim()}>Conectar y vincular</button>
+            </form>
+            {#if kind.id === 'github'}
+              <p class="help">En GitHub: Settings → Developer settings → <b>Fine-grained tokens</b>. Dale acceso solo a los repos de {detail.project.name}, con permiso de lectura y escritura en <b>Issues</b>, <b>Pull requests</b> y <b>Contents</b>. Kernl lo prueba antes de guardarlo y lo guarda cifrado.</p>
+            {:else}
+              <p class="help">En GitLab: Preferences → <b>Access tokens</b>, con alcance <b>api</b>. Kernl lo prueba antes de guardarlo y lo guarda cifrado.</p>
+            {/if}
+          </details>
+        {/if}
         <ul class="links">
           {#each detail.links as l}
             {@const ll = linkLabel(l, accountOptions)}
@@ -659,6 +717,9 @@
   .tabs button.on small { background: color-mix(in srgb, var(--pj-life) 18%, transparent); color: var(--pj-life); }
   .link-form { display: flex; gap: 10px; align-items: flex-end; margin: 12px 0 6px; max-width: 760px; }
   .link-form select { min-width: 170px; }
+  .new-conn { margin: 10px 0 4px; max-width: 760px; border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; background: var(--surface-1); }
+  .new-conn summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-1); }
+  .new-conn .link-form { margin: 10px 0 8px; }
   .links { margin-top: 12px; max-width: 760px; display: flex; flex-direction: column; gap: 6px; }
   .links li { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1); }
   .links .no-links { color: var(--text-2); font-size: 13.5px; border-style: dashed; padding: 14px; background: none; }

@@ -6,7 +6,7 @@ import type { ProjectsService } from "./projects-service.js";
 import type { OutboxService } from "./outbox-service.js";
 import type { ConnectorService } from "./connector-service.js";
 import { ProjectBriefSchema, SLUG_RE } from "./brief.js";
-import type { OutboxStatus, ProjectLinkKind, ProjectStatus } from "./types.js";
+import { PROJECT_LINK_KINDS, type OutboxStatus, type ProjectLinkKind, type ProjectStatus } from "./types.js";
 
 export interface ProjectsRouteDeps {
   projects: ProjectsService;
@@ -31,7 +31,7 @@ const UpdateBody = z.object({
 });
 const ConnectorBody = z.object({ url: z.string(), token: z.string().optional() });
 const LinkBody = z.object({
-  kind: z.enum(["repo", "social_account", "email_account", "task_project", "workspace"]),
+  kind: z.enum(PROJECT_LINK_KINDS),
   ref_id: z.string().min(1),
 });
 const ScopeBody = z.object({ serves_any: z.boolean() });

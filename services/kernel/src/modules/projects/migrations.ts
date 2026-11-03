@@ -168,4 +168,24 @@ export const projectsMigrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_outbox_project ON outbox_items(project_id, status);
     `,
   },
+  {
+    // A project's own GitHub/GitLab connection: linked to a project, a
+    // connection is reserved for its repos. The CHECK can't change in place → rebuild.
+    version: 9,
+    sql: `
+      CREATE TABLE project_links_v9 (
+        id         TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        kind       TEXT NOT NULL CHECK(kind IN ('repo','social_account','email_account','task_project','workspace',
+                                                'github_connection','gitlab_connection')),
+        ref_id     TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(project_id, kind, ref_id)
+      );
+      INSERT INTO project_links_v9 (id, project_id, kind, ref_id, created_at)
+      SELECT id, project_id, kind, ref_id, created_at FROM project_links;
+      DROP TABLE project_links;
+      ALTER TABLE project_links_v9 RENAME TO project_links;
+    `,
+  },
 ];

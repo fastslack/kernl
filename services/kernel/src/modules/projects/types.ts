@@ -1,5 +1,7 @@
 export type ProjectStatus = "active" | "paused" | "archived";
-export type ProjectLinkKind = "repo" | "social_account" | "email_account" | "task_project" | "workspace";
+export type ProjectLinkKind = "repo" | "social_account" | "email_account" | "task_project" | "workspace" | "github_connection" | "gitlab_connection";
+/** Every kind, in the order the API and the tools list them. */
+export const PROJECT_LINK_KINDS = ["repo", "social_account", "email_account", "task_project", "workspace", "github_connection", "gitlab_connection"] as const satisfies readonly ProjectLinkKind[];
 
 export interface ProjectBrief {
   value_prop: string;

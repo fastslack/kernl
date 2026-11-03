@@ -97,6 +97,16 @@ export function sign(rawBody: string, secret: string): string {
 }
 
 /** Constant-time check of the X-Kernl-Signature header against the raw body. */
+/**
+ * `GET {url}/events?since=<iso8601>`: the same events a project would push by webhook, pulled by Kernl with the
+ * snapshot's bearer token. For a Kernl with no public address (no tunnel): nothing has to reach it.
+ * `next_since` is the cursor for the next call; without it Kernl keeps the newest `occurred_at` it saw.
+ */
+export const EventsPageSchema = z.object({
+  events: z.array(z.unknown()),
+  next_since: z.string().optional(),
+}).strip();
+
 export function verifySignature(rawBody: string, header: string, secret: string): boolean {
   if (!secret || !header) return false;
   const a = Buffer.from(sign(rawBody, secret));

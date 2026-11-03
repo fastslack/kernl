@@ -36,6 +36,10 @@ En **Proyectos → (proyecto) → Conector**:
 La URL pública del webhook se arma con `KERNEL_PUBLIC_URL`. Si Kernl corre detrás de un
 túnel, esa variable tiene que apuntar al túnel.
 
+**Sin dirección pública** (Kernl en una máquina propia, sin túnel), el webhook no sirve: nada
+puede llegarle. En ese caso el proyecto expone los mismos eventos en `GET {url}/events` y Kernl
+los busca (ver «Pull de eventos»). Todas las conexiones salen de Kernl.
+
 ## Pull: `GET {url}/snapshot?since=<iso8601>`
 
 Headers que manda Kernl:
@@ -158,10 +162,29 @@ identificado. Las oficinas que atienden ese proyecto pueden reaccionar: por ejem
 Ventas califica al nuevo inscripto de la waitlist y deja un borrador de seguimiento para
 que el operador lo apruebe.
 
+## Pull de eventos: `GET {url}/events?since=<iso8601>`
+
+La alternativa al webhook para un Kernl sin dirección pública. El proyecto guarda cada evento
+(misma forma que el webhook) en vez de mandarlo, y Kernl lo pide cada 15 minutos con el mismo
+`Authorization: Bearer <token>` del snapshot. No hay firma: autentica el token.
+
+```json
+{ "events": [ { "event_id": "evt_01H…", "type": "user.signed_up", "occurred_at": "2026-10-16T12:00:00Z", "data": { … } } ],
+  "next_since": "2026-10-16T12:00:00Z" }
+```
+
+- `since` es exclusivo o inclusivo, da igual: Kernl deduplica por `event_id`.
+- Devolver los eventos en orden de `occurred_at` (o del momento en que se guardaron), con un
+  límite razonable por página (500). `next_since` es el cursor de la siguiente llamada; si falta,
+  Kernl usa el `occurred_at` más nuevo que recibió.
+- Un evento fuera de schema se descarta y el resto se procesa.
+- Un `404` significa «este proyecto no expone eventos por pull»: no es un error.
+- La carga histórica sale sola: la primera llamada pide `since=1970-01-01T00:00:00Z`.
+
 ## Eventos de embudo (v2, aditivo)
 
-Para medir el crecimiento (Growth Engine), el proyecto manda por el mismo webhook firmado
-el recorrido de cada usuario. Los tipos v1 no cambian.
+Para medir el crecimiento (Growth Engine), el proyecto entrega el recorrido de cada usuario,
+por el webhook firmado o por el pull de eventos. Los tipos v1 no cambian.
 
 | `type` | `data` |
 |---|---|
@@ -180,4 +203,4 @@ el recorrido de cada usuario. Los tipos v1 no cambian.
 - Kernl guarda cada evento como registro `funnel_event` del proyecto (deduplicado por
   `event_id`) y emite `project:<type>`.
 - La carga histórica usa este mismo contrato: el proyecto arma los eventos pasados y los
-  manda por el webhook, sin otro camino de ingesta.
+  manda por el webhook, o los deja disponibles en `/events` desde el principio.

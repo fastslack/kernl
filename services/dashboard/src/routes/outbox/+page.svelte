@@ -309,9 +309,12 @@
     return own || it.preview.body || it.preview.title || '';
   };
   const firstLine = (it: Item) => bodyOf(it).split('\n').find((l) => l.trim()) ?? '(sin texto)';
-  /** A mail's subject says more than its greeting, which is the same on every draft. */
-  const rowTitle = (it: Item) =>
-    channel(it.channel).kind === 'mail' && it.preview.title && it.preview.title !== it.channel ? it.preview.title : firstLine(it);
+  /** A mail's subject says more than its greeting, which is the same on every draft; a draft with its own
+   *  title (a site change for Desarrollo) reads by it, not by the first line of its brief. */
+  const rowTitle = (it: Item) => {
+    if (typeof it.payload.title === 'string' && it.payload.title.trim()) return it.payload.title.trim();
+    return channel(it.channel).kind === 'mail' && it.preview.title && it.preview.title !== it.channel ? it.preview.title : firstLine(it);
+  };
 </script>
 
 <svelte:window on:keydown={onKey} />
