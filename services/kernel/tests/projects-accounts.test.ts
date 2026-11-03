@@ -135,3 +135,34 @@ describe("projectOfRepo", () => {
     expect(projectOfRepo(db, "/home/u/Matware/web")).toBeUndefined();
   });
 });
+
+describe("the project's own deploy environment", () => {
+  it("takes any variable and an optional image, sealed, last in the deploy env", async () => {
+    const svc = new ProjectAccountsService(db, key, services);
+    await svc.set("matware", "cloudflare", { account_id: CF_ACCOUNT, api_token: "card-token" });
+    const a = await svc.set("matware", "env", { image: "ghcr.io/acme/deploy:1", variables: [{ name: "VERCEL_TOKEN", value: "vercel-secret-1" }, { name: "CLOUDFLARE_API_TOKEN", value: "override-token" }] });
+    expect(a.identity).toBe("2 variables, imagen ghcr.io/acme/deploy:1");
+    expect(a.secrets).toEqual({ VERCEL_TOKEN: "…et-1", CLOUDFLARE_API_TOKEN: "…oken" });
+    expect(calls).toHaveLength(1); // only the Cloudflare card went out
+    expect(svc.env("matware")).toMatchObject({ VERCEL_TOKEN: "vercel-secret-1", CLOUDFLARE_API_TOKEN: "override-token", CLOUDFLARE_ACCOUNT_ID: CF_ACCOUNT });
+    expect(svc.get("matware", "env")!.config.image).toBe("ghcr.io/acme/deploy:1");
+  });
+
+  it("an edit keeps a value left blank and drops a variable left out", async () => {
+    const svc = new ProjectAccountsService(db, key, services);
+    await svc.set("matware", "env", { variables: { FLY_API_TOKEN: "fly-1", NETLIFY_AUTH_TOKEN: "nf-1" } });
+    await svc.set("matware", "env", { variables: [{ name: "FLY_API_TOKEN", value: "" }] });
+    expect(svc.get("matware", "env")!.secrets).toEqual({ FLY_API_TOKEN: "fly-1" });
+  });
+
+  it("refuses names the deploy uses, bad names, multi-line values and bad images", async () => {
+    const svc = new ProjectAccountsService(db, key, services);
+    await expect(svc.set("matware", "env", { variables: { DEPLOY_COMMAND_B64: "x" } })).rejects.toThrow("lo usa el deploy");
+    await expect(svc.set("matware", "env", { variables: { PATH: "/x" } })).rejects.toThrow("lo usa el deploy");
+    await expect(svc.set("matware", "env", { variables: { "my-token": "x" } })).rejects.toThrow("mayúsculas");
+    await expect(svc.set("matware", "env", { variables: { A: "x\ny" } })).rejects.toThrow("una sola línea");
+    await expect(svc.set("matware", "env", { image: "--privileged" })).rejects.toThrow("no es una imagen");
+    await expect(svc.set("matware", "env", {})).rejects.toThrow("al menos una variable");
+  });
+});
+

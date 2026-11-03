@@ -209,4 +209,28 @@ export const projectsMigrations: Migration[] = [
       );
     `,
   },
+  {
+    // 'env': the project's own deploy environment (any variables + an optional image), for the services
+    // without a card of their own. The CHECK can't change in place → rebuild.
+    version: 11,
+    sql: `
+      CREATE TABLE project_accounts_v11 (
+        id              TEXT PRIMARY KEY,
+        project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        provider        TEXT NOT NULL CHECK(provider IN ('cloudflare','datadog','aws','git','env')),
+        config          TEXT NOT NULL DEFAULT '{}',
+        secrets         TEXT NOT NULL DEFAULT '',
+        identity        TEXT NOT NULL DEFAULT '',
+        last_test_at    TEXT,
+        last_test_ok    INTEGER,
+        last_test_error TEXT NOT NULL DEFAULT '',
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        UNIQUE(project_id, provider)
+      );
+      INSERT INTO project_accounts_v11 SELECT * FROM project_accounts;
+      DROP TABLE project_accounts;
+      ALTER TABLE project_accounts_v11 RENAME TO project_accounts;
+    `,
+  },
 ];

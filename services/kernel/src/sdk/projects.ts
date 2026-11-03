@@ -51,7 +51,7 @@ export interface ProjectsHost {
   account?(projectId: string, provider: ProjectAccountProvider): { config: Record<string, string>; secrets: Record<string, string>; identity: string } | undefined;
 }
 
-export type ProjectAccountProvider = "cloudflare" | "datadog" | "aws" | "git";
+export type ProjectAccountProvider = "cloudflare" | "datadog" | "aws" | "git" | "env";
 
 function host(): ProjectsHost {
   const h = getHost().projects?.();

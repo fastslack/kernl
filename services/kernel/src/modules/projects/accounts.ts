@@ -15,7 +15,7 @@ import { encrypt, decrypt } from "../../sdk/crypto.js";
 import { newId, isoNow } from "../../core/helpers.js";
 import type { SqliteDb } from "../../core/db/sqlite.js";
 
-export const ACCOUNT_PROVIDERS = ["cloudflare", "datadog", "aws", "git"] as const;
+export const ACCOUNT_PROVIDERS = ["cloudflare", "datadog", "aws", "git", "env"] as const;
 export type AccountProvider = (typeof ACCOUNT_PROVIDERS)[number];
 
 export interface AccountValues {
@@ -29,7 +29,7 @@ export interface ProjectAccount extends AccountValues {
   id: string;
   project_id: string;
   provider: AccountProvider;
-  /** Who the last test authenticated as ("fastslack", "arn:aws:iam::…:user/deploy"). */
+  /** Who the last test authenticated as ("acme-bot", "arn:aws:iam::…:user/deploy"). */
   identity: string;
   last_test_at: string | null;
   last_test_ok: boolean | null;
@@ -47,6 +47,8 @@ interface FieldSpec { key: string; secret: boolean; required: boolean }
 
 interface ProviderSpec {
   fields: FieldSpec[];
+  /** Reads the form itself when its fields are not a fixed list (the custom environment). */
+  readInput?: (input: Record<string, unknown>, previous?: AccountValues) => AccountValues;
   normalize?: (v: AccountValues) => AccountValues;
   validate?: (v: AccountValues) => string | null;
   /** One authenticated round-trip; resolves to who it is, throws with the service's reason. */
@@ -201,6 +203,45 @@ export const PROVIDERS: Record<AccountProvider, ProviderSpec> = {
       GIT_COMMITTER_EMAIL: v.config.email,
     }),
   },
+  // Whatever else the project's deploy needs, for any service Kernl has no card for (Vercel, Fly, GCP…):
+  // variables with any name, all sealed, plus an optional image of its own to deploy from.
+  env: {
+    fields: [],
+    readInput: (input, previous) => {
+      const raw = Array.isArray(input.variables)
+        ? (input.variables as Array<{ name?: unknown; value?: unknown }>).map((x) => [String(x?.name ?? ""), String(x?.value ?? "")] as const)
+        : Object.entries((input.variables ?? {}) as Record<string, unknown>).map(([k, v]) => [k, String(v ?? "")] as const);
+      const secrets: Record<string, string> = {};
+      for (const [n, val] of raw) {
+        const name = n.trim();
+        if (!name) continue;
+        // A value left blank on an edit keeps the stored one (the form never shows it).
+        const value = val.trim() || previous?.secrets[name] || "";
+        if (!value) throw new Error(`${name}: falta el valor`);
+        secrets[name] = value;
+      }
+      const image = typeof input.image === "string" ? input.image.trim() : "";
+      const config: Record<string, string> = image ? { image } : {};
+      return { config, secrets };
+    },
+    validate: (v) => {
+      for (const [name, value] of Object.entries(v.secrets)) {
+        if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) return `${name}: un nombre de variable va en mayúsculas, números y _ (ej.: VERCEL_TOKEN)`;
+        if (/^DEPLOY_/.test(name) || ["HOME", "PATH", "PWD", "SHELL", "USER", "HOSTNAME"].includes(name)) return `${name}: ese nombre lo usa el deploy, elegí otro`;
+        if (/[\r\n]/.test(value)) return `${name}: el valor tiene que ir en una sola línea`;
+      }
+      const image = v.config.image ?? "";
+      if (image && !/^[a-z0-9][a-z0-9._\/:@-]{0,254}$/.test(image)) return `image: "${image}" no es una imagen de Docker (ej.: node:22, ghcr.io/acme/deploy:1)`;
+      if (!image && Object.keys(v.secrets).length === 0) return "Cargá al menos una variable o una imagen";
+      return null;
+    },
+    // Nothing to log into: the variables are whatever the project's own tools read.
+    test: async (v) => {
+      const n = Object.keys(v.secrets).length;
+      return [n ? `${n} variable${n === 1 ? "" : "s"}` : "", v.config.image ? `imagen ${v.config.image}` : ""].filter(Boolean).join(", ");
+    },
+    env: (v) => ({ ...v.secrets }),
+  },
 };
 
 interface Row {
@@ -216,7 +257,7 @@ export class ProjectAccountsService {
   /** Field values out of a form: trimmed strings, known fields only, required ones present. */
   private read(provider: AccountProvider, input: Record<string, unknown>, previous?: AccountValues): AccountValues {
     const spec = PROVIDERS[provider];
-    const out: AccountValues = { config: {}, secrets: {} };
+    const out: AccountValues = spec.readInput ? spec.readInput(input, previous) : { config: {}, secrets: {} };
     for (const f of spec.fields) {
       const raw = typeof input[f.key] === "string" ? (input[f.key] as string).trim() : "";
       // A secret left blank on an edit keeps the stored one (the form never shows it).
@@ -294,7 +335,9 @@ export class ProjectAccountsService {
 
   /** The environment a deploy for this project runs with: every account it has, and nothing from any other project. */
   env(projectId: string): Record<string, string> {
-    const rows = this.db.prepare("SELECT * FROM project_accounts WHERE project_id = ?").all(projectId) as Row[];
+    // The custom environment last: a variable named there on purpose wins over a card's.
+    const rows = (this.db.prepare("SELECT * FROM project_accounts WHERE project_id = ?").all(projectId) as Row[])
+      .sort((a, b) => Number(a.provider === "env") - Number(b.provider === "env"));
     return Object.assign({}, ...rows.map((r) => PROVIDERS[r.provider].env(this.open(r))));
   }
 }

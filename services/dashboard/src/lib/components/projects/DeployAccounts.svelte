@@ -17,7 +17,7 @@
   }
   interface Field { key: string; label: string; secret?: boolean; optional?: boolean; placeholder?: string; multiline?: boolean }
 
-  const PROVIDERS: Array<{ id: string; label: string; fields: Field[]; help: string }> = [
+  const PROVIDERS: Array<{ id: string; label: string; fields: Field[]; help: string; custom?: boolean }> = [
     { id: 'cloudflare', label: 'Cloudflare', help: 'Token de cuenta con solo lo que despliega este proyecto (Workers, Pages, DNS de sus zonas). El Account ID está en el costado derecho del panel de la cuenta.',
       fields: [{ key: 'account_id', label: 'Account ID', placeholder: '32 caracteres' }, { key: 'api_token', label: 'API token', secret: true }] },
     { id: 'datadog', label: 'Datadog', help: 'La API key para mandar datos; la application key solo si algo tiene que leer (la Plaza de Growth).',
@@ -26,7 +26,12 @@
       fields: [{ key: 'region', label: 'Región', placeholder: 'eu-west-1' }, { key: 'access_key_id', label: 'Access key ID', placeholder: 'AKIA…' }, { key: 'secret_access_key', label: 'Secret access key', secret: true }] },
     { id: 'git', label: 'Git', help: 'El autor de los commits y, si hace falta, una clave SSH de deploy sin passphrase: agregá su parte pública como Deploy key con escritura en los repos del proyecto.',
       fields: [{ key: 'name', label: 'Nombre' }, { key: 'email', label: 'Email' }, { key: 'ssh_private_key', label: 'Clave SSH privada', secret: true, optional: true, multiline: true, placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----' }] },
+    { id: 'env', label: 'Entorno', custom: true, fields: [],
+      help: 'Cualquier otra cosa que necesite el deploy (un token de Vercel, Fly, Netlify, GCP…): variables con el nombre que lea tu herramienta, todas cifradas. Y si el deploy necesita herramientas que no están en la imagen de Kernl (git, ssh, rsync, aws, wrangler), una imagen de Docker propia, que tenga sh y base64.' },
   ];
+
+  /** The custom environment's rows; a stored variable comes back with an empty value (= keep it). */
+  let vars: Array<{ name: string; value: string }> = [];
 
   let accounts: Account[] = [];
   let open = '';
@@ -51,6 +56,8 @@
   function edit(id: string) {
     const a = accountOf(id, accounts);
     form = { ...(a?.config ?? {}) };
+    vars = id === 'env' ? Object.keys(a?.secrets ?? {}).map((name) => ({ name, value: '' })) : [];
+    if (id === 'env' && vars.length === 0) vars = [{ name: '', value: '' }];
     open = open === id ? '' : id;
     error = '';
   }
@@ -61,7 +68,8 @@
   }
 
   const save = (id: string) => act(id, async () => {
-    await call(`/api/projects/${projectId}/accounts/${id}`, { method: 'PUT', body: JSON.stringify(form) });
+    const body = id === 'env' ? { image: form.image ?? '', variables: vars.filter((v) => v.name.trim()) } : form;
+    await call(`/api/projects/${projectId}/accounts/${id}`, { method: 'PUT', body: JSON.stringify(body) });
     open = '';
     await load(projectId);
   }, 'Cuenta probada y guardada');
@@ -109,6 +117,21 @@
         </div>
         {#if open === p.id}
           <form class="fields" on:submit|preventDefault={() => save(p.id)}>
+            {#if p.custom}
+              <div class="field wide">
+                <label for="acct-env-image">Imagen de Docker (opcional)</label>
+                <input id="acct-env-image" bind:value={form.image} placeholder="Vacía = la de Kernl. Ej.: ghcr.io/tu-org/deploy:1" />
+              </div>
+              {#each vars as v, i}
+                <div class="var">
+                  <input aria-label="Nombre de la variable {i + 1}" bind:value={v.name} placeholder="NOMBRE_DE_LA_VARIABLE" spellcheck="false" />
+                  <input aria-label="Valor de la variable {i + 1}" type="password" autocomplete="off" bind:value={v.value}
+                    placeholder={a?.secrets[v.name] ? `Guardado (${a.secrets[v.name]}): vacío = no cambiar` : 'Valor'} />
+                  <button type="button" class="btn sm" aria-label="Quitar la variable {i + 1}" on:click={() => (vars = vars.filter((_, j) => j !== i))}>×</button>
+                </div>
+              {/each}
+              <button type="button" class="btn sm" on:click={() => (vars = [...vars, { name: '', value: '' }])}>Agregar variable</button>
+            {/if}
             {#each p.fields as f (f.key)}
               <div class="field" class:wide={f.multiline}>
                 <label for="acct-{p.id}-{f.key}">{f.label}{f.optional ? ' (opcional)' : ''}</label>
@@ -154,6 +177,9 @@
   .field label { font-size: 12px; color: var(--text-2); }
   .field textarea { font-family: var(--font-mono, monospace); font-size: 12px; resize: vertical; }
   .submit { display: flex; gap: 8px; }
+  .var { display: flex; gap: 8px; flex-basis: 100%; }
+  .var input:first-child { flex: 0 0 40%; font-family: var(--font-mono, monospace); font-size: 12.5px; }
+  .var input:nth-child(2) { flex: 1; }
   .btn { background: var(--surface-2); border: 1px solid var(--border-h); color: var(--text-1); border-radius: 9px; padding: 8px 14px; cursor: pointer; font: inherit; font-size: 13.5px; min-height: 38px; }
   .btn:hover:not(:disabled) { background: var(--surface-3); }
   .btn.sm { min-height: 30px; padding: 4px 10px; font-size: 12.5px; }
