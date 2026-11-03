@@ -6,7 +6,7 @@ import { AgentScheduler } from "../src/modules/agents/scheduler.js";
 
 type Sched = { id: string; agent_id: string; agent_name: string; interval_ms: number; cron_expression: string; goal_override: string; project_id: null };
 
-function harness(due: Sched[]) {
+function harness(due: Sched[], precheck: (agentId: string) => { skip: true; reason: string } | null = () => null) {
   const started: string[] = [];
   const release = new Map<string, () => void>();
   const nextRuns: string[] = [];
@@ -16,6 +16,7 @@ function harness(due: Sched[]) {
     getAgent: (id: string) => ({ id, name: id, active: 1, builtin_handler: "", goal_template: "", flow_id: "" }),
     isAgentOfficePaused: () => false,
     getProjectGate: () => null,
+    checkScheduledSlot: (a: { id: string }) => precheck(a.id),
     updateScheduleNextRun: (id: string) => { nextRuns.push(id); },
     createRun: (r: { agent_id: string }) => ({ id: `run-${r.agent_id}-${started.length}`, ...r }),
     updateRun: () => {},
@@ -29,11 +30,12 @@ function harness(due: Sched[]) {
       });
     },
   };
-  const events = { emit: () => {} };
+  const emitted: Array<{ name: string; payload: unknown }> = [];
+  const events = { emit: (name: string, payload: unknown) => { emitted.push({ name, payload }); } };
   const scheduler = new AgentScheduler(service as never, executor as never, events as never, 1000, "UTC");
   const tick = () => (scheduler as unknown as { tick(): Promise<void> }).tick();
   return {
-    tick, started, release, nextRuns,
+    tick, started, release, nextRuns, emitted,
     makeDueAgain: (ids: string[]) => { for (const id of ids) nextRuns.splice(nextRuns.indexOf(id), 1); },
     setDue: (d: Sched[]) => { pending = d; },
   };
@@ -74,5 +76,14 @@ describe("agent scheduler", () => {
     await new Promise((r) => setTimeout(r, 0));
     await h.tick();
     expect(h.started).toEqual(["a", "b", "c", "d", "e"]);
+  });
+
+  test("a slot its office prechecks out is skipped and advanced, and the others still run", async () => {
+    const h = harness([sched("s1", "blocked"), sched("s2", "ok")],
+      (id) => (id === "blocked" ? { skip: true, reason: "no data yet" } : null));
+    await h.tick();
+    expect(h.started).toEqual(["ok"]);
+    expect(h.nextRuns.sort()).toEqual(["s1", "s2"]);
+    expect(h.emitted.find((e) => e.name === "agent.schedule.skipped")?.payload).toMatchObject({ agent_id: "blocked", reason: "no data yet" });
   });
 });

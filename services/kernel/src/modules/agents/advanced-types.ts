@@ -138,6 +138,19 @@ export interface WorkspaceEvolverLike {
 }
 
 /**
+ * An office's say on its own scheduled slots: `skip` when the run would have
+ * nothing to work on (no data yet, a blocker only the operator can clear).
+ * Registered per flow by the extension that owns the office. Only scheduled
+ * slots ask it — a run someone launches always goes out.
+ */
+export type SchedulePrecheck = (slot: {
+  agent_id: string;
+  agent_slug: string;
+  flow_id: string;
+  project_id: string | null;
+}) => { skip: true; reason: string } | null;
+
+/**
  * Project gate (src/modules/projects). The agents module never imports the
  * projects module — bootstrap registers this after both initialise.
  */

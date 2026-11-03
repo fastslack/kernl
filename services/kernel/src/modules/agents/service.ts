@@ -1,7 +1,8 @@
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { EventBus } from "../../core/event-bus.js";
 import type { KernelConfig } from "../../core/config.js";
-import type { ProjectGateLike } from "./advanced-types.js";
+import type { ProjectGateLike, SchedulePrecheck } from "./advanced-types.js";
+import { findDuplicateQuestion, DUPLICATE_WINDOW_DAYS, type QuestionJudge } from "./question-dedupe.js";
 import { newId, isoNow } from "../../core/helpers.js";
 import { buildPatch, type PatchColumn } from "../../sdk/query-helpers.js";
 import { agentModelChain } from "./agent-fields.js";
@@ -158,6 +159,53 @@ export class AgentService {
 
   setProjectGate(gate: ProjectGateLike | null): void { this.projectGate = gate; }
   getProjectGate(): ProjectGateLike | null { return this.projectGate; }
+
+  /** Per-flow say on scheduled slots (SchedulePrecheck). Extensions register theirs on init. */
+  private schedulePrechecks = new Map<string, SchedulePrecheck>();
+
+  /** Register `flowId`'s precheck, replacing any previous one; the returned function removes it. */
+  registerSchedulePrecheck(flowId: string, check: SchedulePrecheck): () => void {
+    this.schedulePrechecks.set(flowId, check);
+    return () => { if (this.schedulePrechecks.get(flowId) === check) this.schedulePrechecks.delete(flowId); };
+  }
+
+  /** Why this scheduled slot should not run, or null to run it. A precheck that throws lets the slot run. */
+  checkScheduledSlot(agent: Agent, projectId: string | null): { skip: true; reason: string } | null {
+    const check = this.schedulePrechecks.get(agent.flow_id ?? "");
+    if (!check) return null;
+    try {
+      return check({ agent_id: agent.id, agent_slug: (agent as Agent & { slug?: string }).slug ?? "", flow_id: agent.flow_id ?? "", project_id: projectId });
+    } catch (err) {
+      log.warn(`Schedule precheck of flow ${agent.flow_id} threw — running the slot: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+  }
+
+  /** Judge for kernel_agents_ask_supervisor: is a new question one already open or recently answered? */
+  private questionJudge: QuestionJudge | null = null;
+  setQuestionJudge(judge: QuestionJudge | null): void { this.questionJudge = judge; }
+
+  /**
+   * The question the office already has for the same decision — open (triage,
+   * pending, owed) or answered in the last DUPLICATE_WINDOW_DAYS — or null.
+   * Looks across the whole office: the same blocker gets asked by every agent
+   * it stops, not only by one.
+   */
+  async findDuplicateQuestion(input: { from_agent_id: string; flow_id: string; question: string; context?: string }): Promise<AgentQuestion | null> {
+    const candidates = this.duplicateCandidates(input.from_agent_id, input.flow_id);
+    return findDuplicateQuestion({ question: input.question, context: input.context ?? "" }, candidates, this.questionJudge);
+  }
+
+  private duplicateCandidates(fromAgentId: string, flowId: string): AgentQuestion[] {
+    const since = new Date(Date.now() - DUPLICATE_WINDOW_DAYS * 86_400_000).toISOString();
+    const rows = this.db.prepare(
+      `SELECT * FROM agent_questions
+        WHERE (${flowId ? "flow_id = ?" : "from_agent_id = ?"})
+          AND (status IN ('triage','pending','owed') OR (status = 'answered' AND answered_at >= ?))
+        ORDER BY created_at DESC LIMIT 40`,
+    ).all(flowId || fromAgentId, since) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapQuestionRow(r));
+  }
 
   constructor(
     private db: SqliteDb,
@@ -1498,11 +1546,16 @@ export class AgentService {
     const asker = this.getAgent(q.from_agent_id);
     if (!asker) return false;
     const who = q.answered_by === "chief" ? "The chief" : "Your supervisor";
+    // The answer belongs to the project of the run that asked: the relaunch that reads it works for that project
+    // (03/11: Growth runs relaunched with no project showed up in every project's panel).
+    const project = q.run_id
+      ? ((this.db.prepare("SELECT project_id FROM agent_runs WHERE id = ?").get(q.run_id) as { project_id: string | null } | undefined)?.project_id ?? null)
+      : null;
     this.db
       .prepare(
         `INSERT INTO agent_office_inbox
-          (id, flow_id, from_agent_id, to_agent_id, subject, body, status, related_run_id, created_at, read_at)
-         VALUES (?, ?, '__top_agent__', ?, ?, ?, 'unread', '', ?, NULL)`,
+          (id, flow_id, from_agent_id, to_agent_id, subject, body, status, related_run_id, created_at, read_at, project_id)
+         VALUES (?, ?, '__top_agent__', ?, ?, ?, 'unread', '', ?, NULL, ?)`,
       )
       .run(
         newId(),
@@ -1514,6 +1567,7 @@ export class AgentService {
         `${who} answered your question (question_id: ${q.id}).\n\n**Question:** ${q.question}\n\n**Answer:** ${q.selected_option}` +
           (q.answered_note && q.answered_note !== q.selected_option ? `\n\n**Note:** ${q.answered_note}` : ""),
         isoNow(),
+        project || null,
       );
     return true;
   }

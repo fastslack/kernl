@@ -111,6 +111,8 @@ export interface UnattendedAskService {
     from_agent_id: string; flow_id?: string; run_id?: string; question: string; context?: string;
     options: Array<{ label: string; value?: string }>;
   }): { id: string; status: "triage" | "pending" };
+  /** The office's question for the same decision, open or recently answered (question-dedupe.ts). */
+  findDuplicateQuestion?(input: { from_agent_id: string; flow_id: string; question: string; context?: string }): Promise<AgentQuestion | null>;
 }
 
 export class UnattendedAskWatcher {
@@ -159,6 +161,12 @@ export class UnattendedAskWatcher {
     if (!ask) return null;
     // The model was told about the open ones; still never file the same text twice.
     if (open.some((q) => q.question.trim().toLowerCase() === ask.question.toLowerCase())) return null;
+    // Another agent of the office may be waiting on the same decision already.
+    const dup = await this.service.findDuplicateQuestion?.({ from_agent_id: agent.id, flow_id: agent.flow_id ?? "", question: ask.question, context: ask.context });
+    if (dup) {
+      log.info(`unattended-ask: ${agent.name} run ${runId} repeats question ${dup.id} (${dup.status}) — not filed`);
+      return null;
+    }
     const res = this.service.createQuestion({
       from_agent_id: agent.id,
       flow_id: agent.flow_id ?? "",

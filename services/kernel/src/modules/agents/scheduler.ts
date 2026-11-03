@@ -191,6 +191,19 @@ export class AgentScheduler {
             }
           }
 
+          // The office may say this slot has nothing to work on (no data yet, a
+          // blocker only the operator clears): skip it, it comes back by itself.
+          const precheck = this.service.checkScheduledSlot(agent, schedule.project_id ?? null);
+          if (precheck) {
+            log.info(`Agent scheduler: "${agent.name}" skipped — ${precheck.reason}`);
+            const nextRun = this.computeNextRun(schedule.cron_expression, schedule.interval_ms);
+            this.service.updateScheduleNextRun(schedule.id, nextRun, isoNow());
+            this.events.emit("agent.schedule.skipped", {
+              agent_id: agent.id, schedule_id: schedule.id, project_id: schedule.project_id ?? null, reason: precheck.reason,
+            });
+            continue;
+          }
+
           // Check if this agent has a builtin handler
           if (agent.builtin_handler && this.builtinHandlers.has(agent.builtin_handler)) {
             await this.executeBuiltin(agent, schedule);

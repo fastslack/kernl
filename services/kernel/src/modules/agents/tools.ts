@@ -16,6 +16,7 @@ import { answerAndDeliver } from "./question-delivery.js";
 import { leavesWorkToOperator } from "./operator-guard.js";
 import { resumeRun } from "./run-resume.js";
 import { formatTriageQuestion } from "./question-format.js";
+import { duplicateReply } from "./question-dedupe.js";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Agent-management policy
@@ -1244,6 +1245,12 @@ export function agentsTools(
           })
           .filter((x): x is { label: string; value: string; url?: string; task?: boolean } => x !== null);
         if (options.length < 2 || options.length > 4) return errorResult("Provide 2 to 4 non-empty options, your preferred one first.");
+
+        const dup = await service.findDuplicateQuestion({ from_agent_id: caller.id, flow_id: caller.flow_id ?? "", question, context: input.context });
+        if (dup) {
+          log.info(`ask_supervisor: ${caller.name} repeated question ${dup.id} (${dup.status}) — not filed`);
+          return textResult(duplicateReply(dup, (id) => service.getAgent(id)?.name ?? "another agent"));
+        }
 
         const res = service.createQuestion({
           from_agent_id: caller.id,
