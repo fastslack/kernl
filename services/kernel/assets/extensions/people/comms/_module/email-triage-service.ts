@@ -300,7 +300,8 @@ Respond ONLY with the JSON array.`;
    *
    *  Rows the auto labeller has not tagged yet (no or empty
    *  metadata.auto_label) are left for a later tick, so the newsletter
-   *  exclusion always has a label to act on. */
+   *  exclusion always has a label to act on. Spam remains eligible for LLM
+   *  triage; auto_label is a review hint, never a destructive action. */
   getUnclassifiedComms(limit = 20): GoogleEmailRow[] {
     const cutoff = new Date(Date.now() - TRIAGE_WINDOW_DAYS * 86_400_000).toISOString();
     try {

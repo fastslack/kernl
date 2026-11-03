@@ -159,12 +159,12 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
 
     // ── Auto Labeller ────────────────────────────────────────────
     // Lightweight SQL-only labeller: tag recent unclassified inbound rows by
-    // simple heuristics on subject/sender. Leaves the heavy LLM triage to the
-    // email:triage driver — this one just does cheap first-pass bucketing.
+    // simple heuristics on sender/subject/body across IMAP and Gmail. Leaves
+    // the heavy LLM triage to the email:triage driver.
     {
       handler: "comms:auto-label",
       name: "Auto Labeller",
-      description: "SQL-only first-pass labeller: tags recent inbound emails as newsletter/billing/security/transactional/personal/other in metadata.auto_label.",
+      description: "SQL-only first-pass labeller: tags recent inbound emails as spam/newsletter/billing/security/transactional/personal/other in metadata.auto_label. Spam is a review label only; messages are never deleted or moved.",
       cron: "*/10 * * * *",
       flow: "Communications",
       run: async () => {
@@ -172,6 +172,9 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
         if (!db) return "Comms db not available.";
 
         const PATTERNS: Array<{ label: string; match: RegExp }> = [
+          // Conservative signals only. Never label a message spam just because
+          // it is promotional, automated, or from an unfamiliar sender.
+          { label: "spam",       match: /\b(you(?:'|’)ve been selected|claim your (?:free )?(?:prize|gift)|winner of (?:our|the) (?:giveaway|prize)|verify your (?:wallet|account) to avoid suspension|urgent action required to (?:claim|unlock)|earn \$?\d+[,.]?\d* (?:daily|per day)|crypto investment opportunity)\b/i },
           { label: "newsletter",  match: /\b(newsletter|digest|unsubscribe|weekly|monthly|noreply|no-reply)\b/i },
           { label: "billing",     match: /\b(invoice|receipt|payment|billing|factura|recibo|pago|subscription|suscripci[oó]n)\b/i },
           { label: "security",    match: /\b(verify|2fa|password|reset|login|account locked|suspicious|security alert)\b/i },
@@ -181,7 +184,8 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
 
         const rows = db.prepare(
           `SELECT id, subject, metadata,
-                  json_extract(metadata, '$.from') as meta_from
+                  json_extract(metadata, '$.from') as meta_from,
+                  body
            FROM communications
            WHERE direction = 'inbound'
              AND channel = 'email'
@@ -191,27 +195,45 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
              )
            ORDER BY created_at DESC
            LIMIT 200`,
-        ).all() as Array<{ id: string; subject: string; metadata: string; meta_from: string }>;
+        ).all() as Array<{ id: string; subject: string; metadata: string; meta_from: string; body: string }>;
 
-        if (rows.length === 0) return "No inbound emails needing auto-label.";
+        const gmailRows = db.prepare(
+          `SELECT gmail_id AS id, subject, from_email AS meta_from, body_text AS body
+           FROM google_emails
+           WHERE labels LIKE '%"INBOX"%'
+             AND attention_needed = -1
+             AND (urgency = '' OR ai_summary NOT LIKE '[auto_label:%')
+           ORDER BY date DESC
+           LIMIT 200`,
+        ).all() as Array<{ id: string; subject: string; meta_from: string; body: string }>;
+
+        if (rows.length === 0 && gmailRows.length === 0) return "No inbound emails needing auto-label.";
 
         const counts: Record<string, number> = {};
         const upd = db.prepare(
           "UPDATE communications SET metadata = json_set(metadata, '$.auto_label', ?), updated_at = datetime('now') WHERE id = ?",
         );
+        const gmailUpd = db.prepare(
+          `UPDATE google_emails
+           SET urgency = CASE WHEN ? = 'spam' THEN 'low' ELSE urgency END,
+               attention_needed = CASE WHEN ? = 'spam' THEN 0 ELSE attention_needed END,
+               ai_summary = ?
+           WHERE gmail_id = ?`,
+        );
 
-        for (const r of rows) {
-          const haystack = `${r.subject} ${r.meta_from ?? ""}`;
+        for (const r of [...rows, ...gmailRows]) {
+          const haystack = `${r.subject} ${r.meta_from ?? ""} ${r.body ?? ""}`;
           let label = "other";
           for (const p of PATTERNS) {
             if (p.match.test(haystack)) { label = p.label; break; }
           }
-          upd.run(label, r.id);
+          if (Object.hasOwn(r, "metadata")) upd.run(label, r.id);
+          else gmailUpd.run(label, label, `[auto_label:${label}]`, r.id);
           counts[label] = (counts[label] ?? 0) + 1;
         }
 
         const summary = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}:${v}`).join(", ");
-        return `Auto-labelled ${rows.length} email(s): ${summary}`;
+        return `Auto-labelled ${rows.length + gmailRows.length} email(s) (${rows.length} IMAP, ${gmailRows.length} Gmail): ${summary}. Spam labels are conservative review flags only; no messages were moved or deleted.`;
       },
     },
 
