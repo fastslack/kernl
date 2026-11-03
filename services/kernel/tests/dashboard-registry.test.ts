@@ -217,3 +217,30 @@ describe("DashboardRegistry — one view id, one group", () => {
     expect(manifest.navItems.map((i) => i.id).sort()).toEqual(["one", "two"]);
   });
 });
+
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+describe("extension page bundles: cache key", () => {
+  it("the page version carries the bundle's mtime, so a bundle replaced in place reaches the browser", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ext-page-"));
+    try {
+      mkdirSync(join(dir, "frontend"));
+      const file = join(dir, "frontend", "entry.js");
+      writeFileSync(file, "export {}");
+      const manifest = { slug: "growth", version: "0.8.9", frontend: { pages: [{ view: "growth", entry: "frontend/entry.js" }] } };
+      const svc = { list: () => [{ slug: "growth", manifest_json: JSON.stringify(manifest), install_path: dir }] } as unknown as ExtensionServiceLike;
+      utimesSync(file, new Date(1_800_000_000_000), new Date(1_800_000_000_000));
+      const first = new DashboardRegistry().getManifest(svc).extPages[0].version;
+      expect(first.startsWith("0.8.9+")).toBe(true);
+      utimesSync(file, new Date(1_800_000_100_000), new Date(1_800_000_100_000));
+      expect(new DashboardRegistry().getManifest(svc).extPages[0].version).not.toBe(first);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  it("without the install folder it is the manifest version", () => {
+    const manifest = { slug: "x", version: "1.2.3", frontend: { pages: [{ view: "x", entry: "entry.js" }] } };
+    const svc = { list: () => [{ slug: "x", manifest_json: JSON.stringify(manifest) }] } as unknown as ExtensionServiceLike;
+    expect(new DashboardRegistry().getManifest(svc).extPages[0].version).toBe("1.2.3");
+  });
+});
