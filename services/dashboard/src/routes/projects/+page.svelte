@@ -246,6 +246,10 @@
 
   const addLink = () => run(async () => {
     if (!detail || !linkRef.trim()) return;
+    // A GitHub/GitLab connection has to reach this project's repos before it is linked.
+    if (kind.id === 'github' || kind.id === 'gitlab') {
+      await rpcPost(`${kind.id}.connections.check`, { id: linkRef, project_id: detail.project.id });
+    }
     await call(`/api/projects/${detail.project.id}/links`, { method: 'POST', body: JSON.stringify({ kind: kind.kind, ref_id: linkRef.trim() }) });
     linkRef = '';
     await load();
@@ -257,6 +261,7 @@
     if (!detail || !newConn.token.trim()) return;
     const forge = kind.id;
     const created = await rpcPost(`${forge}.connections.add`, {
+      project_id: detail.project.id,
       name: newConn.name.trim() || `${detail.project.slug}-${forge}`,
       token: newConn.token.trim(),
       ...(forge === 'gitlab' && newConn.host.trim() ? { host: newConn.host.trim() } : {}),
@@ -533,9 +538,9 @@
               <button class="btn" disabled={saving || !newConn.token.trim()}>Conectar y vincular</button>
             </form>
             {#if kind.id === 'github'}
-              <p class="help">En GitHub: Settings → Developer settings → <b>Fine-grained tokens</b>. Dale acceso solo a los repos de {detail.project.name}, con permiso de lectura y escritura en <b>Issues</b>, <b>Pull requests</b> y <b>Contents</b>. Kernl lo prueba antes de guardarlo y lo guarda cifrado.</p>
+              <p class="help">En GitHub: Settings → Developer settings → <b>Fine-grained tokens</b>. Dale acceso solo a los repos de {detail.project.name}, con permiso de lectura y escritura en <b>Issues</b>, <b>Pull requests</b> y <b>Contents</b>. Kernl prueba que llegue a los repos de {detail.project.name} antes de guardarlo, y lo guarda cifrado.</p>
             {:else}
-              <p class="help">En GitLab: Preferences → <b>Access tokens</b>, con alcance <b>api</b>. Kernl lo prueba antes de guardarlo y lo guarda cifrado.</p>
+              <p class="help">En GitLab: Preferences → <b>Access tokens</b>, con alcance <b>api</b>. Kernl prueba que llegue a los repos de {detail.project.name} antes de guardarlo, y lo guarda cifrado.</p>
             {/if}
           </details>
         {/if}

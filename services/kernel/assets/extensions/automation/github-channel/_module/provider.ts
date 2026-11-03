@@ -90,6 +90,10 @@ export class GitHubRepoProvider extends ForgeRepoProvider<GitHubConnection> impl
     return `OK — app id=${data.id ?? "?"} (${data.slug ?? data.name ?? "unnamed"})`;
   }
 
+  protected probeRepo(conn: GitHubConnection, repo: string): Promise<unknown> {
+    return this.get(conn, `/repos/${repo}`);
+  }
+
   async fetchOpenItems(repo: string, connectionId: string, maxPages = 50): Promise<RepoItem[]> {
     const conn = this.requireConnection(connectionId);
     const out: RepoItem[] = [];

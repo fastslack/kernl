@@ -20,10 +20,13 @@ export function createGitLabChannelModule() {
       return { connections, provider, db: ctx.sqlite };
     },
     tools: ({ connections, provider, db }) => gitlabChannelTools(connections, provider, db),
-    rpc: ({ connections, provider }) => forgeConnectionRpc({
+    rpc: ({ connections, provider, db }) => forgeConnectionRpc({
       prefix: "gitlab",
+      label: "GitLab",
       connections,
       provider,
+      db,
+      hostOf: (c) => { try { return new URL(c.host).hostname.toLowerCase(); } catch { return ""; } },
       addInput: (a) => ({
         name: String(a.name ?? ""),
         token: String(a.token ?? ""),

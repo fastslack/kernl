@@ -153,7 +153,7 @@ describe("GitHub personal access token", () => {
 describe("adding a connection from the dashboard", () => {
   it("keeps it when the forge accepts it, drops it when it refuses", async () => {
     const store = new GitHubConnectionsService(db, key);
-    const rpc = forgeConnectionRpc({ prefix: "github", connections: store, provider: new GitHubRepoProvider(store), addInput: (a) => ({ name: String(a.name), token: String(a.token) }) });
+    const rpc = forgeConnectionRpc({ prefix: "github", label: "GitHub", connections: store, provider: new GitHubRepoProvider(store), hostOf: () => "github.com", addInput: (a) => ({ name: String(a.name), token: String(a.token) }) });
     const add = rpc.find((a) => a.name === "github.connections.add")!;
     const list = rpc.find((a) => a.name === "github.connections.list")!;
     globalThis.fetch = (async () => Response.json({ id: 9, login: "fastslack" })) as unknown as typeof fetch;
@@ -163,5 +163,42 @@ describe("adding a connection from the dashboard", () => {
     const listed = await list.handler({}) as { connections: Array<{ name: string; details: Record<string, string> }> };
     expect(listed.connections.map((c) => c.name)).toEqual(["matware"]);
     expect(JSON.stringify(listed)).not.toContain("good");
+  });
+});
+
+describe("a connection added from a project has to reach its repos", () => {
+  // The token sees public repos only: /user answers, the private fastslack/web is a 404 (03/11).
+  const forge = (sees: boolean) => (async (url: string) => {
+    const path = new URL(url).pathname;
+    if (path === "/user") return Response.json({ id: 9, login: "fastslack" });
+    if (path === "/repos/fastslack/web") return sees ? Response.json({ full_name: "fastslack/web" }) : Response.json({ message: "Not Found" }, { status: 404 });
+    return new Response("unexpected", { status: 500 });
+  }) as unknown as typeof fetch;
+  const rpcFor = (store: GitHubConnectionsService) => forgeConnectionRpc({
+    prefix: "github", label: "GitHub", connections: store, provider: new GitHubRepoProvider(store), db,
+    hostOf: () => "github.com", addInput: (a) => ({ name: String(a.name), token: String(a.token) }),
+  });
+
+  it("refuses and drops a token that does not see the project's repo", async () => {
+    const store = new GitHubConnectionsService(db, key);
+    const add = rpcFor(store).find((a) => a.name === "github.connections.add")!;
+    globalThis.fetch = forge(false);
+    await expect(add.handler({ name: "m", token: "pat", project_id: "matware" })).rejects.toThrow("no llega a fastslack/web");
+    expect(store.list()).toEqual([]);
+    // Without a project there is nothing to reach: the token alone is enough.
+    expect(await add.handler({ name: "m", token: "pat" })).toMatchObject({ name: "m" });
+  });
+
+  it("keeps one that sees it, and checks an existing one before it is linked", async () => {
+    const store = new GitHubConnectionsService(db, key);
+    const rpc = rpcFor(store);
+    globalThis.fetch = forge(true);
+    const added = await rpc.find((a) => a.name === "github.connections.add")!.handler({ name: "m", token: "pat", project_id: "matware" }) as { id: string };
+    const check = rpc.find((a) => a.name === "github.connections.check")!;
+    expect(await check.handler({ id: added.id, project_id: "matware" })).toEqual({ ok: true });
+    globalThis.fetch = forge(false);
+    await expect(check.handler({ id: added.id, project_id: "matware" })).rejects.toThrow("no llega a fastslack/web");
+    // Acme's repos are on GitLab: nothing on GitHub to reach.
+    expect(await check.handler({ id: added.id, project_id: "acme" })).toEqual({ ok: true });
   });
 });

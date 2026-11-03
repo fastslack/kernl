@@ -122,6 +122,11 @@ export class ForgeConnectionStore<C extends ForgeConnectionRow> {
     return r.changes > 0;
   }
 
+  /** Drop a connection that never worked (refused as it was added), freeing its name: remove() keeps the row. */
+  discard(id: string): void {
+    this.db.prepare(`DELETE FROM ${this.spec.table} WHERE id = ?`).run(id);
+  }
+
   recordTest(id: string, ok: boolean, error: string): void {
     const now = isoNow();
     this.db

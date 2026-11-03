@@ -22,10 +22,13 @@ export function createGitHubChannelModule() {
       return { connections, provider, db: ctx.sqlite };
     },
     tools: ({ connections, provider, db }) => githubChannelTools(connections, provider, db),
-    rpc: ({ connections, provider }) => forgeConnectionRpc({
+    rpc: ({ connections, provider, db }) => forgeConnectionRpc({
       prefix: "github",
+      label: "GitHub",
       connections,
       provider,
+      db,
+      hostOf: () => "github.com",
       addInput: (a) => ({
         name: String(a.name ?? ""),
         token: typeof a.token === "string" ? a.token : undefined,
