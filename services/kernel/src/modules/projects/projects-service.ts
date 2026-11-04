@@ -133,6 +133,7 @@ export class ProjectsService {
   }
 
   link(projectId: string, kind: ProjectLinkKind, refId: string): void {
+    if (kind === "website") refId = normalizeWebsite(refId);
     this.db.prepare(
       "INSERT OR IGNORE INTO project_links (id, project_id, kind, ref_id, created_at) VALUES (?, ?, ?, ?, ?)",
     ).run(newId(), projectId, kind, refId, isoNow());
@@ -378,4 +379,15 @@ export class ProjectsService {
     write(join(dir, "assets", ".gitkeep"), "");
     return dir;
   }
+}
+
+/** A website as stored: an https URL with its host lowercased and no trailing slash ("tusitio.com" → "https://tusitio.com"). */
+export function normalizeWebsite(raw: string): string {
+  const t = raw.trim();
+  let u: URL;
+  try { u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? t : `https://${t}`); } catch { throw new Error(`Not a website address: ${raw}`); }
+  if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error(`Not a website address: ${raw}`);
+  if (!u.hostname.includes(".")) throw new Error(`Not a website address: ${raw}`);
+  const path = u.pathname === "/" ? "" : u.pathname.replace(/\/+$/, "");
+  return `${u.protocol}//${u.host.toLowerCase()}${path}${u.search}`;
 }

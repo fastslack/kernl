@@ -31,18 +31,47 @@
 
   /** What can be linked. `pick` kinds offer the accounts that really exist. */
   const LINK_KINDS = [
+    { id: 'website', kind: 'website', label: 'Sitio web', pick: false, hint: 'https://tusitio.com', help: 'Las direcciones del producto. Growth las audita para SEO, revisa qué ven los asistentes de IA y muestra sus visitas en vivo.', empty: '' },
     { id: 'email', kind: 'email_account', label: 'Correo', pick: true, hint: '', help: 'La casilla desde la que Ventas y Marketing escriben mails para este proyecto.', empty: 'No hay cuentas de correo. Agregá una desde Social → Comms.' },
     { id: 'linkedin', kind: 'social_account', label: 'LinkedIn', pick: true, hint: '', help: 'La cuenta desde la que Marketing publica posts.', empty: 'No hay cuentas de LinkedIn conectadas. Conectá una desde Social → LinkedIn.' },
     { id: 'whatsapp', kind: 'social_account', label: 'WhatsApp', pick: true, hint: '', help: 'Para escribirle a quien ya te dejó su número o te escribió. Nunca en frío.', empty: 'WhatsApp no está conectado. Vinculalo desde Ajustes → Canales.' },
     { id: 'github', kind: 'github_connection', label: 'GitHub', pick: true, hint: '', help: 'La cuenta de GitHub con la que la oficina y Growth leen y abren issues en los repos de este proyecto. Queda reservada: ningún otro proyecto la usa.', empty: 'No hay conexiones de GitHub. Creá una acá abajo.' },
     { id: 'gitlab', kind: 'gitlab_connection', label: 'GitLab', pick: true, hint: '', help: 'La cuenta de GitLab con la que la oficina y Growth leen y abren issues en los repos de este proyecto. Queda reservada: ningún otro proyecto la usa.', empty: 'No hay conexiones de GitLab. Creá una acá abajo.' },
-    { id: 'repo', kind: 'repo', label: 'Repositorio', pick: false, hint: 'Nombre del repo registrado', help: 'Código del producto, para que los agentes lo consulten.', empty: '' },
+    { id: 'repo', kind: 'repo', label: 'Repositorio', pick: true, hint: '', help: 'Código del producto, para que los agentes lo consulten.', empty: 'No hay repos registrados. Registralos en IA → Repos.' },
     { id: 'task_project', kind: 'task_project', label: 'Proyecto de tareas', pick: false, hint: 'Nombre del proyecto de tareas', help: 'Dónde las oficinas anotan tareas de este proyecto.', empty: '' },
     { id: 'workspace', kind: 'workspace', label: 'Workspace', pick: false, hint: 'Nombre del workspace', help: 'Carpeta compartida con material del proyecto.', empty: '' },
     { id: 'other', kind: 'social_account', label: 'Otra cuenta (avanzado)', pick: false, hint: 'tipo:id, ej. twitter:mi_cuenta', help: 'Referencia manual para una integración sin selector.', empty: '' },
   ];
 
-  let accountOptions: Record<string, Array<{ ref: string; label: string }>> = { email: [], linkedin: [], whatsapp: [], github: [], gitlab: [] };
+  /** The tab's sections, in order: what each groups and what it is for. */
+  const GROUPS = [
+    { id: 'sites', title: 'Sitios web', icon: '🌐', kinds: ['website'], help: 'Las direcciones del producto. Growth las audita para SEO, revisa qué ven los asistentes de IA y muestra sus visitas en vivo.', empty: 'Sin sitios todavía. Agregá la dirección del producto.' },
+    { id: 'social', title: 'Correo y redes', icon: '✉', kinds: ['email', 'linkedin', 'whatsapp', 'other'], help: 'Desde dónde escriben y publican los agentes. Siempre como borrador para que lo apruebes.', empty: 'Sin cuentas. Vinculá el correo o la red desde la que querés que trabajen.' },
+    { id: 'code', title: 'Código', icon: '⌘', kinds: ['github', 'gitlab', 'repo'], help: 'Repos del producto y las cuentas de GitHub o GitLab con las que los agentes los leen y abren issues.', empty: 'Sin repos ni cuentas de código.' },
+    { id: 'work', title: 'Tareas y archivos', icon: '▤', kinds: ['task_project', 'workspace'], help: 'Dónde las oficinas anotan tareas y guardan material de este proyecto.', empty: 'Nada vinculado.' },
+  ] as const;
+  const groupOfLink = (l: Link) => {
+    if (l.kind === 'website') return 'sites';
+    if (l.kind === 'email_account' || l.kind === 'social_account') return 'social';
+    if (l.kind === 'repo' || l.kind === 'github_connection' || l.kind === 'gitlab_connection') return 'code';
+    return 'work';
+  };
+  const kindsOf = (gid: string) => LINK_KINDS.filter((k) => (GROUPS.find((x) => x.id === gid)?.kinds as readonly string[] | undefined)?.includes(k.id));
+  /** The section whose "Agregar" form is open ('' = none); the sites section always shows its own input. */
+  let addOpen = '';
+  let newSite = '';
+  function openAdd(g: (typeof GROUPS)[number]) { addOpen = addOpen === g.id ? '' : g.id; linkKind = g.kinds[0]; linkRef = ''; }
+  const addSite = () => run(async () => {
+    if (!detail || !newSite.trim()) return;
+    for (const url of newSite.split(/[\s,]+/).filter(Boolean)) {
+      await call(`/api/projects/${detail.project.id}/links`, { method: 'POST', body: JSON.stringify({ kind: 'website', ref_id: url }) });
+    }
+    newSite = '';
+    await load();
+  }, 'Sitio agregado');
+  const siteText = (url: string) => url.replace(/^https:\/\//, '');
+
+  let accountOptions: Record<string, Array<{ ref: string; label: string }>> = { email: [], linkedin: [], whatsapp: [], github: [], gitlab: [], repo: [] };
 
   interface ForgeConn { id: string; name: string; details: Record<string, string>; lastTestOk: boolean | null }
   const forgeOptions = (r: { connections?: ForgeConn[] } | null) =>
@@ -53,12 +82,13 @@
     }));
 
   async function loadAccountOptions() {
-    const [mail, li, wa, gh, gl] = await Promise.all([
+    const [mail, li, wa, gh, gl, rp] = await Promise.all([
       call('/api/email-accounts').catch(() => []),
       call('/api/linkedin/accounts').catch(() => ({ accounts: [] })),
       call('/api/channels/whatsapp/status').catch(() => null),
       rpcPost('github.connections.list').catch(() => null),
       rpcPost('gitlab.connections.list').catch(() => null),
+      rpcPost('repos.list', { limit: 500 }).catch(() => null),
     ]);
     accountOptions = {
       email: (Array.isArray(mail) ? mail : []).map((a: { id: string; label: string; email: string }) => ({ ref: `comms:${a.id}`, label: `${a.label} · ${a.email}` })),
@@ -66,6 +96,8 @@
       whatsapp: wa?.bridge_connected && wa?.jid ? [{ ref: 'whatsapp:default', label: `Número vinculado (${String(wa.jid).split('@')[0]})` }] : [],
       github: forgeOptions(gh),
       gitlab: forgeOptions(gl),
+      repo: ((rp?.repos ?? []) as Array<{ id: string; name: string; remote_url?: string; path?: string }>)
+        .map((x) => ({ ref: x.id, label: [x.name, (x.remote_url || x.path || '').replace(/^(https?:\/\/|git@)/, '').replace(/\.git$/, '')].filter(Boolean).join(' · ') })),
     };
   }
 
@@ -73,13 +105,19 @@
   function linkLabel(l: Link, opts: Record<string, Array<{ ref: string; label: string }>>): { kind: string; text: string } {
     const forge = LINK_KINDS.find((k) => k.kind === l.kind && (k.id === 'github' || k.id === 'gitlab'));
     if (forge) return { kind: forge.label, text: opts[forge.id]?.find((o) => o.ref === l.ref_id)?.label ?? `Conexión de ${forge.label} (ya no existe)` };
-    for (const k of ['email', 'linkedin', 'whatsapp']) {
-      const hit = opts[k]?.find((o) => o.ref === l.ref_id);
+    for (const k of ['email', 'linkedin', 'whatsapp', 'repo']) {
+      // Older email links hold the bare account id, newer ones `comms:<id>`.
+      const hit = opts[k]?.find((o) => o.ref === l.ref_id || (k === 'email' && o.ref === `comms:${l.ref_id}`));
       if (hit) return { kind: LINK_KINDS.find((x) => x.id === k)!.label, text: hit.label };
     }
     if (l.ref_id.startsWith('comms:')) return { kind: 'Correo', text: 'Cuenta de correo (ya no existe)' };
     if (l.ref_id.startsWith('linkedin:')) return { kind: 'LinkedIn', text: 'Cuenta de LinkedIn (ya no existe)' };
     if (l.ref_id === 'whatsapp:default') return { kind: 'WhatsApp', text: 'Número vinculado (desconectado)' };
+    if (l.kind === 'website') return { kind: 'Sitio web', text: siteText(l.ref_id) };
+    if (l.kind === 'email_account') return { kind: 'Correo', text: l.ref_id.includes('@') ? l.ref_id : 'Cuenta de correo (ya no existe)' };
+    if (l.kind === 'repo' && /^[0-9a-f-]{36}$/.test(l.ref_id)) return { kind: 'Repositorio', text: 'Repo (ya no está registrado)' };
+    if (l.kind === 'workspace') return { kind: 'Workspace', text: l.ref_id };
+    if (l.kind === 'task_project') return { kind: 'Proyecto de tareas', text: l.ref_id };
     return { kind: LINK_KINDS.find((k) => k.kind === l.kind && !k.pick)?.label ?? l.kind, text: l.ref_id };
   }
 
@@ -128,13 +166,28 @@
     return r.json();
   }
 
+  // ?project=<id>&tab=<tab> opens that project on that tab (Growth sends here to set up «Datos del producto»).
+  const TABS = ['brief', 'resources', 'offices', 'connector'] as const;
+  let deepLink: { id: string; tab: string } | null = (() => {
+    try {
+      const u = new URL(window.location.href);
+      const id = u.searchParams.get('project') ?? '';
+      return id ? { id, tab: u.searchParams.get('tab') ?? '' } : null;
+    } catch { return null; }
+  })();
+
   async function load() {
     try {
       const [list, fl] = await Promise.all([call('/api/projects'), call('/api/agents/flows')]);
       projects = list.projects ?? [];
       flows = (Array.isArray(fl) ? fl : fl.flows ?? []).filter((f: Flow) => f.active !== 0);
       error = '';
-      if (mode === 'view') {
+      if (mode === 'view' && deepLink && projects.some((p) => p.id === deepLink!.id || p.slug === deepLink!.id)) {
+        const want = deepLink;
+        deepLink = null;
+        await select(projects.find((p) => p.id === want.id || p.slug === want.id)!.id);
+        if ((TABS as readonly string[]).includes(want.tab)) tab = want.tab as typeof tab;
+      } else if (mode === 'view') {
         if (selectedId && projects.some((p) => p.id === selectedId)) await select(selectedId, false);
         else if (projects.length) await select(projects[0].id);
         else detail = null;
@@ -478,7 +531,7 @@
 
       <div class="tabs" role="tablist">
         <button role="tab" aria-selected={tab === 'brief'} class:on={tab === 'brief'} on:click={() => (tab = 'brief')}>Ficha</button>
-        <button role="tab" aria-selected={tab === 'resources'} class:on={tab === 'resources'} on:click={() => (tab = 'resources')}>Cuentas y recursos <small>{detail.links.length}</small></button>
+        <button role="tab" aria-selected={tab === 'resources'} class:on={tab === 'resources'} on:click={() => (tab = 'resources')}>Sitios y cuentas <small>{detail.links.length}</small></button>
         <button role="tab" aria-selected={tab === 'offices'} class:on={tab === 'offices'} on:click={() => (tab = 'offices')}>Oficinas <small>{officeOn.size}</small></button>
         <button role="tab" aria-selected={tab === 'connector'} class:on={tab === 'connector'} on:click={() => (tab = 'connector')}>Datos del producto <small>opcional</small></button>
       </div>
@@ -493,68 +546,101 @@
           <div class="actions"><button class="btn primary" disabled={saving}>{saving ? 'Guardando…' : 'Guardar ficha'}</button></div>
         </form>
       {:else if tab === 'resources'}
-        <p class="help">Las cuentas y recursos de <b>{detail.project.name}</b>. Los agentes solo publican o escriben desde lo que vincules acá, y siempre como borrador para que lo apruebes.</p>
-        <form class="link-form" on:submit|preventDefault={addLink}>
-          <div class="field">
-            <label for="link-kind">Tipo</label>
-            <select id="link-kind" bind:value={linkKind}>
-              {#each LINK_KINDS as k}<option value={k.id}>{k.label}</option>{/each}
-            </select>
-          </div>
-          <div class="field grow">
-            <label for="link-ref">{kind.pick ? 'Cuenta' : 'Nombre o referencia'}</label>
-            {#if kind.pick}
-              {#if options.length}
-                <select id="link-ref" bind:value={linkRef}>
-                  {#each options as o}<option value={o.ref}>{o.label}</option>{/each}
-                </select>
-              {:else}
-                <p class="no-acc" id="link-ref">{kind.empty}</p>
-              {/if}
-            {:else}
-              <input id="link-ref" bind:value={linkRef} placeholder={kind.hint} />
-            {/if}
-          </div>
-          <button class="btn" disabled={saving || !linkRef.trim()}>Vincular</button>
-        </form>
-        <p class="help">{kind.help}</p>
-        {#if kind.id === 'github' || kind.id === 'gitlab'}
-          <details class="new-conn" open={options.length === 0}>
-            <summary>Conexión nueva de {kind.label}</summary>
-            <form class="link-form" on:submit|preventDefault={addConnection}>
-              <div class="field">
-                <label for="conn-name">Nombre</label>
-                <input id="conn-name" bind:value={newConn.name} placeholder="{detail.project.slug}-{kind.id}" />
-              </div>
-              {#if kind.id === 'gitlab'}
-                <div class="field">
-                  <label for="conn-host">Servidor</label>
-                  <input id="conn-host" bind:value={newConn.host} placeholder="https://gitlab.com" />
-                </div>
-              {/if}
-              <div class="field grow">
-                <label for="conn-token">Token</label>
-                <input id="conn-token" type="password" autocomplete="off" bind:value={newConn.token} />
-              </div>
-              <button class="btn" disabled={saving || !newConn.token.trim()}>Conectar y vincular</button>
-            </form>
-            {#if kind.id === 'github'}
-              <p class="help">En GitHub: Settings → Developer settings → <b>Fine-grained tokens</b>. Dale acceso solo a los repos de {detail.project.name}, con permiso de lectura y escritura en <b>Issues</b>, <b>Pull requests</b> y <b>Contents</b>. Kernl prueba que llegue a los repos de {detail.project.name} antes de guardarlo, y lo guarda cifrado.</p>
-            {:else}
-              <p class="help">En GitLab: Preferences → <b>Access tokens</b>, con alcance <b>api</b>. Kernl prueba que llegue a los repos de {detail.project.name} antes de guardarlo, y lo guarda cifrado.</p>
-            {/if}
-          </details>
-        {/if}
-        <ul class="links">
-          {#each detail.links as l}
-            {@const ll = linkLabel(l, accountOptions)}
-            <li><span class="chip">{ll.kind}</span><span class="ref" title={l.ref_id}>{ll.text}</span>
-              <button class="x" aria-label="Desvincular {l.ref_id}" on:click={() => removeLink(l)}>×</button></li>
-          {:else}
-            <li class="no-links">Todavía no vinculaste nada. Empezá por la red social o el correo desde el que querés que trabajen los agentes.</li>
+        <p class="help">Todo lo de <b>{detail.project.name}</b> en un lugar: sus sitios, desde dónde escriben los agentes, su código y sus cuentas de deploy. Los agentes usan solo lo que está acá.</p>
+        <nav class="res-sum" aria-label="Resumen de recursos">
+          {#each GROUPS as g}
+            {@const n = detail.links.filter((l) => groupOfLink(l) === g.id).length}
+            <a href="#res-{g.id}" class:none={n === 0}><span aria-hidden="true">{g.icon}</span>{g.title}<b>{n}</b></a>
           {/each}
-        </ul>
-        <DeployAccounts projectId={detail.project.id} projectName={detail.project.name} />
+        </nav>
+        {#each GROUPS as g (g.id)}
+          {@const mine = detail.links.filter((l) => groupOfLink(l) === g.id)}
+          <section class="res-group" id="res-{g.id}">
+            <header class="res-head">
+              <h3><span class="res-ico" aria-hidden="true">{g.icon}</span>{g.title}<small>{mine.length}</small></h3>
+              {#if g.id !== 'sites'}<button class="btn sm" on:click={() => openAdd(g)} aria-expanded={addOpen === g.id}>{addOpen === g.id ? 'Cerrar' : '+ Agregar'}</button>{/if}
+            </header>
+            <p class="help">{g.help}</p>
+            {#if g.id === 'sites'}
+              <form class="link-form" on:submit|preventDefault={addSite}>
+                <div class="field grow">
+                  <label for="new-site" class="sr">Dirección del sitio</label>
+                  <input id="new-site" bind:value={newSite} placeholder="https://tusitio.com" autocomplete="off" />
+                </div>
+                <button class="btn" disabled={saving || !newSite.trim()}>Agregar sitio</button>
+              </form>
+            {:else if addOpen === g.id}
+              <form class="link-form" on:submit|preventDefault={addLink}>
+                {#if g.kinds.length > 1}
+                  <div class="field">
+                    <label for="link-kind-{g.id}">Tipo</label>
+                    <select id="link-kind-{g.id}" bind:value={linkKind}>
+                      {#each kindsOf(g.id) as k}<option value={k.id}>{k.label}</option>{/each}
+                    </select>
+                  </div>
+                {/if}
+                <div class="field grow">
+                  <label for="link-ref-{g.id}">{kind.pick ? 'Cuenta' : 'Nombre o referencia'}</label>
+                  {#if kind.pick}
+                    {#if options.length}
+                      <select id="link-ref-{g.id}" bind:value={linkRef}>
+                        {#each options as o}<option value={o.ref}>{o.label}</option>{/each}
+                      </select>
+                    {:else}
+                      <p class="no-acc" id="link-ref-{g.id}">{kind.empty}</p>
+                    {/if}
+                  {:else}
+                    <input id="link-ref-{g.id}" bind:value={linkRef} placeholder={kind.hint} />
+                  {/if}
+                </div>
+                <button class="btn" disabled={saving || !linkRef.trim()}>Vincular</button>
+              </form>
+              <p class="help">{kind.help}</p>
+              {#if kind.id === 'github' || kind.id === 'gitlab'}
+                <details class="new-conn" open={options.length === 0}>
+                  <summary>Conexión nueva de {kind.label}</summary>
+                  <form class="link-form" on:submit|preventDefault={addConnection}>
+                    <div class="field">
+                      <label for="conn-name">Nombre</label>
+                      <input id="conn-name" bind:value={newConn.name} placeholder="{detail.project.slug}-{kind.id}" />
+                    </div>
+                    {#if kind.id === 'gitlab'}
+                      <div class="field">
+                        <label for="conn-host">Servidor</label>
+                        <input id="conn-host" bind:value={newConn.host} placeholder="https://gitlab.com" />
+                      </div>
+                    {/if}
+                    <div class="field grow">
+                      <label for="conn-token">Token</label>
+                      <input id="conn-token" type="password" autocomplete="off" bind:value={newConn.token} />
+                    </div>
+                    <button class="btn" disabled={saving || !newConn.token.trim()}>Conectar y vincular</button>
+                  </form>
+                  {#if kind.id === 'github'}
+                    <p class="help">En GitHub: Settings → Developer settings → <b>Fine-grained tokens</b>. Dale acceso solo a los repos de {detail.project.name}, con permiso de lectura y escritura en <b>Issues</b>, <b>Pull requests</b> y <b>Contents</b>. Kernl prueba que llegue a los repos de {detail.project.name} antes de guardarlo, y lo guarda cifrado.</p>
+                  {:else}
+                    <p class="help">En GitLab: Preferences → <b>Access tokens</b>, con alcance <b>api</b>. Kernl prueba que llegue a los repos de {detail.project.name} antes de guardarlo, y lo guarda cifrado.</p>
+                  {/if}
+                </details>
+              {/if}
+            {/if}
+            <ul class="links">
+              {#each mine as l (l.kind + l.ref_id)}
+                {@const ll = linkLabel(l, accountOptions)}
+                <li>
+                  {#if g.id !== 'sites'}<span class="chip">{ll.kind}</span>{/if}
+                  {#if l.kind === 'website'}<a class="ref" href={l.ref_id} target="_blank" rel="noopener noreferrer">{ll.text} ↗</a>{:else}<span class="ref" title={l.ref_id}>{ll.text}</span>{/if}
+                  <button class="x" aria-label="Quitar {ll.text}" title="Quitar" on:click={() => removeLink(l)}>×</button>
+                </li>
+              {:else}
+                <li class="no-links">{g.empty}</li>
+              {/each}
+            </ul>
+          </section>
+        {/each}
+        <section class="res-group" id="res-deploy">
+          <DeployAccounts projectId={detail.project.id} projectName={detail.project.name} />
+        </section>
       {:else if tab === 'offices'}
       <div class="offices-box">
         <h3>¿Qué oficinas trabajan para {detail.project.name}?</h3>
@@ -727,6 +813,22 @@
   .new-conn { margin: 10px 0 4px; max-width: 760px; border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; background: var(--surface-1); }
   .new-conn summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-1); }
   .new-conn .link-form { margin: 10px 0 8px; }
+  .res-sum { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+  .res-sum a { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 12.5px; text-decoration: none;
+    color: var(--text-1); border: 1px solid color-mix(in srgb, var(--pj-life) 35%, var(--border)); background: color-mix(in srgb, var(--pj-life) 8%, transparent); }
+  .res-sum a b { font-variant-numeric: tabular-nums; color: var(--pj-life); }
+  .res-sum a.none { color: var(--text-2); border-style: dashed; background: none; }
+  .res-sum a.none b { color: var(--text-3); }
+  .res-group { margin-top: 12px; padding: 12px 14px; max-width: 800px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-1); overflow: visible; }
+  .res-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+  .res-head h3 { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: var(--text-1); }
+  .res-head h3 small { font-size: 12px; font-weight: 700; color: var(--pj-life); background: color-mix(in srgb, var(--pj-life) 14%, transparent); border-radius: 999px; padding: 0 8px; }
+  .res-ico { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; font-size: 14px; background: color-mix(in srgb, var(--pj-life) 14%, transparent); }
+  .btn.sm { min-height: 30px; padding: 4px 12px; font-size: 12.5px; }
+  .res-group .links { margin-top: 8px; }
+  a.ref { color: var(--pj-sky); text-decoration: none; }
+  a.ref:hover { text-decoration: underline; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   .links { margin-top: 12px; max-width: 760px; display: flex; flex-direction: column; gap: 6px; }
   .links li { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1); }
   .links .no-links { color: var(--text-2); font-size: 13.5px; border-style: dashed; padding: 14px; background: none; }

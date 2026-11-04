@@ -233,4 +233,33 @@ export const projectsMigrations: Migration[] = [
       ALTER TABLE project_accounts_v11 RENAME TO project_accounts;
     `,
   },
+  {
+    // A project's websites are its own resource (kind 'website', ref_id = the URL): Growth, SEO and the
+    // Plaza read them from here. The sites typed into Growth's office settings are copied over once.
+    version: 12,
+    sql: `
+      CREATE TABLE project_links_v12 (
+        id         TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        kind       TEXT NOT NULL CHECK(kind IN ('repo','social_account','email_account','task_project','workspace',
+                                                'github_connection','gitlab_connection','website')),
+        ref_id     TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(project_id, kind, ref_id)
+      );
+      INSERT INTO project_links_v12 (id, project_id, kind, ref_id, created_at)
+      SELECT id, project_id, kind, ref_id, created_at FROM project_links;
+      DROP TABLE project_links;
+      ALTER TABLE project_links_v12 RENAME TO project_links;
+      INSERT OR IGNORE INTO project_links (id, project_id, kind, ref_id, created_at)
+      SELECT lower(hex(randomblob(16))), op.project_id, 'website', rtrim(trim(j.value), '/'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      FROM office_projects op, json_each(CASE
+        WHEN json_type(op.settings, '$.sites') = 'array' THEN json_extract(op.settings, '$.sites')
+        WHEN json_type(op.settings, '$.sites') = 'text' AND json_valid(json_extract(op.settings, '$.sites'))
+          AND json_type(json_extract(op.settings, '$.sites')) = 'array' THEN json_extract(op.settings, '$.sites')
+        ELSE '[]' END) j
+      WHERE op.flow_id = 'growth-office' AND json_valid(op.settings) AND rtrim(trim(j.value), '/') LIKE 'http%://%'
+        AND op.project_id IN (SELECT id FROM projects);
+    `,
+  },
 ];

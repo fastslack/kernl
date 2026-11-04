@@ -139,7 +139,7 @@ export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsR
   server.route("POST", "/api/projects/:id/links", ({ params, body }) => {
     const p = mustProject(params.id);
     const b = parse(LinkBody, body);
-    projects.link(p.id, b.kind as ProjectLinkKind, b.ref_id);
+    try { projects.link(p.id, b.kind as ProjectLinkKind, b.ref_id); } catch (err) { asHttp(err); }
     return { links: projects.links(p.id) };
   });
 

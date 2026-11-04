@@ -119,6 +119,8 @@
   onMount(() => {
     const u = new URL(window.location.href);
     wantItem = u.searchParams.get('item') ?? '';
+    // ?project=<id> opens Approvals already filtered to that project (Growth links here per project).
+    fProject = u.searchParams.get('project') ?? '';
     if (wantItem) { u.searchParams.delete('item'); history.replaceState(history.state, '', u.toString()); }
     void load(); window.addEventListener('focus', onFocus);
   });
