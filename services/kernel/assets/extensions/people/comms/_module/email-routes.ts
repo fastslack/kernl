@@ -303,7 +303,7 @@ export function registerEmailRoutes(
     // Attention queue — emails needing response with AI drafts
     route("GET", "/api/emails/attention", "Failed to get attention queue", ({ query }) => {
       const limit = Number(query.get("limit") ?? 50);
-      const items = triageService.getAttentionQueue(limit);
+      const items = triageService.getAttentionQueue(limit, query.get("account_id") || undefined);
       const stats = triageService.getTriageStats();
       return { items, stats };
     });

@@ -17,6 +17,8 @@
   import ExtensionGate from '$lib/components/ExtensionGate.svelte';
   import NotificationDropdown from '$lib/components/NotificationDropdown.svelte';
   import OutboxBadge from '$lib/components/OutboxBadge.svelte';
+  import MailBadge from '$lib/components/MailBadge.svelte';
+  import HeaderIcon, { badgeText } from '$lib/components/HeaderIcon.svelte';
   import ThemeSwitcher from '$lib/components/ThemeSwitcher.svelte';
   import MusicPlayer from '$lib/components/MusicPlayer.svelte';
   import MusicNavIndicator from '$lib/components/MusicNavIndicator.svelte';
@@ -677,18 +679,15 @@
     <div class="header-right">
       <!-- Status cluster: live state of the kernel (tasks pending, mail drafts) -->
       <div class="hdr-cluster hdr-status">
-        <button class="header-icon-btn" on:click={() => navigate('tasks')} title="Tasks {taskOverdue > 0 ? '— ' + taskOverdue + ' overdue' : ''}">
-          ☑
+        <button class="header-icon-btn" on:click={() => navigate('tasks')}
+          title={taskOverdue > 0 ? `Tareas — ${taskOverdue} vencida${taskOverdue === 1 ? '' : 's'}` : 'Tareas'}
+          aria-label={taskOverdue > 0 ? `Tareas: ${taskOverdue} vencidas` : 'Tareas'}>
+          <HeaderIcon name="tasks" />
           {#if taskOverdue > 0}
-            <span class="header-icon-badge hb-visible">{taskOverdue}</span>
+            <span class="header-icon-badge hb-visible">{badgeText(taskOverdue)}</span>
           {/if}
         </button>
-        <button class="header-icon-btn" on:click={() => navigate('comms')} title="Comms {commDrafts > 0 ? '— ' + commDrafts + ' drafts' : ''}">
-          ✉
-          {#if commDrafts > 0}
-            <span class="header-icon-badge hb-visible hb-gold">{commDrafts}</span>
-          {/if}
-        </button>
+        <MailBadge />
         <OutboxBadge onOpen={() => navigate('outbox')} />
         <NotificationDropdown
           open={notifOpen}

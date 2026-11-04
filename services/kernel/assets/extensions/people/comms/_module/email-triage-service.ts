@@ -24,6 +24,7 @@ import {
 } from "@kernl/extension-sdk";
 import { type AgendaItem, AGENDA_PROMPT_RULES, parseAgendaItems } from "./agenda-extract.js";
 import { mailLlmChat } from "./mail-llm.js";
+import { COMM_SOURCE, GMAIL_SOURCE } from "./email-service.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -69,7 +70,10 @@ export interface AttentionItem {
   draft_comm_id: string;
   draft_body: string;
   draft_status: string;
+  account_id: string;
 }
+
+const URGENCY_RANK: Record<Urgency, number> = { critical: 1, high: 2, normal: 3, low: 4 };
 
 /** How far back getUnclassifiedComms looks for inbound mail to classify. */
 export const TRIAGE_WINDOW_DAYS = 14;
@@ -483,32 +487,42 @@ ${bodyPreview}`;
     return commId;
   }
 
-  /** Get emails needing attention with their draft info */
-  getAttentionQueue(limit = 50): AttentionItem[] {
-    try {
-      return this.db.prepare(`
-        SELECT e.gmail_id, e.thread_id, e.from_email, e.from_name,
-               e.subject, e.snippet, e.date, e.urgency, e.ai_summary,
-               e.draft_comm_id,
-               COALESCE(c.body, '') as draft_body,
-               COALESCE(c.status, '') as draft_status
-        FROM google_emails e
-        LEFT JOIN communications c ON c.id = e.draft_comm_id AND e.draft_comm_id <> ''
-        WHERE e.attention_needed = 1
-        ORDER BY
-          CASE e.urgency
-            WHEN 'critical' THEN 1
-            WHEN 'high' THEN 2
-            WHEN 'normal' THEN 3
-            WHEN 'low' THEN 4
-            ELSE 5
-          END,
-          e.date DESC
-        LIMIT ?
-      `).all(limit) as AttentionItem[];
-    } catch {
-      return [];
+  /**
+   * Emails needing attention with their draft info, from every source that
+   * holds the account's mail: Gmail rows and IMAP rows (triaged in
+   * communications.metadata) alike. Without an account, all of them.
+   */
+  getAttentionQueue(limit = 50, accountId?: string): AttentionItem[] {
+    const provider = accountId
+      ? (this.db.prepare("SELECT provider FROM email_accounts WHERE id = ?").get(accountId) as { provider: string } | undefined)?.provider
+      : undefined;
+    const sources: string[] = [];
+    if (provider !== "imap_smtp") sources.push(GMAIL_SOURCE);
+    if (!accountId || provider === "imap_smtp") sources.push(COMM_SOURCE);
+    const accFilter = accountId ? " AND e.account_id = ?" : "";
+    const items: AttentionItem[] = [];
+    for (const src of sources) {
+      try {
+        items.push(...this.db.prepare(`
+          SELECT e.gmail_id, e.thread_id, e.from_email, e.from_name,
+                 e.subject, e.snippet, e.date, e.urgency, e.ai_summary,
+                 e.draft_comm_id, e.account_id,
+                 COALESCE(c.body, '') as draft_body,
+                 COALESCE(c.status, '') as draft_status
+          FROM ${src} e
+          LEFT JOIN communications c ON c.id = e.draft_comm_id AND e.draft_comm_id <> ''
+          WHERE e.attention_needed = 1${accFilter}
+          ORDER BY e.date DESC
+          LIMIT ?
+        `).all(...(accountId ? [accountId] : []), limit) as AttentionItem[]);
+      } catch {
+        // google-sync not installed, or a table mid-migration: that source is empty
+      }
     }
+    const rank = (u: string) => URGENCY_RANK[u as Urgency] ?? 5;
+    return items
+      .sort((a, b) => rank(a.urgency) - rank(b.urgency) || (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+      .slice(0, limit);
   }
 
   /** Get triage stats for dashboard */
