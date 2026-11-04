@@ -166,3 +166,80 @@ describe("the project's own deploy environment", () => {
   });
 });
 
+
+describe("Datadog connect", () => {
+  /** Datadog as it is: a key answers only on the region it was made in; the app key may lack the RUM scope. */
+  const datadog = (home: string) => (async (url: string, init: RequestInit) => {
+    calls.push({ url, init });
+    const h = (init.headers ?? {}) as Record<string, string>;
+    if (!url.startsWith(`https://api.${home}/`)) return Response.json({ errors: ["Forbidden"] }, { status: 403 });
+    if (url.endsWith("/api/v1/validate")) return Response.json({ valid: true });
+    if (h["DD-APPLICATION-KEY"] === "no-rum") return Response.json({ errors: ["Forbidden"] }, { status: 403 });
+    if (h["DD-APPLICATION-KEY"] === "wrong") return Response.json({ errors: ["Unauthorized"] }, { status: 401 });
+    return Response.json({ data: [] });
+  }) as unknown as typeof fetch;
+
+  it("finds the region from the key when the wrong one was picked", async () => {
+    const svc = new ProjectAccountsService(db, key, datadog("us5.datadoghq.com"));
+    const a = await svc.set("matware", "datadog", { site: "datadoghq.com", api_key: "k-1234567890" });
+    expect(a.config.site).toBe("us5.datadoghq.com");
+    expect(a.identity).toBe("API key válida en us5.datadoghq.com (región detectada)");
+  });
+
+  it("checks the application key can read RUM, and says which scope is missing", async () => {
+    const svc = new ProjectAccountsService(db, key, datadog("datadoghq.eu"));
+    const a = await svc.set("matware", "datadog", { site: "datadoghq.eu", api_key: "k-1234567890", app_key: "ok-app-key" });
+    expect(a.identity).toBe("API key válida en datadoghq.eu · lee RUM");
+    await expect(svc.set("matware", "datadog", { site: "datadoghq.eu", api_key: "k-1234567890", app_key: "no-rum" })).rejects.toThrow("rum_apps_read");
+    await expect(svc.set("matware", "datadog", { site: "datadoghq.eu", api_key: "k-1234567890", app_key: "wrong" })).rejects.toThrow("rechazó la application key");
+  });
+});
+
+describe("Google linked by consent", () => {
+  const G = { clientId: "cid", clientSecret: "csec", redirectUri: "http://localhost:3087/auth/google/callback" };
+  const idToken = (email: string) => `x.${Buffer.from(JSON.stringify({ email })).toString("base64url")}.y`;
+  /** Google as it is: token endpoint, GA4 metadata (property 111 only), Search Console sites (example.com only). */
+  const google = (async (url: string, init: RequestInit) => {
+    calls.push({ url, init });
+    if (url === "https://oauth2.googleapis.com/token") {
+      const b = new URLSearchParams(String(init.body));
+      if (b.get("grant_type") === "authorization_code") return Response.json({ access_token: "at", refresh_token: "rt-1", id_token: idToken("ops@example.com"), expires_in: 3600 });
+      return Response.json({ access_token: `at-${b.get("refresh_token")}`, expires_in: 3600 });
+    }
+    if (url.includes("/properties/111/metadata")) return Response.json({});
+    if (url.includes("analyticsdata")) return Response.json({ error: { message: "denied" } }, { status: 403 });
+    if (url === "https://www.googleapis.com/webmasters/v3/sites/https%3A%2F%2Fexample.com%2F") return Response.json({ siteUrl: "https://example.com/" });
+    if (url.includes("webmasters")) return Response.json({}, { status: 403 });
+    return new Response("unexpected", { status: 500 });
+  }) as unknown as typeof fetch;
+
+  it("the consent URL carries the project; the callback state is single-use", async () => {
+    const { configureGoogleClient, googleConsentUrl, claimState, isProjectState } = await import("../src/modules/projects/google-link.js");
+    configureGoogleClient(() => G);
+    const url = new URL(googleConsentUrl("matware", "http://localhost:3086/projects"));
+    expect(url.searchParams.get("redirect_uri")).toBe(G.redirectUri);
+    expect(url.searchParams.get("scope")).toContain("analytics.readonly");
+    expect(url.searchParams.get("access_type")).toBe("offline");
+    const state = url.searchParams.get("state")!;
+    expect(isProjectState(state)).toBe(true);
+    expect(claimState(state)).toBe("matware");
+    expect(claimState(state)).toBeNull();
+  });
+
+  it("links the account, then saves only what that account can read", async () => {
+    const { configureGoogleClient, exchangeCode } = await import("../src/modules/projects/google-link.js");
+    configureGoogleClient(() => G);
+    const svc = new ProjectAccountsService(db, key, google);
+    await expect(svc.set("matware", "google", { ga4_property: "111" })).rejects.toThrow("Conectar con Google");
+    const { refreshToken, email } = await exchangeCode("code-1", google);
+    expect(email).toBe("ops@example.com");
+    expect(svc.linkGoogle("matware", refreshToken, email).identity).toBe("ops@example.com");
+    const a = await svc.set("matware", "google", { ga4_property: "properties/111", ga4_name: "Sitio", search_console_sites: ["https://example.com/"] });
+    expect(a.identity).toBe("ops@example.com · GA4 Sitio · Search Console: https://example.com/");
+    expect(a.secrets).toEqual({ refresh_token: "…" });
+    await expect(svc.set("matware", "google", { ga4_property: "222" })).rejects.toThrow("no puede leer la propiedad");
+    await expect(svc.set("matware", "google", { search_console_sites: "https://other.example/" })).rejects.toThrow("no tiene acceso");
+    expect(svc.get("matware", "google")!.config.ga4_property).toBe("111");
+    expect(svc.env("matware")).toEqual({});
+  });
+});

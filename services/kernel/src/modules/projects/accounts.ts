@@ -1,6 +1,7 @@
 /**
  * A project's own accounts on the services it deploys to and reads from:
- * Cloudflare, Datadog, AWS, and the git identity its commits and pushes go out
+ * Cloudflare, Datadog, AWS, Google (Analytics and Search Console, linked by
+ * consent in google-link.ts), and the git identity its commits and pushes go out
  * as. One per service and project; an account belongs to its project only, so
  * a deploy or a read for one project never goes out as another (03/11: the
  * Kernl site's wrangler deploy kept landing in the wrong Cloudflare account).
@@ -14,8 +15,9 @@ import { createHash, createHmac } from "node:crypto";
 import { encrypt, decrypt } from "../../sdk/crypto.js";
 import { newId, isoNow } from "../../core/helpers.js";
 import type { SqliteDb } from "../../core/db/sqlite.js";
+import { googleAccessToken } from "./google-link.js";
 
-export const ACCOUNT_PROVIDERS = ["cloudflare", "datadog", "aws", "git", "env"] as const;
+export const ACCOUNT_PROVIDERS = ["cloudflare", "datadog", "aws", "git", "env", "google"] as const;
 export type AccountProvider = (typeof ACCOUNT_PROVIDERS)[number];
 
 export interface AccountValues {
@@ -51,13 +53,33 @@ interface ProviderSpec {
   readInput?: (input: Record<string, unknown>, previous?: AccountValues) => AccountValues;
   normalize?: (v: AccountValues) => AccountValues;
   validate?: (v: AccountValues) => string | null;
-  /** One authenticated round-trip; resolves to who it is, throws with the service's reason. */
+  /**
+   * One authenticated round-trip; resolves to who it is, throws with the service's reason.
+   * It may correct `v.config` from what the service says (Datadog's region, found from the key).
+   */
   test: (v: AccountValues, fetchFn: typeof fetch) => Promise<string>;
   /** The variables a deploy command gets. */
   env: (v: AccountValues) => Record<string, string>;
 }
 
-const DATADOG_SITES = new Set(["datadoghq.com", "datadoghq.eu", "us3.datadoghq.com", "us5.datadoghq.com", "ap1.datadoghq.com", "ap2.datadoghq.com", "ddog-gov.com"]);
+export const DATADOG_SITES = new Set([
+  "datadoghq.com", "us3.datadoghq.com", "us5.datadoghq.com", "datadoghq.eu", "uk1.datadoghq.com",
+  "ap1.datadoghq.com", "ap2.datadoghq.com", "ddog-gov.com", "us2.ddog-gov.com",
+]);
+
+const ddHeaders = (apiKey: string, appKey?: string): Record<string, string> => ({
+  "DD-API-KEY": apiKey, Accept: "application/json", ...(appKey ? { "DD-APPLICATION-KEY": appKey, "Content-Type": "application/json" } : {}),
+});
+
+/** Whether Datadog takes this API key on that site (a key only works on the region it was made in). */
+async function ddKeyValid(site: string, apiKey: string, fetchFn: typeof fetch): Promise<{ ok: boolean; status: number }> {
+  try {
+    const res = await fetchFn(`https://api.${site}/api/v1/validate`, { headers: ddHeaders(apiKey), signal: AbortSignal.timeout(TIMEOUT) });
+    return { ok: res.ok && (await json(res)).valid === true, status: res.status };
+  } catch {
+    return { ok: false, status: 0 };
+  }
+}
 
 /** `datadoghq.eu`, `us5.datadoghq.com`, or a pasted `https://app.datadoghq.eu/...` → the bare site. */
 export function datadogSite(site: string): string {
@@ -135,13 +157,28 @@ export const PROVIDERS: Record<AccountProvider, ProviderSpec> = {
     normalize: (v) => ({ ...v, config: { ...v.config, site: datadogSite(v.config.site ?? "") } }),
     validate: (v) => (DATADOG_SITES.has(v.config.site) ? null : `site: "${v.config.site}" no es una región de Datadog (${[...DATADOG_SITES].join(", ")})`),
     test: async (v, fetchFn) => {
-      const res = await fetchFn(`https://api.${v.config.site}/api/v1/validate`, {
-        headers: { "DD-API-KEY": v.secrets.api_key, Accept: "application/json" },
-        signal: AbortSignal.timeout(TIMEOUT),
-      });
-      const body = await json(res);
-      if (!res.ok || body.valid !== true) throw new Error(`Datadog rechazó la API key en ${v.config.site} (HTTP ${res.status})`);
-      return `API key válida en ${v.config.site}`;
+      const chosen = v.config.site;
+      const first = await ddKeyValid(chosen, v.secrets.api_key, fetchFn);
+      if (!first.ok) {
+        // Picking the wrong region is the usual slip: ask every other region before calling the key bad.
+        const others = [...DATADOG_SITES].filter((s) => s !== chosen);
+        const found = (await Promise.all(others.map(async (s) => ((await ddKeyValid(s, v.secrets.api_key, fetchFn)).ok ? s : "")))).find(Boolean);
+        if (!found) throw new Error(`Datadog rechazó la API key en todas sus regiones (HTTP ${first.status} en ${chosen}): copiala de nuevo desde Organization Settings → API Keys`);
+        v.config.site = found;
+      }
+      const parts = [`API key válida en ${v.config.site}${v.config.site !== chosen ? " (región detectada)" : ""}`];
+      if (v.secrets.app_key) {
+        // The one read Kernl makes with it: live RUM sessions, for Growth's Plaza.
+        const res = await fetchFn(`https://api.${v.config.site}/api/v2/rum/events/search`, {
+          method: "POST", headers: ddHeaders(v.secrets.api_key, v.secrets.app_key), signal: AbortSignal.timeout(TIMEOUT),
+          body: JSON.stringify({ filter: { query: "*", from: "now-15m", to: "now" }, page: { limit: 1 } }),
+        });
+        if (res.status === 401) throw new Error("Datadog rechazó la application key: copiala de nuevo (se muestra una sola vez al crearla)");
+        if (res.status === 403) throw new Error("La application key no puede leer RUM: editala en Datadog y sumale el scope rum_apps_read");
+        if (!res.ok) throw new Error(`Datadog no dejó leer RUM con la application key (HTTP ${res.status})`);
+        parts.push("lee RUM");
+      }
+      return parts.join(" · ");
     },
     env: (v) => ({
       DD_API_KEY: v.secrets.api_key,
@@ -242,6 +279,43 @@ export const PROVIDERS: Record<AccountProvider, ProviderSpec> = {
     },
     env: (v) => ({ ...v.secrets }),
   },
+  google: {
+    // The refresh token only ever comes from the consent screen (linkGoogle); the form picks what to read.
+    fields: [],
+    readInput: (input, previous) => {
+      const refresh = previous?.secrets.refresh_token ?? "";
+      if (!refresh) throw new Error("Primero conectá la cuenta de Google con el botón «Conectar con Google»");
+      const text = (k: string) => (typeof input[k] === "string" ? (input[k] as string).trim() : "");
+      const sites = (Array.isArray(input.search_console_sites) ? input.search_console_sites.map(String) : text("search_console_sites").split(","))
+        .map((x) => x.trim()).filter(Boolean);
+      const config: Record<string, string> = { email: previous?.config.email ?? "" };
+      const property = text("ga4_property").replace(/^properties\//, "");
+      if (property) { config.ga4_property = property; config.ga4_name = text("ga4_name") || property; }
+      if (sites.length) config.search_console_sites = [...new Set(sites)].join(",");
+      return { config, secrets: { refresh_token: refresh } };
+    },
+    validate: (v) => (v.config.ga4_property && !/^\d+$/.test(v.config.ga4_property) ? `ga4_property: "${v.config.ga4_property}" no es una propiedad de GA4 (es un número, no el G-…)` : null),
+    test: async (v, fetchFn) => {
+      const token = await googleAccessToken(v.secrets.refresh_token, fetchFn);
+      const h = { Authorization: `Bearer ${token}` };
+      const who = v.config.email || "cuenta de Google";
+      const parts = [who];
+      if (v.config.ga4_property) {
+        const res = await fetchFn(`https://analyticsdata.googleapis.com/v1beta/properties/${v.config.ga4_property}/metadata`, { headers: h, signal: AbortSignal.timeout(TIMEOUT) });
+        if (!res.ok) throw new Error(`${who} no puede leer la propiedad de GA4 ${v.config.ga4_name ?? v.config.ga4_property} (HTTP ${res.status})`);
+        parts.push(`GA4 ${v.config.ga4_name ?? v.config.ga4_property}`);
+      }
+      const sites = (v.config.search_console_sites ?? "").split(",").filter(Boolean);
+      for (const site of sites) {
+        const res = await fetchFn(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(site)}`, { headers: h, signal: AbortSignal.timeout(TIMEOUT) });
+        if (!res.ok) throw new Error(`${who} no tiene acceso a ${site} en Search Console (HTTP ${res.status})`);
+      }
+      if (sites.length) parts.push(`Search Console: ${sites.length === 1 ? sites[0] : `${sites.length} sitios`}`);
+      return parts.join(" · ");
+    },
+    // Reads only: nothing of it goes into a deploy's environment.
+    env: () => ({}),
+  },
 };
 
 interface Row {
@@ -315,6 +389,24 @@ export class ProjectAccountsService {
          last_test_at = excluded.last_test_at, last_test_ok = 1, last_test_error = '', updated_at = excluded.updated_at`,
     ).run(prev?.id ?? newId(), projectId, provider, JSON.stringify(v.config), sealed, identity, now, now, now);
     return this.list(projectId).find((a) => a.provider === provider)!;
+  }
+
+  /**
+   * The consent screen came back with a refresh token: keep it (and the choices already made, when it
+   * is the same Google account), sealed. Not tested here: the screen that follows lists what it can see.
+   */
+  linkGoogle(projectId: string, refreshToken: string, email: string): PublicAccount {
+    const prev = this.get(projectId, "google");
+    const keep = prev && prev.config.email === email ? prev.config : {};
+    const config = { ...keep, email };
+    const now = isoNow();
+    this.db.prepare(
+      `INSERT INTO project_accounts (id, project_id, provider, config, secrets, identity, last_test_at, last_test_ok, last_test_error, created_at, updated_at)
+       VALUES (?, ?, 'google', ?, ?, ?, ?, 1, '', ?, ?)
+       ON CONFLICT(project_id, provider) DO UPDATE SET config = excluded.config, secrets = excluded.secrets, identity = excluded.identity,
+         last_test_at = excluded.last_test_at, last_test_ok = 1, last_test_error = '', updated_at = excluded.updated_at`,
+    ).run(prev?.id ?? newId(), projectId, JSON.stringify(config), encrypt(JSON.stringify({ refresh_token: refreshToken }), this.key), email, now, now, now);
+    return this.list(projectId).find((a) => a.provider === "google")!;
   }
 
   /** Re-test the stored account (a token may have expired or lost its access). */

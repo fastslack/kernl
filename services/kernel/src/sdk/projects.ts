@@ -49,9 +49,13 @@ export interface ProjectsHost {
   accountEnv?(projectId: string): Record<string, string>;
   /** One of the project's accounts, secrets in the clear, or undefined. Optional. */
   account?(projectId: string, provider: ProjectAccountProvider): { config: Record<string, string>; secrets: Record<string, string>; identity: string } | undefined;
+  /** Whether an OAuth callback `state` belongs to a project's Google link. Optional. */
+  isGoogleLinkState?(state: string | null): boolean;
+  /** Finish a project's Google link from the OAuth callback. Optional. */
+  completeGoogleLink?(state: string | null, code: string): Promise<{ ok: boolean; error?: string }>;
 }
 
-export type ProjectAccountProvider = "cloudflare" | "datadog" | "aws" | "git" | "env";
+export type ProjectAccountProvider = "cloudflare" | "datadog" | "aws" | "git" | "env" | "google";
 
 function host(): ProjectsHost {
   const h = getHost().projects?.();
@@ -70,6 +74,10 @@ export const projects = {
   /** The project's deploy environment: only its own accounts, never another project's ({} on an older kernel). */
   accountEnv: (projectId: string): Record<string, string> => host().accountEnv?.(projectId) ?? {},
   account: (projectId: string, provider: ProjectAccountProvider) => host().account?.(projectId, provider),
+  /** Whether an OAuth callback belongs to a project's Google link (false on an older kernel). */
+  isGoogleLinkState: (state: string | null): boolean => host().isGoogleLinkState?.(state) ?? false,
+  completeGoogleLink: (state: string | null, code: string) =>
+    host().completeGoogleLink?.(state, code) ?? Promise.resolve({ ok: false, error: "Este Kernl no sabe vincular Google por proyecto" }),
 };
 
 /** Register how a channel validates, previews and sends an approved draft. */

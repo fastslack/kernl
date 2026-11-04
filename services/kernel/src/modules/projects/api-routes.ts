@@ -6,6 +6,7 @@ import type { ProjectsService } from "./projects-service.js";
 import type { OutboxService } from "./outbox-service.js";
 import type { ConnectorService } from "./connector-service.js";
 import { ACCOUNT_PROVIDERS, type AccountProvider, type ProjectAccountsService } from "./accounts.js";
+import { googleConsentUrl, googleOptions } from "./google-link.js";
 import { ProjectBriefSchema, SLUG_RE } from "./brief.js";
 import { PROJECT_LINK_KINDS, type OutboxStatus, type ProjectLinkKind, type ProjectStatus } from "./types.js";
 
@@ -166,6 +167,21 @@ export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsR
   server.route("POST", "/api/projects/:id/accounts/:provider/test", async ({ params }) => {
     const p = mustProject(params.id);
     return await accounts.test(p.id, mustProvider(params.provider));
+  });
+
+  // Google: linked on Google's consent screen, then the user picks what to read from what it can see.
+  server.route("POST", "/api/projects/:id/accounts/google/connect", ({ params, body }) => {
+    const p = mustProject(params.id);
+    const returnTo = typeof (body as { return_to?: unknown } | undefined)?.return_to === "string" ? (body as { return_to: string }).return_to : "";
+    try { return { authUrl: googleConsentUrl(p.id, returnTo) }; } catch (err) { throw new HttpError(400, err instanceof Error ? err.message : String(err)); }
+  });
+
+  server.route("GET", "/api/projects/:id/accounts/google/options", async ({ params }) => {
+    const p = mustProject(params.id);
+    const a = accounts.get(p.id, "google");
+    if (!a?.secrets.refresh_token) throw new HttpError(404, "El proyecto no tiene una cuenta de Google conectada");
+    try { return await googleOptions(a.secrets.refresh_token, a.config.email ?? "", fetch); }
+    catch (err) { throw new HttpError(502, err instanceof Error ? err.message : String(err)); }
   });
 
   server.route("DELETE", "/api/projects/:id/accounts/:provider", ({ params }) => {

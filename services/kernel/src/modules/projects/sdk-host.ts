@@ -3,6 +3,7 @@ import type { ProjectsService } from "./projects-service.js";
 import type { OutboxService } from "./outbox-service.js";
 import type { Project } from "./types.js";
 import type { ProjectAccountsService } from "./accounts.js";
+import { claimState, exchangeCode, isProjectState } from "./google-link.js";
 import { getRequestContext } from "../../core/request-context.js";
 
 type RecordsFn = (projectId: string, kind: string) => Array<{ external_id: string; data: unknown; updated_at: string }>;
@@ -34,6 +35,16 @@ export function projectsHostFor(
     account: (projectId, provider) => {
       const a = accounts?.get(projectId, provider);
       return a ? { config: a.config, secrets: a.secrets, identity: a.identity } : undefined;
+    },
+    isGoogleLinkState: (state) => isProjectState(state),
+    completeGoogleLink: async (state, code) => {
+      const projectId = claimState(state);
+      if (!projectId || !accounts) return { ok: false, error: "El enlace con Google venció o no es de este Kernl: volvé a tocar «Conectar con Google»" };
+      try {
+        const { refreshToken, email } = await exchangeCode(code, fetch);
+        accounts.linkGoogle(projectId, refreshToken, email);
+        return { ok: true };
+      } catch (err) { return { ok: false, error: err instanceof Error ? err.message : String(err) }; }
     },
     propose: (item) => outbox.propose({
       project_id: item.project_id, flow_id: item.flow_id, agent_id: item.agent_id ?? "", run_id: item.run_id ?? "",

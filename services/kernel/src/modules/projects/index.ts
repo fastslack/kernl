@@ -10,6 +10,7 @@ import { DraftNotifier } from "./draft-notifier.js";
 import { placesTool } from "./places.js";
 import { outboxTools, projectTools, type RunLookup, type FlowOfAgent } from "./tools.js";
 import { ProjectAccountsService } from "./accounts.js";
+import { configureGoogleClient } from "./google-link.js";
 import { registerProjectsRoutes } from "./api-routes.js";
 
 /** data/projects/{slug}/ — each project's home (BRIEF.md, MEMORY.md, assets/). */
@@ -99,6 +100,14 @@ export function createProjectsModule(): ProjectsModule {
       tickTimer.unref?.();
       connector = new ConnectorService(ctx.sqlite, ctx.events, service);
       accounts = new ProjectAccountsService(ctx.sqlite, ctx.config.encryption.key);
+      // Read at call time: the Google client saved in Ajustes applies without a restart. The redirect is the
+      // one already registered for google-sync; its callback hands project links back (google-link.ts).
+      configureGoogleClient(() => {
+        const g = (ctx.config as unknown as { google?: { clientId?: string; clientSecret?: string } }).google;
+        return g?.clientId && g.clientSecret
+          ? { clientId: g.clientId, clientSecret: g.clientSecret, redirectUri: `http://localhost:${ctx.config.dashboard.port}/auth/google/callback` }
+          : null;
+      });
       connectorTimer = setInterval(() => {
         void connector?.pullAllDue().catch((err) => log.warn(`projects: connector pull failed: ${String(err)}`));
       }, CONNECTOR_CHECK_MS);
