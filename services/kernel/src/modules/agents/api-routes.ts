@@ -262,7 +262,7 @@ export function registerAgentRoutes(
     return { success: true, status: r.status };
   });
 
-  // An office's host process (Acme's host-ops) files a question for one of its agents:
+  // An office's host process (its own service on the host) files a question for one of its agents:
   // the answer reaches that agent like any other.
   server.route<{ from_agent_slug: string; question: string; context?: string; options: QuestionOption[]; for_operator?: boolean }>(
     "POST", "/api/agents/questions", ({ body }) => {

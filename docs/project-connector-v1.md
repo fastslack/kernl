@@ -198,8 +198,8 @@ por el webhook firmado o por el pull de eventos. Los tipos v1 no cambian.
 - `user_ref` es un id opaco y estable (un hash o uuid), **nunca** email ni nombre.
 - Cualquier campo fuera de la tabla se descarta antes de guardar: si el proyecto manda
   de más (email, nombre, datos clínicos), Kernl no lo almacena.
-- `user.activated` lo calcula el proyecto con su propia regla (`rule`); en Acme:
-  primera historia clínica creada dentro de los 7 días del registro.
+- `user.activated` lo calcula el proyecto con su propia regla (`rule`); por ejemplo:
+  primer documento creado dentro de los 7 días del registro.
 - Kernl guarda cada evento como registro `funnel_event` del proyecto (deduplicado por
   `event_id`) y emite `project:<type>`.
 - La carga histórica usa este mismo contrato: el proyecto arma los eventos pasados y los

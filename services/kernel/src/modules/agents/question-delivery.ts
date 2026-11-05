@@ -217,7 +217,7 @@ export function answerAndDeliver(
   });
 
   const asker = service.getAgent(result.from_agent_id);
-  // Its answers are read by something else (Acme's orchestrator reads agent_questions itself): relaunching
+  // Its answers are read by something else (an office's own orchestrator that reads agent_questions itself): relaunching
   // the asker too ran it twice on every answer — 39 runs of the Integrador in two days, each able to act.
   if (asker && answerResumeDisabled(asker)) return { ...result, resume_run_id: null };
   if (!asker || !asker.active || service.hasRunningRun(asker.id)) {

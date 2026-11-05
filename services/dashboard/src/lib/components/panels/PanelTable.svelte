@@ -92,7 +92,7 @@
 
   const open = (r: Record<string, unknown>) => view.detail && dispatch('open', String(r.key ?? ''));
   // The wide column is the row's name: the field with a second line (sub), else the first one that is not a number.
-  // 28/10: a leading position number (#) took 26% of the Acme queue while the issue's name was cut off.
+  // 28/10: a leading position number (#) took 26% of an office's queue while the issue's name was cut off.
   $: mainKey = (fields.find((f) => f.sub) ?? fields.find((f) => kinds[f.key] !== 'number') ?? fields[0])?.key;
   $: width = (key: string, _i: number) =>
     key === mainKey ? '40%' : kinds[key] === 'number' ? (/^(pos|#|n|nro)$/i.test(key) ? '44px' : '76px')

@@ -3,7 +3,7 @@
  *
  * Every tool output stays in a Claude Code run's context for every later turn, so the long tail of huge outputs
  * (a whole diff, a full log) is paid again and again. The CLI cuts Bash output at 30 000 characters; most of an
- * office agent's outputs are far smaller (in the Acme office: half under 1 400, nine in ten under 7 500). From
+ * office agent's outputs are far smaller (in one busy office: half under 1 400, nine in ten under 7 500). From
  * the agent's own recent Bash outputs (kept in agent_run_steps), its ceiling becomes its usual long output (p90),
  * rounded up to the thousand, never under FLOOR; the CLI cuts anything longer in the middle and the agent can
  * always narrow the command. Applied through the CLI's BASH_MAX_OUTPUT_LENGTH unless the agent sets it itself.
