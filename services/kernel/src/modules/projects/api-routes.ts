@@ -6,6 +6,7 @@ import type { ProjectsService } from "./projects-service.js";
 import type { OutboxService } from "./outbox-service.js";
 import type { ConnectorService } from "./connector-service.js";
 import { ACCOUNT_PROVIDERS, type AccountProvider, type ProjectAccountsService } from "./accounts.js";
+import { log } from "../../core/logger.js";
 import { googleConsentUrl, googleOptions } from "./google-link.js";
 import { ProjectBriefSchema, SLUG_RE } from "./brief.js";
 import { PROJECT_LINK_KINDS, type OutboxStatus, type ProjectLinkKind, type ProjectStatus } from "./types.js";
@@ -17,6 +18,8 @@ export interface ProjectsRouteDeps {
   accounts: ProjectAccountsService;
   flowName: (flowId: string) => string;
   listFlows: () => Array<{ id: string; name: string; active?: number }>;
+  /** The deploy environment of the project that owns a repo (deployEnvForRepo): throws when it can't be given. */
+  deployEnv?: (repo: string, origin: string | undefined) => { project: string; env: Record<string, string> };
 }
 
 const WEBHOOK_MAX_BYTES = 1024 * 1024;
@@ -149,6 +152,22 @@ export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsR
     if (!(ACCOUNT_PROVIDERS as readonly string[]).includes(p)) throw new HttpError(404, `Unknown account type: ${p}`);
     return p as AccountProvider;
   };
+
+  // For an office's own deploy service on the host (not the dashboard: a request with an Origin is refused), so its
+  // deploys run as the project that owns the repo — the project's Cloudflare, AWS, git — and not as whatever the
+  // machine is logged in as. Body: { repo: <registered path or remote> }.
+  server.route<{ repo?: unknown }>("POST", "/api/projects/deploy-env", ({ req, body }) => {
+    if (!deps.deployEnv) throw new HttpError(404, "Not available");
+    const repo = typeof body?.repo === "string" ? body.repo : "";
+    const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+    try {
+      const r = deps.deployEnv(repo, origin);
+      log.info(`projects: deploy environment of ${r.project} handed out for ${repo} (${Object.keys(r.env).sort().join(", ") || "no accounts"})`);
+      return r;
+    } catch (err) {
+      throw new HttpError(origin ? 403 : 404, err instanceof Error ? err.message : String(err));
+    }
+  });
 
   server.route("GET", "/api/projects/:id/accounts", ({ params }) => {
     const p = mustProject(params.id);

@@ -9,7 +9,7 @@ import { ConnectorService } from "./connector-service.js";
 import { DraftNotifier } from "./draft-notifier.js";
 import { placesTool } from "./places.js";
 import { outboxTools, projectTools, type RunLookup, type FlowOfAgent } from "./tools.js";
-import { ProjectAccountsService } from "./accounts.js";
+import { ProjectAccountsService, deployEnvForRepo } from "./accounts.js";
 import { configureGoogleClient } from "./google-link.js";
 import { registerProjectsRoutes } from "./api-routes.js";
 
@@ -129,6 +129,7 @@ export function createProjectsModule(): ProjectsModule {
           outbox: ob,
           connector: cn,
           accounts: ac,
+          deployEnv: (repo, origin) => deployEnvForRepo(ctx.sqlite, ac, repo, origin),
           flowName: (id) => lookups.flowName?.(id) ?? id,
           listFlows: () => lookups.listFlows?.() ?? [],
         }),

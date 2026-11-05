@@ -476,3 +476,18 @@ export function projectOfRepo(db: SqliteDb, pathOrRemote: string): string | unde
   const owners = new Set(rows.filter((r) => r.path.replace(/\/+$/, "") === want || (key !== null && r.remote_url && remoteKey(r.remote_url) === key)).map((r) => r.project_id));
   return owners.size === 1 ? [...owners][0] : undefined;
 }
+
+/**
+ * The deploy environment for a tool outside Kernl (an office's own deploy service on the host) that deploys
+ * `repo`: the accounts of the one project that owns it, and nothing when no single project does — never another
+ * project's. A request with an Origin is a browser: the dashboard shows accounts masked and never reads their
+ * secrets, so neither can a page running in it. Why: an office deployed a site with whatever wrangler session the
+ * machine had last logged in, not the project's Cloudflare account.
+ */
+export function deployEnvForRepo(db: SqliteDb, accounts: Pick<ProjectAccountsService, "env">, repo: string, origin: string | undefined):
+  { project: string; env: Record<string, string> } {
+  if (origin) throw new Error("Las credenciales de despliegue no se entregan a un navegador");
+  const project = repo.trim() ? projectOfRepo(db, repo.trim()) : undefined;
+  if (!project) throw new Error(`El repo ${repo || "(vacío)"} no es de ningún proyecto (o es de más de uno): no hay cuentas para desplegarlo`);
+  return { project, env: accounts.env(project) };
+}

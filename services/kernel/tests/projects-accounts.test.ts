@@ -8,7 +8,7 @@ import { Database } from "bun:sqlite";
 import { runMigrations } from "../src/sdk/migrations.js";
 import { generateKey } from "../src/sdk/crypto.js";
 import { projectsMigrations } from "../src/modules/projects/migrations.js";
-import { ProjectAccountsService, projectOfRepo, signedCallerIdentity } from "../src/modules/projects/accounts.js";
+import { ProjectAccountsService, projectOfRepo, signedCallerIdentity, deployEnvForRepo } from "../src/modules/projects/accounts.js";
 
 const key = generateKey();
 const CF_ACCOUNT = "0123456789abcdef0123456789abcdef";
@@ -260,5 +260,30 @@ describe("Google linked by consent", () => {
     await expect(svc.set("matware", "google", { search_console_sites: "https://other.example/" })).rejects.toThrow("no tiene acceso");
     expect(svc.get("matware", "google")!.config.ga4_property).toBe("111");
     expect(svc.env("matware")).toEqual({});
+  });
+});
+
+/** 05/11: the Acme office deployed with whatever wrangler session the machine had, not the project's account. */
+describe("deploy environment for a repo (tools outside Kernl)", () => {
+  beforeEach(() => {
+    db.exec("CREATE TABLE repos (id TEXT PRIMARY KEY, path TEXT NOT NULL DEFAULT '', remote_url TEXT NOT NULL DEFAULT '', deleted_at TEXT)");
+    db.exec(`INSERT INTO repos VALUES ('r1', '/home/u/Acme/landing', 'git@gitlab.com:acme/institutional.git', NULL);
+      INSERT INTO project_links (id, project_id, kind, ref_id, created_at) VALUES ('l1', 'acme', 'repo', 'r1', 'x')`);
+  });
+  it("gives the environment of the project that owns the repo, by path or remote", async () => {
+    const svc = new ProjectAccountsService(db, key, services);
+    await svc.set("acme", "cloudflare", { account_id: CF_ACCOUNT, api_token: "acme-cf-token" });
+    await svc.set("matware", "cloudflare", { account_id: CF_ACCOUNT, api_token: "matware-cf-token" });
+    const byPath = deployEnvForRepo(db, svc, "/home/u/Acme/landing", undefined);
+    expect(byPath).toEqual({ project: "acme", env: { CLOUDFLARE_API_TOKEN: "acme-cf-token", CLOUDFLARE_ACCOUNT_ID: CF_ACCOUNT } });
+    expect(deployEnvForRepo(db, svc, "https://gitlab.com/acme/institutional", "").project).toBe("acme");
+  });
+  it("a repo no project owns gets nothing (never another project's accounts)", () => {
+    const svc = new ProjectAccountsService(db, key, services);
+    expect(() => deployEnvForRepo(db, svc, "/somewhere/else", undefined)).toThrow("ningún proyecto");
+  });
+  it("refuses a browser (a request with an Origin): the dashboard never reads deploy secrets", () => {
+    const svc = new ProjectAccountsService(db, key, services);
+    expect(() => deployEnvForRepo(db, svc, "/home/u/Acme/landing", "http://localhost:5200")).toThrow("navegador");
   });
 });
