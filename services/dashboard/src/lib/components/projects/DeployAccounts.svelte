@@ -8,6 +8,7 @@
   */
   import { apiFetchRaw, readApiError } from '$lib/api.js';
   import DatadogConnect from './DatadogConnect.svelte';
+  import CloudflareConnect from './CloudflareConnect.svelte';
   import GoogleConnect from './GoogleConnect.svelte';
   import { onMount } from 'svelte';
 
@@ -21,7 +22,7 @@
   interface Field { key: string; label: string; secret?: boolean; optional?: boolean; placeholder?: string; multiline?: boolean }
 
   const PROVIDERS: Array<{ id: string; label: string; fields: Field[]; help: string; custom?: boolean }> = [
-    { id: 'cloudflare', label: 'Cloudflare', help: 'Token de cuenta con solo lo que despliega este proyecto (Workers, Pages, DNS de sus zonas). El Account ID está en el costado derecho del panel de la cuenta.',
+    { id: 'cloudflare', label: 'Cloudflare', help: 'Un token de la cuenta de Cloudflare del proyecto, con solo lo que despliega (Workers, Pages, DNS de sus zonas).',
       fields: [{ key: 'account_id', label: 'Account ID', placeholder: '32 caracteres' }, { key: 'api_token', label: 'API token', secret: true }] },
     { id: 'datadog', label: 'Datadog', help: 'La API key para mandar datos; la application key solo si algo tiene que leer (la Plaza de Growth).',
       fields: [{ key: 'site', label: 'Región', optional: true, placeholder: 'datadoghq.com' }, { key: 'api_key', label: 'API key', secret: true }, { key: 'app_key', label: 'Application key', secret: true, optional: true }] },
@@ -117,7 +118,7 @@
     {#each PROVIDERS as p (p.id)}
       {@const a = accountOf(p.id, accounts)}
       {@const st = status(a, p.id)}
-      <li>
+      <li class:open={open === p.id}>
         <div class="row">
           <span class="name">{p.label}</span>
           <span class="state {st.cls}" title={st.text}>{st.text}</span>
@@ -127,13 +128,16 @@
               <button class="btn sm" disabled={busy === p.id} on:click={() => edit(p.id)}>Cambiar</button>
               <button class="btn sm" disabled={busy === p.id} aria-label="Quitar la cuenta de {p.label}" on:click={() => remove(p.id)}>Quitar</button>
             {:else}
-              <button class="btn sm" disabled={busy === p.id} on:click={() => edit(p.id)}>{p.id === 'datadog' || p.id === 'google' ? 'Conectar' : 'Cargar'}</button>
+              <button class="btn sm" disabled={busy === p.id} on:click={() => edit(p.id)}>{p.id === 'datadog' || p.id === 'google' || p.id === 'cloudflare' ? 'Conectar' : 'Cargar'}</button>
             {/if}
           </span>
         </div>
         {#if open === p.id && p.id === 'google'}
           <GoogleConnect {projectId} account={a} busy={busy === p.id}
             on:save={(e) => save(p.id, e.detail)} on:cancel={() => (open = '')} on:error={(e) => { error = e.detail; notice = ''; }} />
+        {:else if open === p.id && p.id === 'cloudflare'}
+          <CloudflareConnect {projectName} accountId={a?.config.account_id ?? ''} savedToken={a?.secrets.api_token ?? ''} busy={busy === p.id}
+            on:save={(e) => save(p.id, e.detail)} on:cancel={() => (open = '')} />
         {:else if open === p.id && p.id === 'datadog'}
           <DatadogConnect {projectName} site={a?.config.site ?? ''} saved={a?.secrets ?? {}} busy={busy === p.id}
             on:save={(e) => save(p.id, e.detail)} on:cancel={() => (open = '')} />
@@ -186,30 +190,41 @@
   .help { margin: 4px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--text-2); }
   .help b { color: var(--text-1); font-weight: 600; }
   .rows { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-  .rows li { border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1); padding: 6px 8px 6px 12px; }
+  .rows li { border: 1px solid var(--border); border-radius: 12px; background: var(--surface-1); padding: 6px 8px 6px 12px;
+    transition: border-color 150ms ease-out, box-shadow 150ms ease-out, background 150ms ease-out; }
+  .rows li:hover { border-color: var(--border-h); }
+  .rows li.open { padding: 10px 14px 14px; border-color: rgba(34, 211, 238, 0.45);
+    background: linear-gradient(160deg, color-mix(in srgb, #22d3ee 6%, var(--surface-1)), var(--surface-1) 60%);
+    box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.12), 0 12px 28px -18px rgba(34, 211, 238, 0.6); }
+  .rows li.open .name { color: #a5f3fc; }
   .row { display: flex; align-items: center; gap: 10px; min-height: 32px; }
   .name { font-size: 13px; font-weight: 600; width: 84px; flex: none; color: var(--text-1); }
   .state { flex: 1; min-width: 0; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
   .state.ok { color: var(--text-1); }
   .state.bad { color: var(--danger, #e5484d); }
   .acts { display: flex; gap: 6px; flex: none; }
-  .fields { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin: 10px 0 6px; }
-  .field { display: flex; flex-direction: column; gap: 5px; flex: 1 1 180px; }
-  .field.wide { flex-basis: 100%; }
-  .field label { font-size: 12px; color: var(--text-2); }
+  .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; align-items: end; margin: 12px 0 8px; }
+  .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .field.wide, .fields .var, .fields > .btn, .fields .submit { grid-column: 1 / -1; }
+  .fields > .btn { justify-self: start; }
   .field textarea { font-family: var(--font-mono, monospace); font-size: 12px; resize: vertical; }
-  .submit { display: flex; gap: 8px; }
+  .submit { display: flex; gap: 8px; padding-top: 4px; }
   .var { display: flex; gap: 8px; flex-basis: 100%; }
-  .var input:first-child { flex: 0 0 40%; font-family: var(--font-mono, monospace); font-size: 12.5px; }
+  .var input:first-child { flex: 0 0 40%; font-family: var(--font-mono, monospace); font-size: 12.5px; text-transform: uppercase; }
   .var input:nth-child(2) { flex: 1; }
-  .btn { background: var(--surface-2); border: 1px solid var(--border-h); color: var(--text-1); border-radius: 9px; padding: 8px 14px; cursor: pointer; font: inherit; font-size: 13.5px; min-height: 38px; }
-  .btn:hover:not(:disabled) { background: var(--surface-3); }
+  .btn { background: var(--surface-2); border: 1px solid color-mix(in srgb, var(--text-1) 14%, transparent); color: var(--text-1); border-radius: 10px; padding: 8px 14px;
+    cursor: pointer; font: 500 13.5px/1.2 var(--font-body); min-height: 38px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3); transition: background 150ms, border-color 150ms, transform 100ms; }
+  .btn:hover:not(:disabled) { background: var(--surface-3); border-color: color-mix(in srgb, var(--text-1) 26%, transparent); }
+  .btn:active:not(:disabled) { transform: translateY(1px); }
+  .btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.35); }
   .btn.sm { min-height: 30px; padding: 4px 10px; font-size: 12.5px; }
-  .btn.primary { background: var(--pj-grad, var(--surface-3)); color: var(--pj-on-life, var(--text-1)); border-color: transparent; font-weight: 700; }
+  .btn.primary { background: linear-gradient(135deg, #22d3ee, #6366f1); color: #04111f; border-color: transparent; font-weight: 700; box-shadow: 0 8px 18px -10px rgba(34, 211, 238, 0.9); }
+  .btn.primary:hover:not(:disabled) { background: linear-gradient(135deg, #67e8f9, #818cf8); }
   .btn:disabled { opacity: 0.45; cursor: default; }
-  .err { margin: 8px 0 0; font-size: 12.5px; color: var(--danger, #e5484d); }
-  .ok-note { margin: 8px 0 0; font-size: 12.5px; color: var(--text-2); }
+  .err { margin: 8px 0 0; font-size: 12.5px; color: #fecdd3; padding: 8px 12px; border-radius: 10px; background: rgba(244, 63, 94, 0.12); border: 1px solid rgba(244, 63, 94, 0.4); }
+  .ok-note { margin: 8px 0 0; font-size: 12.5px; color: #bbf7d0; padding: 8px 12px; border-radius: 10px; background: rgba(52, 211, 153, 0.1); border: 1px solid rgba(52, 211, 153, 0.35); }
   @media (max-width: 640px) {
+    .fields { grid-template-columns: 1fr; }
     .row { flex-wrap: wrap; }
     .state { flex-basis: 100%; order: 3; white-space: normal; }
   }

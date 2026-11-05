@@ -131,13 +131,24 @@ const TIMEOUT = 15_000;
 export const PROVIDERS: Record<AccountProvider, ProviderSpec> = {
   cloudflare: {
     fields: [
-      { key: "account_id", secret: false, required: true },
+      // Optional: an account-owned token sees only its own account, so Kernl finds it from the token.
+      { key: "account_id", secret: false, required: false },
       { key: "api_token", secret: true, required: true },
     ],
-    validate: (v) => (/^[0-9a-f]{32}$/i.test(v.config.account_id) ? null : "account_id: son 32 caracteres hexadecimales (Cloudflare → la cuenta → Account ID)"),
+    normalize: (v) => ({ ...v, config: { ...v.config, account_id: (v.config.account_id ?? "").trim() } }),
+    validate: (v) => (!v.config.account_id || /^[0-9a-f]{32}$/i.test(v.config.account_id) ? null : "account_id: son 32 caracteres hexadecimales (Cloudflare → la cuenta → Account ID)"),
     test: async (v, fetchFn) => {
       const api = "https://api.cloudflare.com/client/v4";
       const headers = { Authorization: `Bearer ${v.secrets.api_token}` };
+      if (!v.config.account_id) {
+        const list = await fetchFn(`${api}/accounts?per_page=50`, { headers, signal: AbortSignal.timeout(TIMEOUT) });
+        const lb = await json(list);
+        if (!list.ok || lb.success === false) throw new Error(`Cloudflare no aceptó el token (HTTP ${list.status}${cfErrors(lb) ? `: ${cfErrors(lb)}` : ""}): copialo entero desde la pantalla que lo crea`);
+        const seen = (Array.isArray(lb.result) ? lb.result : []) as Array<{ id: string; name: string }>;
+        if (seen.length === 0) throw new Error("El token no ve ninguna cuenta: crealo de nuevo con el botón de Kernl (incluye «Account Settings: Read»)");
+        if (seen.length > 1) throw new Error(`El token ve ${seen.length} cuentas (${seen.map((a) => `${a.name} = ${a.id}`).join("; ")}): pegá el Account ID de la que es de este proyecto`);
+        v.config.account_id = seen[0].id;
+      }
       const res = await fetchFn(`${api}/accounts/${v.config.account_id}`, { headers, signal: AbortSignal.timeout(TIMEOUT) });
       const body = await json(res);
       if (!res.ok || body.success === false) {

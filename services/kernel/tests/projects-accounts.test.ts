@@ -47,6 +47,25 @@ beforeEach(() => {
 afterEach(() => db.close());
 
 describe("project accounts", () => {
+  it("finds the Cloudflare account from the token when no Account ID is given", async () => {
+    const one = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      const tok = ((init.headers ?? {}) as Record<string, string>).Authorization;
+      if (url.endsWith("/accounts?per_page=50")) {
+        return Response.json({ success: true, result: tok === "Bearer two-accounts"
+          ? [{ id: CF_ACCOUNT, name: "Matware" }, { id: "f".repeat(32), name: "Otra" }] : [{ id: CF_ACCOUNT, name: "Matware" }] });
+      }
+      return Response.json({ success: true, result: { name: "Matware" } });
+    }) as unknown as typeof fetch;
+    const svc = new ProjectAccountsService(db, key, one);
+    const cf = await svc.set("matware", "cloudflare", { api_token: "account-owned" });
+    expect(cf.identity).toBe("cuenta Matware");
+    expect(svc.get("matware", "cloudflare")!.config.account_id).toBe(CF_ACCOUNT);
+    await expect(svc.set("acme", "cloudflare", { api_token: "two-accounts" })).rejects.toThrow("pegá el Account ID");
+    expect(svc.get("acme", "cloudflare")).toBeNull();
+    await expect(svc.set("acme", "cloudflare", { account_id: "nope", api_token: "x" })).rejects.toThrow("32 caracteres");
+  });
+
   it("tests an account before saving it and says who it is", async () => {
     const svc = new ProjectAccountsService(db, key, services);
     const a = await svc.set("matware", "aws", { region: "eu-west-1", access_key_id: "AKIAABCDEFGHIJKLMNOP", secret_access_key: "s3cr3t-value-xyz" });
