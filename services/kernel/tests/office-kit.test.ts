@@ -203,7 +203,7 @@ describe("office-kit", () => {
     expect((lead as unknown as { executor_type: string }).executor_type).toBe("claude_code");
     expect(lead.system_prompt).toContain("Office discipline (every agent in the PRODE office)");
     expect(JSON.parse(lead.model_chain)).toEqual([
-      { provider: "claude_code", model: "claude-sonnet-4-5" },
+      { provider: "claude_code", model: "claude-sonnet-5-5" },
       { provider: "grok", model: "grok-4-fast-reasoning" },
     ]);
     const vars = JSON.parse(lead.variables) as Record<string, unknown>;

@@ -54,7 +54,7 @@ import type {
   PermissionRequester,
 } from "./chat-types.js";
 
-const DEFAULT_MODEL = "claude-sonnet-4-5";
+const DEFAULT_MODEL = "claude-sonnet-5-5";
 
 /**
  * Injectable config for the Claude Code provider (from
@@ -87,7 +87,7 @@ export interface ClaudeCodeProviderOptions {
    * carries the kernel-wide default. Without it the per-provider choice was
    * stored, rendered back in the dropdown, and read by nobody: you selected
    * claude-opus-4-7, saved, and every call still went out on
-   * claude-sonnet-4-5.
+   * claude-sonnet-5-5.
    */
   model?: string;
 }

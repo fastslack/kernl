@@ -353,7 +353,7 @@ export function officeDefinitionFromJson(raw: unknown): OfficeDefinition {
 // ── Engine ──────────────────────────────────────────────────────
 
 const REPO_MODEL_CHAIN: ModelChainEntry[] = [
-  { provider: "claude_code", model: "claude-sonnet-4-5" },
+  { provider: "claude_code", model: "claude-sonnet-5-5" },
   { provider: "grok", model: "grok-4-fast-reasoning" },
 ];
 
