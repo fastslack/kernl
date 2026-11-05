@@ -13,6 +13,8 @@
   import Skeleton from '$shared/components/Skeleton.svelte';
   import BriefFields, { emptyBrief, type BriefDraft } from '$lib/components/projects/BriefFields.svelte';
   import DeployAccounts from '$lib/components/projects/DeployAccounts.svelte';
+  import PendingApprovals from '$lib/components/projects/PendingApprovals.svelte';
+  import { goto } from '$app/navigation';
 
   type Status = 'active' | 'paused' | 'archived';
   interface Brief {
@@ -421,7 +423,7 @@
 
 <ViewHeader title="Proyectos" sub="Los productos o negocios para los que trabajan tus oficinas de agentes" />
 
-<div class="pj">
+<div class="pj k-form">
 {#if error}<div class="banner err" role="alert">{error}</div>{/if}
 
 <div class="layout">
@@ -451,7 +453,10 @@
                 {(p.offices ?? []).filter((o) => o.active).length || 'sin'} oficina{(p.offices ?? []).filter((o) => o.active).length === 1 ? '' : 's'}
               </small>
             </span>
-            <span class="num pending" class:hot={(p.pending_drafts ?? 0) > 0} title="Borradores esperando tu aprobación">{p.pending_drafts ?? 0}<small>por aprobar</small></span>
+            <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+            <span class="num pending" class:hot={(p.pending_drafts ?? 0) > 0}
+              title={(p.pending_drafts ?? 0) > 0 ? 'Borradores que prepararon los agentes y esperan tu OK: tocá para revisarlos en Aprobaciones' : 'Nada esperando tu aprobación'}
+              on:click={(e) => { if ((p.pending_drafts ?? 0) > 0) { e.stopPropagation(); void goto(`/outbox?project=${encodeURIComponent(p.id)}`); } }}>{p.pending_drafts ?? 0}<small>por aprobar</small></span>
             <span class="num leads" title="Leads de este proyecto">{p.leads ?? 0}<small>leads</small></span>
           </button>
           <button class="more" aria-label="Más acciones para {p.name}" on:click|stopPropagation={() => (menuFor = menuFor === p.id ? '' : p.id)}>⋯</button>
@@ -511,6 +516,8 @@
         </div>
         {#if notice}<span class="notice" aria-live="polite">✓ {notice}</span>{/if}
       </div>
+
+      <PendingApprovals projectId={detail.project.id} offices={detail.offices} />
 
       {#if pendingSteps > 0}
         <ol class="steps" aria-label="Próximos pasos">
@@ -752,7 +759,9 @@
   .st-archived { color: var(--text-3); background: var(--surface-2); }
   .num { display: flex; flex-direction: column; align-items: flex-end; font-variant-numeric: tabular-nums; font-size: 16px; font-weight: 700; color: var(--text-2); }
   .num small { color: var(--text-3); font-size: 10.5px; font-weight: 400; }
-  .num.pending.hot { color: var(--pj-sun); }
+  .num.pending.hot { color: var(--pj-sun); cursor: pointer; border-radius: 8px; transition: background 150ms; }
+  .num.pending.hot:hover { background: color-mix(in srgb, var(--pj-sun) 14%, transparent); }
+  .num.pending.hot:hover small { text-decoration: underline; }
   .num.leads { color: var(--pj-sky); }
   .cdot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); display: inline-block; }
   .cdot.ok { background: var(--pj-life); } .cdot.warn { background: var(--pj-sun); } .cdot.bad { background: var(--pj-coral); } .cdot.off { display: none; }
@@ -774,8 +783,7 @@
   .field.grow { flex: 1; }
   label { font-size: 14px; font-weight: 600; color: var(--text-1); }
   .req { color: var(--pj-coral); }
-  input, select { background: var(--bg); border: 1px solid var(--border-h); border-radius: 9px; color: var(--text-1); padding: 9px 11px; font: inherit; font-size: 14px; min-height: 40px; transition: border-color 150ms ease-out, box-shadow 150ms ease-out; }
-  input:focus, select:focus { outline: none; border-color: var(--pj-life); box-shadow: 0 0 0 3px color-mix(in srgb, var(--pj-life) 22%, transparent); }
+  /* Fields take the shared .k-form look (app.css), the same one the account forms inside use. */
   button:focus-visible, summary:focus-visible { outline: 2px solid var(--pj-life); outline-offset: 2px; }
   input[aria-invalid='true'] { border-color: var(--pj-coral); }
   .help { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--text-2); }

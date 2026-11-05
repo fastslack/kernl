@@ -120,11 +120,13 @@
 
 <style>
   .dd { margin: 10px 0 6px; display: flex; flex-direction: column; gap: 12px; }
-  .steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+  .steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+  .steps li + li { padding-top: 14px; border-top: 1px dashed color-mix(in srgb, var(--text-1) 10%, transparent); }
   .steps li { display: flex; gap: 10px; align-items: flex-start; }
   .num {
     flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
-    font-size: 12px; font-weight: 700; background: var(--surface-3); color: var(--text-1);
+    font-size: 12px; font-weight: 800; color: #04111f; background: linear-gradient(135deg, #22d3ee, #6366f1);
+    box-shadow: 0 0 0 3px color-mix(in srgb, #22d3ee 18%, transparent);
   }
   .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
   .title { font-size: 13px; font-weight: 600; color: var(--text-1); }
@@ -149,9 +151,13 @@
   .warn { font-size: 12px; color: var(--warning, #f5a524); }
   .submit { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .hint { font-size: 12px; color: var(--text-3); }
-  .btn { background: var(--surface-2); border: 1px solid var(--border-h); color: var(--text-1); border-radius: 9px; padding: 8px 14px; cursor: pointer; font: inherit; font-size: 13.5px; min-height: 38px; text-decoration: none; display: inline-flex; align-items: center; }
-  .btn:hover:not(:disabled) { background: var(--surface-3); }
+  .btn { background: var(--surface-2); border: 1px solid color-mix(in srgb, var(--text-1) 14%, transparent); color: var(--text-1); border-radius: 10px; padding: 8px 14px;
+    cursor: pointer; font: 500 13.5px/1.2 var(--font-body); min-height: 38px; text-decoration: none; display: inline-flex; align-items: center;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3); transition: background 150ms, border-color 150ms, transform 100ms; }
+  .btn:hover:not(:disabled) { background: var(--surface-3); border-color: color-mix(in srgb, var(--text-1) 26%, transparent); }
+  .btn:active:not(:disabled) { transform: translateY(1px); }
   .btn.open { flex: none; font-size: 12.5px; }
-  .btn.primary { background: var(--pj-grad, var(--surface-3)); color: var(--pj-on-life, var(--text-1)); border-color: transparent; font-weight: 700; }
+  .btn.primary { background: linear-gradient(135deg, #22d3ee, #6366f1); color: #04111f; border-color: transparent; font-weight: 700; box-shadow: 0 8px 18px -10px rgba(34, 211, 238, 0.9); }
+  .btn.primary:hover:not(:disabled) { background: linear-gradient(135deg, #67e8f9, #818cf8); }
   .btn:disabled { opacity: 0.45; cursor: default; }
 </style>
