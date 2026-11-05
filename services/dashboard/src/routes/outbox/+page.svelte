@@ -20,7 +20,9 @@
     id: string; project_id: string; flow_id: string; agent_id: string; channel: string; account_ref: string;
     payload: Record<string, unknown>; scheduled_for: string | null; status: Status; review_note: string;
     sent_ref: string; error: string; created_at: string; sent_at?: string | null;
-    preview: { title: string; body: string; meta?: Record<string, string> };
+    preview: { title: string; body: string; meta?: Record<string, string>;
+      /** A decision on the draft before approving it (where a request goes): written to payload[field]. */
+      choice?: { field: string; label: string; value: string; options: Array<{ value: string; label: string; hint?: string }> } };
   }
   interface Project { id: string; slug: string; name: string }
 
@@ -181,6 +183,14 @@
     await call(`/api/outbox/${it.id}`, { method: 'PUT', body: JSON.stringify({ payload: editedPayload(it.payload, textKey(it), text) }) });
     dirty = false;
   }
+
+  // The draft's own decision (choice): saved at once, so the preview shows what approving will do.
+  const choose = (it: Item, field: string, value: string) => act(async () => {
+    const base = dirty ? editedPayload(it.payload, textKey(it), text) : it.payload;
+    await call(`/api/outbox/${it.id}`, { method: 'PUT', body: JSON.stringify({ payload: { ...base, [field]: value } }) });
+    dirty = false;
+    await load();
+  });
 
   const approve = (when: string | null = null) => act(async () => {
     const it = selected;
@@ -481,6 +491,20 @@
           {/if}
         </div>
 
+        {#if selected.status === 'draft' && selected.preview.choice}
+          {@const c = selected.preview.choice}
+          <fieldset class="dest">
+            <legend>{c.label}</legend>
+            {#each c.options as o (o.value)}
+              <label class="opt" class:on={c.value === o.value}>
+                <input type="radio" name="dest-{selected.id}" value={o.value} checked={c.value === o.value} disabled={busy}
+                  on:change={() => selected && choose(selected, c.field, o.value)} />
+                <span><b>{o.label}</b>{#if o.hint}<small>{o.hint}</small>{/if}</span>
+              </label>
+            {/each}
+          </fieldset>
+        {/if}
+
         {#if selected.status === 'draft'}
           {#if rejecting}
             <form class="choice" on:submit|preventDefault={reject}>
@@ -648,4 +672,15 @@
   .testto { width: 210px; min-height: 34px; font-size: 13px; }
   .ensayo { display: inline-block; padding: 0 6px; margin-right: 4px; border-radius: 999px; border: 1px solid #a78bfa; color: #c4b5fd; font-size: 11px; font-weight: 700; letter-spacing: .3px; }
   .ensayo-note { color: #c4b5fd; font-size: 13px; font-weight: 600; }
+  .dest { margin: 10px 0 0; padding: 10px 12px 12px; border: 1px solid color-mix(in srgb, #22d3ee 35%, var(--border)); border-radius: 12px;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; background: color-mix(in srgb, #22d3ee 5%, transparent); }
+  .dest legend { padding: 0 6px; font: 600 12.5px/1.3 var(--font-body); color: #a5f3fc; }
+  .dest .opt { display: flex; gap: 10px; align-items: flex-start; padding: 9px 11px; border-radius: 10px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface-1); transition: border-color 150ms, background 150ms; }
+  .dest .opt:hover { border-color: var(--border-h); }
+  .dest .opt.on { border-color: #22d3ee; background: color-mix(in srgb, #22d3ee 10%, var(--surface-1)); box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.25); }
+  .dest .opt input { margin-top: 2px; accent-color: #22d3ee; }
+  .dest .opt span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .dest .opt b { font-size: 13px; color: var(--text-1); }
+  .dest .opt small { font-size: 12px; color: var(--text-2); line-height: 1.4; }
 </style>

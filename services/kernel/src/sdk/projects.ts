@@ -7,7 +7,7 @@
 import { getHost } from "./host.js";
 import type { OutboxChannelHandler, OutboxItem, OutboxPolicy } from "../modules/projects/types.js";
 
-export type { OutboxChannelHandler, OutboxItem, OutboxPreview, ProjectBrief } from "../modules/projects/types.js";
+export type { OutboxChannelHandler, OutboxChoice, OutboxItem, OutboxPreview, ProjectBrief } from "../modules/projects/types.js";
 
 export interface ProjectInfo {
   id: string;
