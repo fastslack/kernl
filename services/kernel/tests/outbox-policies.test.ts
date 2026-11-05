@@ -90,6 +90,22 @@ describe("outbox policies", () => {
     const item = outbox.propose({ project_id: null, flow_id: "growth-office", agent_id: "", run_id: "", channel: "web_change", account_ref: "growth", payload: { title: "llms.txt" } });
     expect(item.project_id).toBe(pid);
   });
+  it("an office serving several projects says which one in payload.project_id, and the draft is that project's", () => {
+    outbox.registerChannel("web_change", { needsAccount: false, validate: () => ({ ok: true }), preview: () => ({ title: "t", body: "b" }), send: async () => ({ ref: "aprobado" }) });
+    const other = projects.create({ slug: "matware", name: "Matware", brief: { value_prop: "v", audience: "a" } }).id;
+    const stranger = projects.create({ slug: "ajeno", name: "Ajeno", brief: { value_prop: "v", audience: "a" } }).id;
+    projects.assignOffice("sec-office", pid);
+    projects.assignOffice("sec-office", other);
+    const draft = (project_id: unknown) => outbox.propose({ project_id: null, flow_id: "sec-office", agent_id: "", run_id: "", channel: "web_change", account_ref: "growth", payload: { title: "CVE", project_id } });
+    expect(draft(other).project_id).toBe(other);
+    const bySlug = draft("matware");
+    expect(bySlug.project_id).toBe(other);
+    // The channel reads the project from the payload by id: a slug is rewritten to the id it named.
+    expect((bySlug.payload as { project_id: string }).project_id).toBe(other);
+    // A project the office does not serve is not taken from the payload.
+    expect(draft(stranger).project_id).toBeNull();
+    expect(draft(undefined).project_id).toBeNull();
+  });
   it("withdraw takes a scheduled approval back to draft; one already sending or sent stays", async () => {
     const it = propose({ text: "hola" });
     const later = new Date(Date.now() + 3_600_000).toISOString();

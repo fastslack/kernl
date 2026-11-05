@@ -134,7 +134,12 @@ export class OutboxService {
       // project's — otherwise it lands unscoped and out of the project's queue.
       // An internal channel has no account to match: the office's only project owns it.
       const office = this.projects.list({ flowId: input.flow_id });
-      const owners = h.needsAccount === false ? office : office.filter((p) => this.projects.links(p.id).some(isThisAccount));
+      // An office serving several projects names the one in the payload (id or slug); only one it serves counts.
+      const named = (input.payload as { project_id?: unknown } | null)?.project_id;
+      const pick = typeof named === "string" && named ? office.find((p) => p.id === named || p.slug === named) : undefined;
+      // The channel reads it from the payload by id (Growth's web_change looks up the project's repos by id).
+      if (pick && named !== pick.id) (input.payload as Record<string, unknown>).project_id = pick.id;
+      const owners = pick ? [pick] : h.needsAccount === false ? office : office.filter((p) => this.projects.links(p.id).some(isThisAccount));
       if (owners.length === 1) projectId = owners[0].id;
     }
     if (projectId && h.needsAccount !== false) {
