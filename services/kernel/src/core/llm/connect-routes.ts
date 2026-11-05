@@ -22,6 +22,7 @@ import { maskSecret } from "./provider-routes.js";
 import type { ClaudeLogin } from "./claude-code-login.js";
 import { addAccount, listAccounts, moveAccount, removeAccount, renameAccount } from "./claude-accounts-store.js";
 import { isClaudeAccountDown, listClaudeLimits } from "../../sdk/claude-limits.js";
+import { claudeAccountUsage } from "./claude-usage.js";
 
 // Brand logos are cached by the browser for a day, so a redrawn logo would
 // stay hidden behind the old one: the URL carries a hash of the file instead.
@@ -211,6 +212,13 @@ export function registerConnectRoutes(server: KernelHttpServer, deps: ConnectDep
     if (!listAccounts().some((a) => a.id === id)) throw new HttpError(404, "unknown account");
   };
   server.route("GET", "/api/llm/claude-code/accounts", () => accountsView());
+  // How much of each connected subscription is used (5-hour window, week, per-model week). ?refresh=1 reads again now.
+  server.route("GET", "/api/llm/claude-code/usage", async ({ query }) => {
+    const force = query.get("refresh") === "1";
+    const accounts = listAccounts().filter((a) => a.connected);
+    const usage = await Promise.all(accounts.map((a) => claudeAccountUsage(a.id, force)));
+    return { accounts: accounts.map((a, i) => ({ id: a.id, usage: usage[i] })) };
+  });
   server.route<{ label?: unknown }>("POST", "/api/llm/claude-code/accounts", ({ body }) => {
     addAccount(checkLabel(body.label) ?? "");
     return accountsView();

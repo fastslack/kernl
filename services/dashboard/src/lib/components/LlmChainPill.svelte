@@ -90,6 +90,45 @@
     }
   }
 
+  // ── Claude accounts: how much of each subscription is used (5 h window, week, per-model week) ──
+  type UsageWin = { key: 'session' | 'weekly' | 'model'; model?: string; pct: number; severity: string; resetsAt: string | null; blocking: boolean };
+  type AccRow = { id: string; name: string; email: string; primary: boolean; plan: string | null; windows: UsageWin[]; at: string; error?: string };
+  let accounts: AccRow[] = [];
+  let accLoading = false;
+  let accReadAt = 0;
+  const ACC_EVERY = 60_000;
+  async function loadAccounts(force = false) {
+    if (accLoading || (!force && Date.now() - accReadAt < ACC_EVERY)) return;
+    accLoading = true;
+    try {
+      const [list, usage] = await Promise.all([
+        getJson<{ accounts: Array<{ id: string; label: string; connected: boolean; primary: boolean; identity?: { email?: string } }> }>('/api/llm/claude-code/accounts'),
+        getJson<{ accounts: Array<{ id: string; usage: { plan: string | null; windows: UsageWin[]; at: string; error?: string } }> }>(`/api/llm/claude-code/usage${force ? '?refresh=1' : ''}`),
+      ]);
+      const byId = new Map(usage.accounts.map((u) => [u.id, u.usage]));
+      accounts = list.accounts.filter((a) => a.connected).map((a) => {
+        const u = byId.get(a.id);
+        const email = a.identity?.email ?? '';
+        return { id: a.id, name: a.label || email.split('@')[0] || a.id, email, primary: a.primary, plan: u?.plan ?? null, windows: u?.windows ?? [], at: u?.at ?? '', error: u?.error };
+      });
+      accReadAt = Date.now();
+    } catch { /* an older kernel without the usage route: no accounts block */ }
+    finally { accLoading = false; }
+  }
+  /** The account calls go to now: the first one in order that nothing is stopping. */
+  $: inUse = accounts.find((a) => !a.windows.some((w) => w.blocking))?.id ?? null;
+  const barColor = (w: UsageWin) => (w.blocking || w.pct >= 90 ? '#F43F5E' : w.pct >= 70 ? '#FBBF24' : '#34D399');
+  /** "en 27 min", "a las 05:10", "jue 17:00". */
+  function when(iso: string | null): string {
+    if (!iso) return '';
+    const d = new Date(iso), ms = d.getTime() - Date.now();
+    if (ms <= 0) return '—';
+    if (ms < 3_600_000) return `${Math.max(1, Math.round(ms / 60_000))} min`;
+    const sameDay = d.toDateString() === new Date().toDateString();
+    return d.toLocaleString(undefined, sameDay ? { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' } : { weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  }
+  const blockedUntil = (a: AccRow) => a.windows.filter((w) => w.blocking && w.resetsAt).map((w) => w.resetsAt as string).sort().pop() ?? null;
+
   function toggleRow(link: ChainLink, i: number) {
     if (openIdx === i) { openIdx = null; detail = null; return; }
     openIdx = i;
@@ -107,6 +146,7 @@
     clearTimeout(pollTimer);
     try {
       await loadChain(quiet);
+      if (liveOpen && links.some(isClaudeCode)) void loadAccounts();
       const link = openIdx !== null ? links[openIdx] : undefined;
       if (liveOpen && link) await loadDetail(link, openIdx as number);
     } finally {
@@ -120,7 +160,7 @@
     if (liveOpen) { now = Date.now(); poll(false); loadScores(); }
     else { openIdx = null; detail = null; }
   }
-  function refresh() { poll(false); loadScores(); }
+  function refresh() { poll(false); loadScores(); void loadAccounts(true); }
 
   onMount(() => { poll(false); });
   onDestroy(() => { destroyed = true; clearTimeout(pollTimer); clearInterval(clock); });
@@ -245,6 +285,34 @@
                   <span class="lc-score none" title={$t('live.noScore')}>—</span>
                 {/if}
               </div>
+              {#if isClaudeCode(link) && accounts.length}
+                <div class="acc" aria-label={$t('live.acc.title')}>
+                  {#each accounts as a (a.id)}
+                    {@const until = blockedUntil(a)}
+                    {@const blocked = a.windows.some((w) => w.blocking)}
+                    <div class="acc-row" class:blocked class:on={a.id === inUse}>
+                      <div class="acc-head">
+                        <span class="acc-name" title={a.email}>{#if a.primary}<em title={$t('live.acc.primary')}>★</em>{/if}{a.name}</span>
+                        {#if a.plan}<span class="acc-plan">{a.plan}</span>{/if}
+                        <span class="acc-chip">{blocked ? $t('live.acc.blocked') : a.id === inUse ? $t('live.acc.inUse') : $t('live.acc.free')}</span>
+                        {#if blocked && until}<span class="acc-back">{$t('live.acc.resets', { t: when(until) })}</span>{/if}
+                      </div>
+                      {#each a.windows as w (w.key + (w.model ?? ''))}
+                        <div class="acc-bar" class:minor={w.key === 'model'} title={w.resetsAt ? `${new Date(w.resetsAt).toLocaleString()}` : ''}>
+                          <span class="k">{w.key === 'session' ? $t('live.acc.session') : w.key === 'weekly' ? $t('live.acc.weekly') : w.model}</span>
+                          <span class="track"><i class:stripe={w.blocking} style="width:{Math.max(w.pct, 2)}%;--b:{barColor(w)}"></i></span>
+                          <b style="color:{barColor(w)}">{w.pct}%</b>
+                          <small>{w.resetsAt ? $t('live.acc.renews', { t: when(w.resetsAt) }) : $t('live.acc.notRunning')}</small>
+                        </div>
+                      {/each}
+                      {#if a.error}<div class="acc-err" title={a.error}>⚠ {a.error}</div>{/if}
+                    </div>
+                  {/each}
+                  <a class="acc-manage" href="/settings?section=ai&card=providers&connect=claude-code" on:click={close}>{$t('live.acc.manage')} →</a>
+                </div>
+              {:else if isClaudeCode(link) && accLoading}
+                <div class="acc acc-wait">{$t('live.acc.loading')}</div>
+              {/if}
               {#if isClaudeCode(link) && link.status === 'auth'}
                 <a class="lc-reconnect" href="/settings?section=ai&card=providers&connect=claude-code" on:click={close}>{$t('agent.failure.reconnect_claude')} →</a>
               {/if}
@@ -341,6 +409,34 @@
 
 <style>
   .lc-alert { color: #fbbf24; font-size: 11px; margin-left: 5px; }
+
+  /* Claude accounts: one block per subscription, a bar per window. */
+  .acc { margin: 6px 0 2px 26px; display: flex; flex-direction: column; gap: 5px; }
+  .acc-wait { font-size: 10.5px; color: #94a3b8; }
+  .acc-row { padding: 6px 8px; border-radius: 8px; background: rgba(15, 23, 42, .55); border: 1px solid rgba(148, 163, 184, .14); }
+  .acc-row.on { border-color: rgba(52, 211, 153, .45); box-shadow: 0 0 12px -6px #34D399; }
+  .acc-row.blocked { border-color: rgba(244, 63, 94, .35); }
+  .acc-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; min-width: 0; }
+  .acc-name { font-size: 11.5px; font-weight: 700; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .acc-name em { font-style: normal; color: #FBBF24; margin-right: 3px; }
+  .acc-plan { font-size: 9.5px; text-transform: uppercase; letter-spacing: .5px; color: #94a3b8; border: 1px solid rgba(148, 163, 184, .3); border-radius: 4px; padding: 0 4px; }
+  .acc-chip { margin-left: auto; font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; padding: 1px 6px; border-radius: 999px; color: #94a3b8; background: rgba(148, 163, 184, .14); }
+  .acc-row.on .acc-chip { color: #052e1f; background: #34D399; }
+  .acc-row.blocked .acc-chip { color: #fff; background: #F43F5E; }
+  .acc-back { font-size: 10px; color: #fda4af; white-space: nowrap; }
+  .acc-bar { display: grid; grid-template-columns: 44px 1fr 34px 92px; align-items: center; gap: 6px; font-size: 10.5px; color: #cbd5e1; }
+  .acc-bar + .acc-bar { margin-top: 3px; }
+  .acc-bar .k { color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .acc-bar .track { height: 7px; border-radius: 999px; background: rgba(148, 163, 184, .16); overflow: hidden; }
+  .acc-bar .track i { display: block; height: 100%; border-radius: 999px; background: var(--b); box-shadow: 0 0 8px -1px var(--b); transition: width .4s ease; }
+  .acc-bar .track i.stripe { background: repeating-linear-gradient(135deg, var(--b) 0 6px, color-mix(in srgb, var(--b) 60%, #000) 6px 12px); }
+  .acc-bar.minor .track { height: 4px; }
+  .acc-bar.minor { opacity: .8; }
+  .acc-bar b { font-variant-numeric: tabular-nums; text-align: right; font-weight: 800; }
+  .acc-bar small { color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10px; }
+  .acc-err { margin-top: 3px; font-size: 10px; color: #fbbf24; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .acc-manage { align-self: flex-end; font-size: 10.5px; color: #67e8f9; text-decoration: none; }
+  .acc-manage:hover { text-decoration: underline; }
 
   .lc-dots { display: inline-flex; gap: 3px; margin-left: 6px; }
   .lc-dots i { width: 6px; height: 6px; border-radius: 50%; box-shadow: 0 0 6px currentColor; }
