@@ -21,6 +21,7 @@
 
 import { letterIds, learnSkillPrefetch, prefetchBlock } from "./run-prefetch.js";
 import { letterKind } from "./turn-budget.js";
+import { modelChoice } from "./model-trial.js";
 import { mkdirSync, existsSync, readdirSync, statSync, chmodSync, rmSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
@@ -73,6 +74,7 @@ import {
   claudeAccountDir,
   readClaudeIdentity,
   beginLlmCall,
+  focusSkillFile,
 } from "@kernl/extension-sdk";
 import { createNativeCodingTools, nativeFallbackBindSource } from "./native-coding-tools.js";
 import { failureNote } from "./failure-note.js";
@@ -586,11 +588,39 @@ export class ClaudeCodeExecutor {
       const runs = service.listRuns({ agent_id: agent.id, limit: 80 }).filter((r) => r.status !== "running" && letterKind(r.goal ?? "") === kind).slice(0, 20);
       const steps = runs.flatMap((r) => service.getSteps(r.id).filter((st) => st.type === "tool_call").map((st) => ({ run_id: r.id, tool_name: st.tool_name, tool_input: st.tool_input })));
       for (const sk of learnSkillPrefetch(steps, runs.length)) {
-        const text = sk.file ? resolver.readFile(sk.slug, sk.file) : resolver.resolve(sk.slug)?.body ?? null;
+        const raw = sk.file ? resolver.readFile(sk.slug, sk.file) : resolver.resolve(sk.slug)?.body ?? null;
+        // A file grown into a long lessons log comes focused on this run's letters, as kernel_skill_load does.
+        const text = raw && sk.file ? focusSkillFile(raw, `${goal}\n${letters.map((l) => `${l.subject}\n${l.body}`).join("\n")}`) : raw;
         if (text) skills.push({ ...sk, text });
       }
     }
     return prefetchBlock({ letters, directory, skills });
+  }
+
+  /** The model each run started with, for its turn sample (model-trial.ts learns from them). */
+  private runModels = new Map<string, string>();
+
+  /**
+   * The model this run starts on: the agent's, or — when it opted in with `__cheap_model__` — the cheaper one,
+   * as learned for this kind of letter (model-trial.ts).
+   */
+  private modelFor(agent: Agent, goal: string, runId: string): string {
+    const usual = agent.model || "claude-opus-4-6";
+    let model = usual;
+    try {
+      const raw = JSON.parse(agent.variables || "{}") as Record<string, unknown>;
+      const cheap = typeof raw.__cheap_model__ === "string" ? raw.__cheap_model__.trim() : "";
+      const kind = letterKind(goal);
+      if (cheap && cheap !== usual && kind && this.turnBudgets) {
+        // Runs recorded before the model was kept ran on the agent's own model.
+        const history = this.turnBudgets.historyFor(agent.id, kind).map((h) => ({ ...h, model: h.model || usual }));
+        const pick = modelChoice(history, usual, cheap);
+        model = pick.model;
+        if (pick.reason !== "usual") log.info(`claude-code: ${agent.name} ${kind} → ${pick.model} (${pick.reason})`);
+      }
+    } catch { /* the agent's own model */ }
+    this.runModels.set(runId, model);
+    return model;
   }
 
   /** The run's turn budget: learned for its kind of letter unless the agent opts out (`__adaptive_turns__: false`). */
@@ -848,7 +878,8 @@ export class ClaudeCodeExecutor {
       // subscriptions, so an API-key run stays on the primary as before. With
       // every route limited, the run still makes today's single attempt (on
       // the primary) so it fails with the usage-limit error the chain expects.
-      const requestedModel = agent.model || "claude-opus-4-6";
+      // The agent's model, or the cheaper one it may try for this kind of letter (model-trial.ts).
+      const requestedModel = this.modelFor(agent, goal, run.id);
       const primaryAccount = primaryClaudeAccountId();
       let route = (useOAuth ? pickClaudeRoute(requestedModel) : null)
         ?? { accountId: primaryAccount, model: routeAroundClaudeLimit(requestedModel) };
@@ -1130,7 +1161,7 @@ export class ClaudeCodeExecutor {
 
       const options: Options = {
         abortController,
-        model: agent.model || "claude-opus-4-6",
+        model: requestedModel,
         cwd,
         maxTurns: this.maxTurnsFor(agent, goal),
         systemPrompt: { type: "preset", preset: "claude_code", append: systemPrompt },
@@ -1925,7 +1956,9 @@ export class ClaudeCodeExecutor {
       // How many turns it really took, by kind of letter: what the next run's budget is learned from.
       try {
         const turns = Number((msg as { num_turns?: number }).num_turns ?? 0);
-        this.turnBudgets?.record({ runId: run.id, agentId: agent.id, goal: run.goal ?? "", turns, ok: msg.subtype === "success", maxed: msg.subtype === "error_max_turns" });
+        this.turnBudgets?.record({ runId: run.id, agentId: agent.id, goal: run.goal ?? "", turns, ok: msg.subtype === "success", maxed: msg.subtype === "error_max_turns",
+          model: this.runModels.get(run.id) ?? agent.model ?? "" });
+        this.runModels.delete(run.id);
       } catch { /* a budget not learned only costs the default */ }
       const tokens = msg.usage
         ? (msg.usage.input_tokens ?? 0) + (msg.usage.output_tokens ?? 0)

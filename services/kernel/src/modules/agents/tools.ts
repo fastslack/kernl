@@ -10,6 +10,7 @@ import type { MeetingExecutorLike } from "./advanced-types.js";
 import type { EventBus } from "../../core/event-bus.js";
 import { resolveGoal, extractRoleFromReply, stripRoleWrapper } from "./executor.js";
 import { getRequestContext } from "../../core/request-context.js";
+import { focusSkillFile, runFocusQuery } from "../../sdk/skill-file-focus.js";
 import { askingRun, formatQuestionContext } from "./question-context.js";
 import { defineTool, defineToolNoInput, limitArg } from "../../core/tool-builder.js";
 import { answerAndDeliver } from "./question-delivery.js";
@@ -1758,6 +1759,10 @@ export function agentsTools(
           .string()
           .optional()
           .describe("A reference file the skill ships (a path from its 'Files in this skill' list). Omit to load the playbook itself."),
+        query: z
+          .string()
+          .optional()
+          .describe('Only for a long list file (a lessons log): what to look for in it. Omitted: what this run is about. "*": the whole file.'),
       }),
       handler: async (input) => {
         const { slug, file } = input;
@@ -1774,7 +1779,11 @@ export function agentsTools(
                 (files.length ? ` Files: ${files.join(", ")}` : " This skill ships no reference files."),
             );
           }
-          return textResult(`# Skill ${slug} · ${file}\n\n${text}`);
+          // A file grown into a long log (lessons every round appends to) comes focused on this run's task.
+          const runId = getRequestContext().callerRunId;
+          const goal = runId ? service.getRun(runId)?.goal ?? "" : "";
+          const query = input.query ?? (goal ? runFocusQuery(goal, (id) => service.getInboxMessage(id)) : "");
+          return textResult(`# Skill ${slug} · ${file}\n\n${query ? focusSkillFile(text, query) : text}`);
         }
         // Skills that lean on profiles or models name them in the body; the
         // list is what makes those names openable instead of dead references.

@@ -28,6 +28,7 @@ export * from "./types.js";
 export * from "./helpers.js";
 export * from "./http-error.js";
 export * from "./args.js";
+export { focusSkillFile, runFocusQuery } from "./skill-file-focus.js";
 export * from "./module.js";
 export * from "./channels.js";
 export * from "./query-helpers.js";

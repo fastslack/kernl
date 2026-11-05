@@ -54,3 +54,19 @@ describe("TurnBudgets", () => {
     expect(tb.budgetFor("a", "free text", 30)).toBe(30);
   });
 });
+
+describe("TurnBudgets.historyFor (model-trial)", () => {
+  it("keeps the model of each run, newest first; rows from before keep an empty model", async () => {
+    const { Database } = await import("bun:sqlite");
+    const db = new Database(":memory:");
+    db.exec(`CREATE TABLE agent_turn_samples (run_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, kind TEXT NOT NULL, turns INTEGER NOT NULL,
+      ok INTEGER NOT NULL DEFAULT 0, maxed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)`);
+    db.prepare("INSERT INTO agent_turn_samples VALUES ('old','A','CERRAR',5,1,0,?)").run(new Date(Date.now() - 60_000).toISOString());
+    const tb = new TurnBudgets(db as never);
+    tb.record({ runId: "new", agentId: "A", goal: 'letter: "CERRAR web#1" (id x)', turns: 6, ok: false, maxed: false, model: "claude-haiku-5-5" });
+    expect(tb.historyFor("A", "CERRAR")).toEqual([
+      { model: "claude-haiku-5-5", ok: false, maxed: false },
+      { model: "", ok: true, maxed: false },
+    ]);
+  });
+});

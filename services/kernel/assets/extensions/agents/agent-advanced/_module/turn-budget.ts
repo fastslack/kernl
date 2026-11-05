@@ -48,14 +48,24 @@ export class TurnBudgets {
       run_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, kind TEXT NOT NULL, turns INTEGER NOT NULL,
       ok INTEGER NOT NULL DEFAULT 0, maxed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)`);
     db.exec("CREATE INDEX IF NOT EXISTS idx_agent_turn_samples_kind ON agent_turn_samples (agent_id, kind, created_at)");
+    // The model each run started on (model-trial.ts), added 05/11.
+    try { db.exec("ALTER TABLE agent_turn_samples ADD COLUMN model TEXT NOT NULL DEFAULT ''"); } catch { /* already there */ }
   }
 
   /** A finished run: how many turns it took and how it ended. Runs whose goal is not a letter are not kept. */
-  record(r: { runId: string; agentId: string; goal: string; turns: number; ok: boolean; maxed: boolean }): void {
+  record(r: { runId: string; agentId: string; goal: string; turns: number; ok: boolean; maxed: boolean; model?: string }): void {
     const kind = letterKind(r.goal);
     if (!kind || !(r.turns > 0)) return;
-    this.db.prepare(`INSERT OR REPLACE INTO agent_turn_samples (run_id, agent_id, kind, turns, ok, maxed, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run(r.runId, r.agentId, kind, Math.round(r.turns), r.ok ? 1 : 0, r.maxed ? 1 : 0, new Date().toISOString());
+    this.db.prepare(`INSERT OR REPLACE INTO agent_turn_samples (run_id, agent_id, kind, turns, ok, maxed, created_at, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(r.runId, r.agentId, kind, Math.round(r.turns), r.ok ? 1 : 0, r.maxed ? 1 : 0, new Date().toISOString(), r.model ?? "");
+  }
+
+  /** This agent's runs of one kind of letter, newest first, with the model each started on (model-trial.ts). */
+  historyFor(agentId: string, kind: string): Array<{ model: string; ok: boolean; maxed: boolean }> {
+    const since = new Date(Date.now() - HISTORY_DAYS * 86_400_000).toISOString();
+    return (this.db.prepare(`SELECT model, ok, maxed FROM agent_turn_samples WHERE agent_id = ? AND kind = ? AND created_at >= ? ORDER BY created_at DESC LIMIT ?`)
+      .all(agentId, kind, since, HISTORY_ROWS) as Array<{ model: string; ok: number; maxed: number }>)
+      .map((x) => ({ model: x.model, ok: !!x.ok, maxed: !!x.maxed }));
   }
 
   /** The turn budget for `agentId` running `goal`, from `base` (its max_iterations). */
