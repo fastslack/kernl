@@ -110,13 +110,14 @@ export class InboxWaker {
         `and respond via kernel_agents_post_to_colleague (or take whatever action the message asks for). ` +
         `When done, acknowledge the letter with kernel_agents_inbox_ack.`;
 
-      this.wake(agent, goal, {
+      this.service.bumpInboxWakeAttempts([p.message_id]);
+      if (!this.wake(agent, goal, {
         via: "inbox_waker",
         inbox_message_id: p.message_id,
         conversation_id: p.conversation_id ?? "",
         from_agent_id: p.from_agent_id,
         project_id: p.project_id ?? null,
-      });
+      })) this.service.restoreFailedInboxDelivery(agentId, [p.message_id]);
     } catch (err) {
       log.warn(`InboxWaker.onInboxPost failed: ${String(err)}`);
     } finally {
@@ -219,6 +220,23 @@ export class InboxWaker {
     this.sweepTimer.unref?.();
   }
 
+  /**
+   * Every letter was already handed to a run that has since finished without acking it — typically it launched
+   * a job and waits for the job's letter. Waking it again for the same letters only re-reads them (the same
+   * letter used to wake QA three times in four minutes), so it waits for news: a letter no run got yet. After
+   * STALE_REWAKE_MS of silence it is reminded all the same, in case it simply forgot to ack.
+   */
+  private waitingForNews(agentId: string, letters: AgentOfficeInboxMessage[]): boolean {
+    if (letters.some((m) => Number((m as { wake_attempts?: number }).wake_attempts ?? 0) === 0)) return false;
+    const last = this.service.listRuns({ agent_id: agentId, limit: 1 })[0];
+    const ended = last?.completed_at ?? last?.created_at;
+    if (!ended) return false;
+    return Date.now() - Date.parse(ended) < InboxWaker.STALE_REWAKE_MS;
+  }
+
+  /** How long letters already handed to a finished run wait for news before a reminder. */
+  static readonly STALE_REWAKE_MS = Number(process.env.AGENTS_INBOX_STALE_REWAKE_MS) || 30 * 60_000;
+
   /** The model a claude_code agent runs on is over its usage limit. */
   private usageLimited(agent: Agent): boolean {
     if (agent.executor_type !== "claude_code") return false;
@@ -259,6 +277,7 @@ export class InboxWaker {
       if (all.length === 0) continue;
       const projectId = all[0].project_id ?? null;
       const unread = all.filter((m) => (m.project_id ?? null) === projectId || (m.project_id ?? null) === null);
+      if (this.waitingForNews(agentId, unread)) continue;
       const goal =
         `You have ${unread.length} unacknowledged letter(s) in your office inbox: ` +
         unread.map((m) => `"${(m.subject || "(no subject)").slice(0, 120)}" (id ${m.id})`).join("; ") + ". " +

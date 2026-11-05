@@ -242,3 +242,46 @@ describe("inbox waker during a Claude usage limit (22/10: the office woke on the
     expect(executed).toEqual([b.id]);
   });
 });
+
+describe("inbox sweeper — a letter already being handled waits for news", () => {
+  const TEN_MIN_AGO = () => new Date(Date.now() - 600_000).toISOString();
+  function setup() {
+    const flow = service.createFlow({ name: "Ops" } as any);
+    const a = mkAgent("Host", flow.id);
+    const b = mkAgent("QA", flow.id);
+    const { message } = service.postToColleague({ from_agent_id: a.id, to_agent_id: b.id, subject: "REVISAR-MR web#1", body: "x" });
+    // A run already got it (one wake), launched a job and finished without acking: it waits for the job's letter.
+    db.run("UPDATE agent_office_inbox SET created_at = ?, wake_attempts = 1", [AN_HOUR_AGO()]);
+    const run = service.createRun({ agent_id: b.id, trigger_type: "event", goal: "REVISAR-MR web#1" } as any);
+    service.updateRun(run.id, { status: "completed", completed_at: TEN_MIN_AGO() } as any);
+    db.run("UPDATE agent_runs SET created_at = ?", [TEN_MIN_AGO()]);
+    return { a, b, letter: message!.id };
+  }
+
+  it("does not wake the agent again for a letter a finished run already got", async () => {
+    setup();
+    const waker = new InboxWaker(service, executor, events, { quietMs: 60_000 });
+    expect(await waker.sweep()).toBe(0);
+    const row = db.query("SELECT wake_attempts FROM agent_office_inbox").get() as { wake_attempts: number };
+    expect(row.wake_attempts).toBe(1);   // no attempt spent while it waits, so it is not archived meanwhile
+  });
+
+  it("wakes it when news arrives, with both letters", async () => {
+    const { a, b } = setup();
+    service.postToColleague({ from_agent_id: a.id, to_agent_id: b.id, subject: "JOB-OK qa_controls web#1", body: "green" });
+    db.run("UPDATE agent_office_inbox SET created_at = ? WHERE wake_attempts = 0", [new Date(Date.now() - 120_000).toISOString()]);
+    let goal = "";
+    const exec = { execute: async ({ goal: g }: { goal: string }) => { goal = g; return { status: "completed", result: "", error: "", steps_count: 0, tokens_used: 0 }; } } as any;
+    const waker = new InboxWaker(service, exec, events, { quietMs: 60_000 });
+    expect(await waker.sweep()).toBe(1);
+    expect(goal).toContain("REVISAR-MR web#1");
+    expect(goal).toContain("JOB-OK qa_controls web#1");
+  });
+
+  it("still reminds it after a long silence (it may simply have forgotten to ack)", async () => {
+    setup();
+    db.run("UPDATE agent_runs SET created_at = ?, completed_at = ?", [AN_HOUR_AGO(), AN_HOUR_AGO()]);
+    const waker = new InboxWaker(service, executor, events, { quietMs: 60_000 });
+    expect(await waker.sweep()).toBe(1);
+  });
+});

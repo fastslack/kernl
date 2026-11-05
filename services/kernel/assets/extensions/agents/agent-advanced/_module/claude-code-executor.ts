@@ -19,6 +19,8 @@
  * - Declarative chains — fired from the router (AgentExecutor) when needed.
  */
 
+import { letterIds, learnSkillPrefetch, prefetchBlock } from "./run-prefetch.js";
+import { letterKind } from "./turn-budget.js";
 import { mkdirSync, existsSync, readdirSync, statSync, chmodSync, rmSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
@@ -536,6 +538,72 @@ export class ClaudeCodeExecutor {
     this.evalService = evalService;
   }
 
+  /** What the office already knows about the tickets a run names (./ticket-dossier.ts). */
+  private dossiers: import("./ticket-dossier.js").TicketDossiers | null = null;
+  setDossiers(d: import("./ticket-dossier.js").TicketDossiers): void {
+    this.dossiers = d;
+  }
+
+  /** Bash output ceilings learned per agent (./output-budget.ts). */
+  private outputBudgets: import("./output-budget.js").OutputBudgets | null = null;
+  setOutputBudgets(o: import("./output-budget.js").OutputBudgets): void {
+    this.outputBudgets = o;
+  }
+
+  /** The agent switched off one of the learned savings with a `false` variable. */
+  private optedOut(agent: Agent, key: string): boolean {
+    try { const v = (JSON.parse(agent.variables || "{}") as Record<string, unknown>)[key]; return v === false || v === "false"; }
+    catch { return false; }
+  }
+
+  /** Turn budgets learned per kind of letter (./turn-budget.ts). */
+  private turnBudgets: import("./turn-budget.js").TurnBudgets | null = null;
+  setTurnBudgets(t: import("./turn-budget.js").TurnBudgets): void {
+    this.turnBudgets = t;
+  }
+
+  /** The prompt block of ./run-prefetch.ts, or "" (opt out: variable `__prefetch__: false`). */
+  private prefetch(agent: Agent, goal: string, service: AgentService): string {
+    let raw: Record<string, unknown> = {};
+    try { raw = JSON.parse(agent.variables || "{}") as Record<string, unknown>; } catch { /* defaults */ }
+    if (raw.__prefetch__ === false || raw.__prefetch__ === "false") return "";
+    const ids = new Set(letterIds(goal));
+    const letters = ids.size
+      ? service.getUnreadInbox(agent.id, 50).filter((m) => ids.has(m.id)).map((m) => ({
+          id: m.id, subject: m.subject, body: m.body,
+          from: m.from_agent_id === "__top_agent__" ? "Chief" : service.getAgent(m.from_agent_id)?.name ?? m.from_agent_id,
+        }))
+      : [];
+    // A run that answers letters writes to colleagues: hand it the office's exact names.
+    const directory = letters.length && agent.flow_id
+      ? service.listAgents({ active: true }).filter((a) => a.flow_id === agent.flow_id && a.id !== agent.id).map((a) => ({ name: a.name, id: a.id }))
+      : [];
+    // The skill files this agent loads in most of its recent runs of the same kind of letter.
+    const skills: Array<{ slug: string; file?: string; text: string }> = [];
+    const kind = letterKind(goal);
+    const resolver = this.nativeExecutor?.getSkillResolver?.() ?? null;
+    if (kind && resolver) {
+      const runs = service.listRuns({ agent_id: agent.id, limit: 80 }).filter((r) => r.status !== "running" && letterKind(r.goal ?? "") === kind).slice(0, 20);
+      const steps = runs.flatMap((r) => service.getSteps(r.id).filter((st) => st.type === "tool_call").map((st) => ({ run_id: r.id, tool_name: st.tool_name, tool_input: st.tool_input })));
+      for (const sk of learnSkillPrefetch(steps, runs.length)) {
+        const text = sk.file ? resolver.readFile(sk.slug, sk.file) : resolver.resolve(sk.slug)?.body ?? null;
+        if (text) skills.push({ ...sk, text });
+      }
+    }
+    return prefetchBlock({ letters, directory, skills });
+  }
+
+  /** The run's turn budget: learned for its kind of letter unless the agent opts out (`__adaptive_turns__: false`). */
+  private maxTurnsFor(agent: Agent, goal: string): number {
+    const base = agent.max_iterations ?? 50;
+    if (!this.turnBudgets) return base;
+    try {
+      const raw = JSON.parse(agent.variables || "{}") as Record<string, unknown>;
+      if (raw.__adaptive_turns__ === false || raw.__adaptive_turns__ === "false") return base;
+      return this.turnBudgets.budgetFor(agent.id, goal, base);
+    } catch { return base; }
+  }
+
   setNativeExecutor(executor: import("../../../../../src/modules/agents/executor.js").AgentExecutor): void {
     this.nativeExecutor = executor;
   }
@@ -770,6 +838,10 @@ export class ClaudeCodeExecutor {
         CLAUDE_AGENT_SDK_CLIENT_APP: "kernl/0.1",
         ...(vars.__env__ ?? {}),
       };
+      // Bash output ceiling learned from this agent's own outputs (./output-budget.ts), unless it sets one itself.
+      if (this.outputBudgets && !vars.__env__?.BASH_MAX_OUTPUT_LENGTH && !this.optedOut(agent, "__output_cap__")) {
+        try { const cap = this.outputBudgets.capFor(agent.id); if (cap) childEnv.BASH_MAX_OUTPUT_LENGTH = String(cap); } catch { /* the CLI default */ }
+      }
       childEnvResolved = childEnv;
 
       // Which subscription account and model this run starts on. Accounts are
@@ -1060,7 +1132,7 @@ export class ClaudeCodeExecutor {
         abortController,
         model: agent.model || "claude-opus-4-6",
         cwd,
-        maxTurns: agent.max_iterations ?? 50,
+        maxTurns: this.maxTurnsFor(agent, goal),
         systemPrompt: { type: "preset", preset: "claude_code", append: systemPrompt },
         plugins: sdkPlugins && sdkPlugins.length > 0 ? sdkPlugins : undefined,
         // `dontAsk` → tools sin regla allow = DENEGADOS.
@@ -1850,6 +1922,11 @@ export class ClaudeCodeExecutor {
     }
 
     if (msg.type === "result") {
+      // How many turns it really took, by kind of letter: what the next run's budget is learned from.
+      try {
+        const turns = Number((msg as { num_turns?: number }).num_turns ?? 0);
+        this.turnBudgets?.record({ runId: run.id, agentId: agent.id, goal: run.goal ?? "", turns, ok: msg.subtype === "success", maxed: msg.subtype === "error_max_turns" });
+      } catch { /* a budget not learned only costs the default */ }
       const tokens = msg.usage
         ? (msg.usage.input_tokens ?? 0) + (msg.usage.output_tokens ?? 0)
         : 0;
@@ -2104,6 +2181,22 @@ export class ClaudeCodeExecutor {
         const block = promptLearningsBlock(lang, learnings);
         if (block) parts.push(block);
       } catch { /* learnings table missing in tests / fresh DB — non-fatal */ }
+    }
+
+    // What the run always fetches first (its letters, the office directory, its usual skill files), already fetched.
+    if (service) {
+      try {
+        const block = this.prefetch(agent, goal, service);
+        if (block) parts.push(block);
+      } catch { /* non-fatal: the run fetches them itself */ }
+    }
+
+    // Back on a ticket the office already worked on: start from what it knows instead of re-exploring it.
+    if (this.dossiers) {
+      try {
+        const block = this.dossiers.promptBlock(agent.flow_id || agent.id, projectId, goal);
+        if (block) parts.push(block);
+      } catch { /* non-fatal: a run without its dossier only costs more */ }
     }
 
     // Recency-biased language reinforcement — claude_code preset has its own
