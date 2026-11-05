@@ -173,6 +173,21 @@ function selfImproveDisabled(agent: Agent): boolean {
   }
 }
 
+/**
+ * Whether the run may use only the agent's own model chain, never the global one appended as fallback.
+ * The run can force it (the coding path); an agent asks for it with `__model_chain_only__: "true"` — an office
+ * that must not spend another provider's quota when its own model fails (the global chain starts with Claude Code).
+ */
+export function chainOnly(agent: Agent, forced: boolean | undefined): boolean {
+  if (forced) return true;
+  try {
+    const v = (JSON.parse(String(agent.variables || "{}")) as Record<string, unknown>).__model_chain_only__;
+    return v === true || v === "true";
+  } catch {
+    return false;
+  }
+}
+
 /** Errors the claude_code executor raises to hand an unstarted run to another provider. */
 const CLAUDE_HANDOFF_ERRORS = new Set(["ClaudeUsageLimitError", "ClaudeAccessError"]);
 const CLAUDE_CODE_PROVIDERS = new Set(["claude-code", "claude_code"]);
@@ -353,7 +368,7 @@ export class AgentExecutor {
       }
 
       // 3. Model fallback chain.
-      const chainResolution = this.resolveModelChain(agent, service, llmTools.length, params.agentChainOnly);
+      const chainResolution = this.resolveModelChain(agent, service, llmTools.length, chainOnly(agent, params.agentChainOnly));
       if (!chainResolution.ok) {
         return failedBeforeStart(chainResolution.error);
       }
@@ -413,7 +428,7 @@ export class AgentExecutor {
         attachments: runAttachments(run),
         resume: params.resume,
         requireCodingToolUse: params.requireCodingToolUse,
-        agentChainOnly: params.agentChainOnly,
+        agentChainOnly: chainOnly(agent, params.agentChainOnly),
       });
     } finally {
       this.activeRuns.delete(run.id);
