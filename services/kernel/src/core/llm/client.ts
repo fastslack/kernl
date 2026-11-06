@@ -304,8 +304,11 @@ export class LlmClient {
     const usable = baseLinks.filter(
       l => l.apiKey || l.provider === "custom" || (l.provider === "anthropic" && sdkReady),
     );
+    // A link whose model the provider stopped serving is skipped, unless nothing else is left.
+    const linkModel = (l: LlmConfig) => opts.model ?? l.defaultModel ?? this.getDefaultModelFor(l.provider);
+    const alive = usable.filter((l) => !providerHealth.isModelDead(slugOf(l), linkModel(l)));
     const primarySlug = slugOf(this.config);
-    const links = orderLinksByHealth(usable, slugOf, primarySlug);
+    const links = orderLinksByHealth(alive.length > 0 ? alive : usable, slugOf, primarySlug);
 
     return runWithFallbackChain(
       links,
@@ -378,6 +381,7 @@ export class LlmClient {
         if (release) { release(); release = null; } // free the slot ASAP
         const latency = Date.now() - t0;
         providerHealth.recordSuccess(slug, latency);
+        providerHealth.recordModelOutcome(slug, model, true);
         // Audit log: every successful call lands in llm_call_log + kernel log.
         callLog.record({
           slug,
@@ -411,6 +415,11 @@ export class LlmClient {
           continue;
         }
         providerHealth.recordFailure(slug, kind, retryAfterMs);
+        if (kind === "model") {
+          // Under the model actually called: a link on the provider's default has no other name for it.
+          providerHealth.recordModelOutcome(slug, model, false);
+          providerHealth.reportModelFault(slug, model, kind, err instanceof Error ? err.message : String(err));
+        }
         callLog.record({
           slug,
           model,

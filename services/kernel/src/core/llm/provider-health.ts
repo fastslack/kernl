@@ -471,6 +471,38 @@ export function clearBlock(slug?: string): number {
 /** Reset all in-memory state. Test-only. */
 export function _resetForTests(): void {
   state.clear();
+  modelFaults.clear();
+}
+
+// ── A model the provider stopped serving ──────────────────────────────
+
+/**
+ * A "model" failure is never a strike against the provider (see recordFailure),
+ * so nothing ever took a dead model out of the chain: NVIDIA kept listing a model
+ * it no longer served and every call tried it first (06/11: 230 failed calls in a
+ * day). Three model failures in a row, with no success between them, take that
+ * (provider, model) out of the chain for DEAD_MODEL_RETRY_MS; then it gets one more try.
+ */
+export const DEAD_MODEL_STRIKES = 3;
+export const DEAD_MODEL_RETRY_MS = 6 * 60 * 60 * 1000;
+
+interface ModelFaultGlobals { __mtwLlmModelFaults?: Map<string, { strikes: number; at: number }> }
+const modelFaults: Map<string, { strikes: number; at: number }> =
+  ((globalThis as ModelFaultGlobals).__mtwLlmModelFaults ??= new Map());
+const faultKey = (slug: string, model: string) => `${slug}\u0000${model}`;
+
+/** `ok: false` only for failures classified "model". */
+export function recordModelOutcome(slug: string, model: string, ok: boolean, now: number = Date.now()): void {
+  if (!slug || !model) return;
+  const key = faultKey(slug, model);
+  if (ok) { modelFaults.delete(key); return; }
+  const prev = modelFaults.get(key);
+  modelFaults.set(key, { strikes: (prev?.strikes ?? 0) + 1, at: now });
+}
+
+export function isModelDead(slug: string, model: string, now: number = Date.now()): boolean {
+  const f = modelFaults.get(faultKey(slug, model));
+  return !!f && f.strikes >= DEAD_MODEL_STRIKES && now - f.at < DEAD_MODEL_RETRY_MS;
 }
 
 // ── Reporting a fault that belongs to the model, not the provider ───────

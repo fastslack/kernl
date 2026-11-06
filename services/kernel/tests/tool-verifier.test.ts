@@ -81,3 +81,19 @@ describe("verifyProvider", () => {
     expect(adapter.asked).toEqual(["fresh"]);
   });
 });
+
+describe("models the provider no longer serves", () => {
+  it("are not asked again once they are in the blocklist", async () => {
+    const { ModelBlocklist } = await import("../src/core/llm/model-blocklist.js");
+    const db = new Database(":memory:");
+    new ModelBlocklist(db as never).block("nvidia", "01-ai/yi-large", "not-found", "404");
+    const adapter = fakeAdapter({ "meta/llama-3.3-70b-instruct": "tool", "01-ai/yi-large": "fail" });
+    await verifyProvider("nvidia", {
+      db: db as never,
+      adapters: new Map([["nvidia", adapter]]),
+      listModels: async () => ["meta/llama-3.3-70b-instruct", "01-ai/yi-large"],
+      outputPrice: () => undefined,
+    });
+    expect(adapter.asked).toEqual(["meta/llama-3.3-70b-instruct"]);
+  });
+});

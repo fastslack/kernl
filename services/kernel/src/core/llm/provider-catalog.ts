@@ -85,7 +85,8 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
       en: ["Create your free account at build.nvidia.com", "Open any model and click “Get API Key”", "Copy the key (it starts with nvapi-) and paste it here"],
     },
     models: {
-      recommended: "nvidia/nemotron-3-super-120b-a12b",
+      // nemotron-3-super stopped being served (404 for every account since 30/10) though the catalogue lists it.
+      recommended: "nvidia/nemotron-3-ultra-550b-a55b",
       fast: "nvidia/nemotron-3.5-lightning-30b-a3b",
       candidates: ["deepseek-ai/deepseek-v4-flash-0731", "moonshotai/kimi-k2.6"],
     },
