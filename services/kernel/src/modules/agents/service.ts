@@ -1271,6 +1271,18 @@ export class AgentService {
     ).run(refundAttempt ? 1 : 0, agentId, ...messageIds);
   }
 
+  /** Give back the wake attempt of letters a run took but could not finish through no fault of
+   *  its own (the Claude usage limit cut it). Only letters still unread: one the run acknowledged
+   *  before the cut stays done. */
+  refundInboxWakeAttempt(agentId: string, messageIds: string[]): void {
+    if (!messageIds.length) return;
+    const ph = messageIds.map(() => "?").join(",");
+    this.db.prepare(
+      `UPDATE agent_office_inbox SET wake_attempts = MAX(0, wake_attempts - 1)
+       WHERE to_agent_id = ? AND id IN (${ph}) AND status = 'unread'`,
+    ).run(agentId, ...messageIds);
+  }
+
   /** Archive (unread → archived, read_at stays NULL) letters that exhausted their wakes.
    *  Skips letters whose recipient agent has a run still 'running' or 'pending' — that
    *  run is the one processing the exhausting wake, so its letters must survive until

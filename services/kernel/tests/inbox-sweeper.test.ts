@@ -210,6 +210,67 @@ describe("failed wake delivery", () => {
     expect(service.getUnreadInbox(receiver.id).map(m => m.id)).toEqual([message!.id]);
     expect((db.query("SELECT wake_attempts FROM agent_office_inbox").get() as any).wake_attempts).toBe(2);
   });
+
+  it("a run cut by the Claude usage limit mid-work does not spend the letter's attempt", async () => {
+    const flow = service.createFlow({ name: "Ops" } as any);
+    const sender = mkAgent("Sender", flow.id);
+    const receiver = mkAgent("Receiver", flow.id);
+    const { message } = service.postToColleague({ from_agent_id: sender.id, to_agent_id: receiver.id, subject: "TRABAJAR", body: "Implement the task" });
+    db.run("UPDATE agent_office_inbox SET created_at = ?, wake_attempts = 2", [AN_HOUR_AGO()]);
+    const cut = { execute: async () => ({
+      status: "failed", result: "", steps_count: 72, tokens_used: 0,
+      error: "claude_code: 429 usage limit reached on claude-sonnet-5-5 (five_hour, resets 2026-11-06T04:40:00.000Z) — quota exhausted",
+    }) } as any;
+    const waker = new InboxWaker(service, cut, events, { quietMs: 60_000 });
+    expect(await waker.sweep()).toBe(1);
+    await Promise.resolve();
+    expect((db.query("SELECT wake_attempts FROM agent_office_inbox").get() as any).wake_attempts).toBe(2);
+    expect(service.archiveExhaustedInbox(3)).toHaveLength(0);
+    expect(service.getUnreadInbox(receiver.id).map(m => m.id)).toEqual([message!.id]);
+  });
+
+  it("a cut that surfaces as a thrown limit error does not spend the attempt either", async () => {
+    const flow = service.createFlow({ name: "Ops" } as any);
+    const sender = mkAgent("Sender", flow.id);
+    const receiver = mkAgent("Receiver", flow.id);
+    service.postToColleague({ from_agent_id: sender.id, to_agent_id: receiver.id, subject: "TRABAJAR", body: "x" });
+    db.run("UPDATE agent_office_inbox SET created_at = ?", [AN_HOUR_AGO()]);
+    const thrown = { execute: async () => { throw new Error("claude_code: 429 usage limit reached on claude-sonnet-5-5 (five_hour) — quota exhausted"); } } as any;
+    const waker = new InboxWaker(service, thrown, events, { quietMs: 60_000 });
+    expect(await waker.sweep()).toBe(1);
+    await new Promise((r) => setTimeout(r, 0));
+    expect((db.query("SELECT wake_attempts FROM agent_office_inbox").get() as any).wake_attempts).toBe(0);
+  });
+
+  it("a letter the cut run already acknowledged stays acknowledged", async () => {
+    const flow = service.createFlow({ name: "Ops" } as any);
+    const sender = mkAgent("Sender", flow.id);
+    const receiver = mkAgent("Receiver", flow.id);
+    const { message } = service.postToColleague({ from_agent_id: sender.id, to_agent_id: receiver.id, subject: "TRABAJAR", body: "x" });
+    db.run("UPDATE agent_office_inbox SET created_at = ?", [AN_HOUR_AGO()]);
+    const cut = { execute: async () => {
+      service.ackInboxFor(receiver.id, [message!.id]);
+      return { status: "failed", result: "", steps_count: 30, tokens_used: 0,
+        error: "claude_code: 429 usage limit reached on claude-sonnet-5-5 (seven_day) — quota exhausted" };
+    } } as any;
+    const waker = new InboxWaker(service, cut, events, { quietMs: 60_000 });
+    expect(await waker.sweep()).toBe(1);
+    await Promise.resolve();
+    expect(service.getUnreadInbox(receiver.id)).toHaveLength(0);
+  });
+
+  it("any other failure after work still spends the attempt", async () => {
+    const flow = service.createFlow({ name: "Ops" } as any);
+    const sender = mkAgent("Sender", flow.id);
+    const receiver = mkAgent("Receiver", flow.id);
+    service.postToColleague({ from_agent_id: sender.id, to_agent_id: receiver.id, subject: "TRABAJAR", body: "x" });
+    db.run("UPDATE agent_office_inbox SET created_at = ?", [AN_HOUR_AGO()]);
+    const broken = { execute: async () => ({ status: "failed", result: "", steps_count: 30, tokens_used: 0, error: "tool crashed" }) } as any;
+    const waker = new InboxWaker(service, broken, events, { quietMs: 60_000 });
+    expect(await waker.sweep()).toBe(1);
+    await Promise.resolve();
+    expect((db.query("SELECT wake_attempts FROM agent_office_inbox").get() as any).wake_attempts).toBe(1);
+  });
 });
 
 describe("inbox waker during a Claude usage limit (22/10: the office woke on the fallback model all through the quota)", () => {

@@ -17,6 +17,7 @@
 
 import { isClaudeAccountConnected, listClaudeAccounts, primaryClaudeAccountId } from "./claude-accounts.js";
 import { log } from "./log.js";
+import { CLAUDE_LIMIT_WAITING } from "./claude-access.js";
 
 export type ClaudeLimitKind = "rate_limit" | "billing";
 
@@ -34,6 +35,16 @@ export interface ClaudeLimitHit {
 const DEFAULT_FALLBACK_MODEL = "claude-fable-5-1";
 /** How long a limit with no reset time keeps a model out. */
 const UNKNOWN_RESET_MS = 60 * 60 * 1000;
+
+/**
+ * A run stopped by the subscription's usage limit: cut mid-work
+ * (ClaudeUsageLimitError) or kept waiting for the reset (CLAUDE_LIMIT_WAITING).
+ * Nothing about the run's work is wrong, so it must not count against it.
+ */
+export function isClaudeUsageLimitStop(message: string | null | undefined): boolean {
+  if (!message) return false;
+  return message.startsWith(CLAUDE_LIMIT_WAITING) || /^claude_code: 429 usage limit reached\b/.test(message);
+}
 
 export class ClaudeUsageLimitError extends Error {
   /** Work was already streamed or done before the limit hit — a retry would repeat it. */

@@ -21,10 +21,17 @@
  * break the caller's postToColleague.
  */
 
-import { log, isoNow, getClaudeModelLimit, type EventBus } from "@kernl/extension-sdk";
+import { log, isoNow, getClaudeModelLimit, isClaudeUsageLimitStop, type EventBus } from "@kernl/extension-sdk";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
 import type { AgentExecutor } from "../../../../../src/modules/agents/executor.js";
 import type { Agent, AgentOfficeInboxMessage } from "../../../../../src/modules/agents/types.js";
+
+/** The letters a wake handed to its run. */
+function letterIds(payload: Record<string, unknown>): string[] {
+  return Array.isArray(payload.inbox_message_ids)
+    ? payload.inbox_message_ids.filter((id): id is string => typeof id === "string")
+    : typeof payload.inbox_message_id === "string" ? [payload.inbox_message_id] : [];
+}
 
 interface WakerConfig {
   quietMs: number;
@@ -165,11 +172,14 @@ export class InboxWaker {
     // its own lifecycle (timeouts, errors, completion events).
     this.executor.execute({ agent, goal, run, service: this.service, events: this.events })
       .then((result) => {
+        const ids = letterIds(payload);
         if (result.status === "failed" && result.steps_count === 0 && result.tokens_used === 0) {
-          const ids = Array.isArray(payload.inbox_message_ids)
-            ? payload.inbox_message_ids.filter((id): id is string => typeof id === "string")
-            : typeof payload.inbox_message_id === "string" ? [payload.inbox_message_id] : [];
           this.service.restoreFailedInboxDelivery(agentId, ids, payload.via === "inbox_sweeper");
+        } else if (result.status === "failed" && isClaudeUsageLimitStop(result.error)) {
+          // Cut by the usage limit mid-work: the letter waits for the reset and is handed again,
+          // without the cut counting as one of its MAX_WAKE_ATTEMPTS (06/11: a ticket was finished
+          // on its third and last wake after the limit cut it; a third cut would have archived it).
+          this.service.refundInboxWakeAttempt(agentId, ids);
         }
         this.service.updateRun(run.id, {
           status: result.status,
@@ -185,6 +195,9 @@ export class InboxWaker {
         });
       })
       .catch((err) => {
+        if (isClaudeUsageLimitStop(err instanceof Error ? err.message : String(err))) {
+          this.service.refundInboxWakeAttempt(agentId, letterIds(payload));
+        }
         this.service.updateRun(run.id, {
           status: "failed",
           error: err instanceof Error ? err.message : String(err),
