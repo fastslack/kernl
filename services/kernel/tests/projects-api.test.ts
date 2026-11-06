@@ -116,7 +116,8 @@ describe("projects REST", () => {
     expect((await call(`/api/outbox/${b.id}/reject`, { method: "POST", body: JSON.stringify({ note: "no" }) })).status).toBe(200);
     const ap = (await (await call(`/api/outbox/${a.id}/approve`, { method: "POST", body: "{}" })).json()) as { item: { status: string } };
     expect(ap.item.status).toBe("sent");
-    expect(sent).toEqual([{ text: "uno editado" }]);
+    // The channel gets the item's project inside the payload (withProject).
+    expect(sent).toEqual([{ text: "uno editado", project_id: pid }]);
     const again = await call(`/api/outbox/${a.id}/approve`, { method: "POST", body: "{}" });
     expect(again.status).toBe(409);
   });
