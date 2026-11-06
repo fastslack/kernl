@@ -1,5 +1,6 @@
 import { log } from "../../../core/logger.js";
 import * as providerHealth from "../../../core/llm/provider-health.js";
+import { getCatalogEntry } from "../../../core/llm/provider-catalog.js";
 import type { ChatLlmProvider } from "../../../core/llm/chat-adapters.js";
 
 /**
@@ -152,10 +153,10 @@ export function buildModelChain(input: ModelChainInput): ModelChainResolution {
   // every agent run even when provider-health knows it's been 403ing
   // for the last hour. Stable within each bucket so the user's chain
   // order still wins among healthy candidates.
-  effectiveChain.sort((a, b) => {
-    const ab = providerHealth.isBlocked(a.provider.name) ? 1 : 0;
-    const bb = providerHealth.isBlocked(b.provider.name) ? 1 : 0;
-    return ab - bb;
-  });
+  // A model its provider stopped serving goes after them too (provider-health's isModelDead).
+  const sidelined = (e: ModelChainEntry) =>
+    providerHealth.isBlocked(e.provider.name)
+    || providerHealth.isModelDead(getCatalogEntry(e.provider.name)?.slug ?? e.provider.name, e.model || e.provider.getDefaultModel?.() || "");
+  effectiveChain.sort((a, b) => (sidelined(a) ? 1 : 0) - (sidelined(b) ? 1 : 0));
   return { ok: true, chain: effectiveChain };
 }
