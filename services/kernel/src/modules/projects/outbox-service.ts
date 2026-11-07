@@ -202,16 +202,60 @@ export class OutboxService {
     return out;
   }
 
+  /**
+   * A draft the operator turns down, or a failed send they drop. Only a draft's note teaches the agent: a failed
+   * item was approved, so what went wrong was the channel (a token, a scope), not what the agent wrote.
+   */
   reject(id: string, note: string): OutboxItem {
+    const was = this.mustGet(id).status;
     const now = isoNow();
     const res = this.db.prepare(
-      "UPDATE outbox_items SET status = 'rejected', review_note = ?, decided_at = ?, updated_at = ? WHERE id = ? AND status = 'draft'",
+      "UPDATE outbox_items SET status = 'rejected', review_note = ?, decided_at = ?, updated_at = ? WHERE id = ? AND status IN ('draft', 'failed')",
     ).run(note.trim(), now, now, id);
-    if (Number(res.changes) === 0) throw new Error("Only a draft can be rejected");
+    if (Number(res.changes) === 0) throw new Error("Only a draft or a failed item can be rejected");
     const it = this.mustGet(id);
-    if (note.trim()) this.onReject(it, note.trim());
+    if (was === "draft" && note.trim()) this.onReject(it, note.trim());
     this.changed(it);
     return it;
+  }
+
+  /**
+   * Pass a draft or a failed item to an office to sort out (07/11: a web_change GitLab refused with 403 could only be
+   * retried). The letter goes first; only once it is delivered does the item leave the queue, as rejected with a note
+   * that says where it went. Nobody learns from it: it is a hand-off, not a verdict on the draft.
+   */
+  handoff(
+    id: string,
+    office: { flow_id: string; name: string },
+    note: string,
+    deliver: (letter: { flow_id: string; agent_id: string; project_id: string | null; subject: string; body: string }) => { ok: boolean; error?: string },
+  ): OutboxItem {
+    const it = this.mustGet(id);
+    if (it.status !== "draft" && it.status !== "failed") throw new Error(`Only a draft or a failed item can be handed to an office (item is ${it.status})`);
+    let pv: OutboxPreview;
+    try { pv = this.preview(id); } catch { pv = { title: it.channel, body: JSON.stringify(it.payload, null, 2) } as OutboxPreview; }
+    const body = [
+      "El operador te pasa este pedido de Aprobaciones para que lo resuelvas.",
+      ...(note.trim() ? ["", `Nota del operador: ${note.trim()}`] : []),
+      "",
+      `Pedido ${it.id} · canal ${it.channel} · sale desde ${it.account_ref} · estado ${it.status === "failed" ? "falló al enviarse" : "borrador sin aprobar"}`,
+      ...(it.status === "failed" && it.error ? [`Error: ${it.error}`] : []),
+      "",
+      `## ${pv.title}`,
+      "",
+      pv.body,
+      "",
+      "Si para resolverlo hace falta mandar algo afuera, proponé un borrador nuevo (kernel_outbox_propose): este ya salió de la cola.",
+    ].join("\n");
+    const r = deliver({ flow_id: office.flow_id, agent_id: it.agent_id, project_id: it.project_id, subject: `Aprobaciones: ${pv.title}`.slice(0, 300), body });
+    if (!r.ok) throw new Error(r.error || `The letter to ${office.name} did not go out`);
+    const now = isoNow();
+    const reviewNote = note.trim() ? `Pasado a ${office.name}: ${note.trim()}` : `Pasado a ${office.name}`;
+    this.db.prepare("UPDATE outbox_items SET status = 'rejected', review_note = ?, decided_at = ?, updated_at = ? WHERE id = ? AND status IN ('draft', 'failed')")
+      .run(reviewNote, now, now, id);
+    const out = this.mustGet(id);
+    this.changed(out);
+    return out;
   }
 
   /** An approval waiting for its time goes back to draft (the operator's pause). Sending or sent: too late. */

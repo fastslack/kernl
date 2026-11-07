@@ -11,6 +11,7 @@
   import { onMount, onDestroy, tick } from 'svelte';
   import { apiFetchRaw, readApiError } from '$lib/api.js';
   import ViewHeader from '$shared/components/ViewHeader.svelte';
+  import HandoffForm from '$lib/outbox/HandoffForm.svelte';
   import Skeleton from '$shared/components/Skeleton.svelte';
   import { confirm as confirmDialog } from '$shared/feedback';
   import { isTemplated, isRehearsal, facets, matchesFilter, batchSummary, editedPayload, previewDoc, type ReviewFilter } from '$lib/outbox/review.js';
@@ -24,7 +25,7 @@
       /** A decision on the draft before approving it (where a request goes): written to payload[field]. */
       choice?: { field: string; label: string; value: string; options: Array<{ value: string; label: string; hint?: string }> } };
   }
-  interface Project { id: string; slug: string; name: string }
+  interface Project { id: string; slug: string; name: string; offices?: Array<{ flow_id: string; name: string; active?: number | boolean }> }
 
   const TABS: Array<{ id: Status | 'all'; label: string; empty: string }> = [
     { id: 'draft', label: 'Por aprobar', empty: 'No hay nada esperando tu aprobación.' },
@@ -47,6 +48,8 @@
     CHANNELS[c] ?? { label: c.replace(/_/g, ' '), kind: c.includes('mail') ? 'mail' : c.includes('whatsapp') ? 'chat' : 'post' };
 
   const REASONS = ['El tono no es el de la marca', 'Tiene un dato incorrecto', 'Promete algo que no ofrecemos', 'No es el momento', 'Muy largo'];
+  // A failed send is dropped for what happened around it, not for what it says: the agent learns nothing from these.
+  const DISCARD_REASONS = ['Ya está resuelto', 'Ya no hace falta', 'Lo hago yo', 'Está duplicado'];
 
   let items: Item[] = [];
   let projects: Project[] = [];
@@ -72,6 +75,11 @@
   try { testTo = localStorage.getItem('outbox.testTo') ?? ''; } catch { /* storage off */ }
   let rejecting = false;
   let rejectNote = '';
+  // Hand the item to an office: its lead gets a letter with it, the error and the note.
+  let handing = false;
+  let handFlow = '';
+  let handNote = '';
+  let flows: Array<{ id: string; name: string }> = [];
   let scheduling = false;
   let scheduleAt = '';
   // "A" sends publicly, so the shortcut arms on the first press and only fires
@@ -116,7 +124,7 @@
     }
   }
 
-  const onFocus = () => { if (!dirty && !rejecting && !scheduling) void load(); };
+  const onFocus = () => { if (!dirty && !rejecting && !scheduling && !handing) void load(); };
   let wantItem = '';
   onMount(() => {
     const u = new URL(window.location.href);
@@ -154,8 +162,8 @@
     const it = items.find((i) => i.id === id);
     text = it ? String(it.payload[textKey(it)] ?? '') : '';
     dirty = false;
-    rejecting = scheduling = false;
-    rejectNote = '';
+    rejecting = scheduling = handing = false;
+    rejectNote = handNote = '';
     disarmSend();
     notice = '';
     if (it && !testTo && typeof it.payload.test_of === 'string' && Array.isArray(it.payload.to)) testTo = String(it.payload.to[0] ?? '');
@@ -214,7 +222,40 @@
     await call(`/api/outbox/${it.id}/reject`, { method: 'POST', body: JSON.stringify({ note: rejectNote.trim() }) });
     next();
     await load();
-    notice = 'Rechazado. El agente lo tiene en cuenta para la próxima.';
+    notice = it.status === 'failed' ? 'Descartado.' : 'Rechazado. El agente lo tiene en cuenta para la próxima.';
+  });
+
+  /** The project's own offices first, then every other office. */
+  $: officeChoices = (() => {
+    const own = (projects.find((p) => p.id === selected?.project_id)?.offices ?? [])
+      .filter((o) => o.active !== 0 && o.active !== false)
+      .map((o) => ({ id: o.flow_id, name: o.name }));
+    const rest = flows.filter((f) => !own.some((o) => o.id === f.id));
+    return { own, rest };
+  })();
+
+  async function openHandoff() {
+    rejecting = scheduling = false;
+    handing = true;
+    handNote = '';
+    if (!flows.length) {
+      const fl = await call('/api/agents/flows').catch(() => null);
+      flows = ((Array.isArray(fl) ? fl : fl?.flows) ?? [])
+        .filter((f: { active?: number }) => f.active !== 0)
+        .map((f: { id: string; name: string }) => ({ id: f.id, name: f.name }));
+    }
+    if (!handFlow || ![...officeChoices.own, ...officeChoices.rest].some((o) => o.id === handFlow)) handFlow = officeChoices.own[0]?.id ?? officeChoices.rest[0]?.id ?? '';
+  }
+
+  const handoff = () => act(async () => {
+    const it = selected;
+    if (!it || !handFlow) return;
+    const name = [...officeChoices.own, ...officeChoices.rest].find((o) => o.id === handFlow)?.name ?? 'la oficina';
+    await call(`/api/outbox/${it.id}/handoff`, { method: 'POST', body: JSON.stringify({ flow_id: handFlow, note: handNote.trim() }) });
+    handing = false;
+    next();
+    await load();
+    notice = `Pasado a ${name}: su líder lo tiene en el inbox.`;
   });
 
   const retry = () => act(async () => {
@@ -519,6 +560,8 @@
                 <button class="btn danger" disabled={busy || !rejectNote.trim()}>Rechazar borrador</button>
               </div>
             </form>
+          {:else if handing}
+            <HandoffForm own={officeChoices.own} rest={officeChoices.rest} bind:flow={handFlow} bind:note={handNote} {busy} onSubmit={handoff} onCancel={() => (handing = false)} />
           {:else if scheduling}
             <form class="choice" on:submit|preventDefault={() => approve(scheduleAt)}>
               <label for="sched-at">¿Cuándo querés que salga?</label>
@@ -535,7 +578,8 @@
             </form>
           {:else}
             <div class="actions main">
-              <button class="btn danger" on:click={() => { rejecting = true; scheduling = false; }}>Rechazar <kbd>R</kbd></button>
+              <button class="btn danger" on:click={() => { rejecting = true; scheduling = handing = false; }}>Rechazar <kbd>R</kbd></button>
+              <button class="btn" on:click={openHandoff}>Pasar a una oficina</button>
               {#if ch.kind === 'mail'}
                 <input class="testto" type="email" bind:value={testTo} placeholder="tu email de prueba" aria-label="Email de prueba" />
                 <button class="btn" disabled={busy || !testTo.includes('@')} on:click={sendTest}>Mandarme una prueba</button>
@@ -551,7 +595,29 @@
             <p class="muted small keys">Atajos: <kbd>J</kbd>/<kbd>K</kbd> para moverte entre borradores.</p>
           {/if}
         {:else if selected.status === 'failed'}
-          <div class="actions main"><span class="spacer"></span><button class="btn primary" on:click={retry} disabled={busy}>{busy ? 'Reintentando…' : 'Reintentar envío'}</button></div>
+          {#if rejecting}
+            <form class="choice" on:submit|preventDefault={reject}>
+              <label for="discard-note">¿Por qué lo descartás? Falló el envío, no el texto: el agente no lo toma como un error suyo.</label>
+              <div class="reasons">
+                {#each DISCARD_REASONS as r}<button type="button" class="pill" class:on={rejectNote === r} on:click={() => (rejectNote = r)}>{r}</button>{/each}
+              </div>
+              <!-- svelte-ignore a11y-autofocus -->
+              <input id="discard-note" bind:value={rejectNote} placeholder="O escribí el motivo" autofocus />
+              <div class="actions">
+                <button type="button" class="btn" on:click={() => (rejecting = false)}>Volver</button>
+                <button class="btn danger" disabled={busy || !rejectNote.trim()}>Descartar</button>
+              </div>
+            </form>
+          {:else if handing}
+            <HandoffForm own={officeChoices.own} rest={officeChoices.rest} bind:flow={handFlow} bind:note={handNote} {busy} onSubmit={handoff} onCancel={() => (handing = false)} />
+          {:else}
+            <div class="actions main">
+              <button class="btn danger" on:click={() => { rejecting = true; handing = false; }}>Descartar</button>
+              <button class="btn" on:click={openHandoff}>Pasar a una oficina</button>
+              <span class="spacer"></span>
+              <button class="btn primary" on:click={retry} disabled={busy}>{busy ? 'Reintentando…' : 'Reintentar envío'}</button>
+            </div>
+          {/if}
         {/if}
       {:else if !loading}
         <div class="none">

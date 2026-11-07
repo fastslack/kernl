@@ -18,6 +18,8 @@ export interface ProjectsRouteDeps {
   accounts: ProjectAccountsService;
   flowName: (flowId: string) => string;
   listFlows: () => Array<{ id: string; name: string; active?: number }>;
+  /** A letter to an office's lead (AgentService.postToOffice); absent = hand-offs are refused. */
+  postToOffice?: (flowId: string, letter: { agent_id: string; subject: string; body: string; project_id: string | null }) => { ok: boolean; error?: string };
   /** The deploy environment of the project that owns a repo (deployEnvForRepo): throws when it can't be given. */
   deployEnv?: (repo: string, origin: string | undefined) => { project: string; env: Record<string, string> };
 }
@@ -45,6 +47,7 @@ const OfficeBody = z.object({ active: z.boolean().optional(), settings: z.record
 const EditBody = z.object({ payload: z.record(z.unknown()) });
 const ApproveBody = z.object({ scheduled_for: z.string().nullable().optional() });
 const RejectBody = z.object({ note: z.string().trim().min(1, "a reason is required to reject a draft") });
+const HandoffBody = z.object({ flow_id: z.string().min(1), note: z.string().max(2000).optional() });
 
 function parse<T>(schema: z.ZodType<T>, body: unknown): T {
   const r = schema.safeParse(body ?? {});
@@ -286,6 +289,18 @@ export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsR
   server.route("POST", "/api/outbox/:id/reject", ({ params, body }) => {
     const b = parse(RejectBody, body);
     try { return { item: outbox.reject(params.id, b.note) }; } catch (err) { return asHttp(err); }
+  });
+
+  // Pass a draft or a failed send to an office: its lead gets a letter with the item, the error and the note.
+  server.route("POST", "/api/outbox/:id/handoff", ({ params, body }) => {
+    const b = parse(HandoffBody, body);
+    const flow = deps.listFlows().find((f) => f.id === b.flow_id);
+    if (!flow) throw new HttpError(404, `Office not found: ${b.flow_id}`);
+    const post = deps.postToOffice;
+    if (!post) throw new HttpError(503, "Offices are not available");
+    try {
+      return { item: outbox.handoff(params.id, { flow_id: flow.id, name: deps.flowName(flow.id) }, b.note ?? "", (l) => post(l.flow_id, l)) };
+    } catch (err) { return asHttp(err); }
   });
 
   server.route("POST", "/api/outbox/:id/retry", async ({ params }) => {

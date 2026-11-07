@@ -103,6 +103,47 @@ describe("OutboxService", () => {
     expect((await outbox.retry(d.id)).status).toBe("sent");
   });
 
+  // 07/11: a failed web_change (GitLab 403) could only be retried; the operator could neither drop it nor pass it on.
+  it("a failed item can be discarded, and the agent learns nothing from it (the channel failed, not the draft)", async () => {
+    failNext = true;
+    const d = outbox.propose(base());
+    await outbox.approve(d.id);
+    const out = outbox.reject(d.id, "ya está resuelto");
+    expect(out.status).toBe("rejected");
+    expect(out.review_note).toBe("ya está resuelto");
+    expect(rejections).toEqual([]);
+    expect(sent).toEqual([]);
+  });
+
+  it("a failed or draft item can be handed to an office: the letter goes first, then it leaves the queue", async () => {
+    failNext = true;
+    const d = outbox.propose(base());
+    await outbox.approve(d.id);
+    const letters: Array<{ flow_id: string; subject: string; body: string; project_id: string | null; agent_id: string }> = [];
+    const out = outbox.handoff(d.id, { flow_id: "OF", name: "Desarrollo" }, "fijate el token", (l) => { letters.push(l); return { ok: true }; });
+    expect(out.status).toBe("rejected");
+    expect(out.review_note).toBe("Pasado a Desarrollo: fijate el token");
+    expect(letters).toHaveLength(1);
+    expect(letters[0]).toMatchObject({ flow_id: "OF", project_id: pid, agent_id: "A" });
+    expect(letters[0].subject).toContain("post");
+    for (const s of ["fijate el token", "rate limited", "hola", d.id]) expect(letters[0].body).toContain(s);
+    expect(rejections).toEqual([]);
+
+    const draft = outbox.propose(base());
+    expect(outbox.handoff(draft.id, { flow_id: "OF", name: "Desarrollo" }, "", () => ({ ok: true })).review_note).toBe("Pasado a Desarrollo");
+  });
+
+  it("a hand-off whose letter does not go out leaves the item where it was; a sent item cannot be handed off", async () => {
+    failNext = true;
+    const d = outbox.propose(base());
+    await outbox.approve(d.id);
+    expect(() => outbox.handoff(d.id, { flow_id: "OF", name: "X" }, "", () => ({ ok: false, error: "la oficina no tiene líder" }))).toThrow(/no tiene líder/);
+    expect(outbox.get(d.id)!.status).toBe("failed");
+    const s = outbox.propose(base());
+    await outbox.approve(s.id);
+    expect(() => outbox.handoff(s.id, { flow_id: "OF", name: "X" }, "", () => ({ ok: true }))).toThrow(/draft or a failed/);
+  });
+
   it("reject with a note feeds the agent and freezes the draft", () => {
     const d = outbox.propose(base());
     expect(outbox.reject(d.id, "no prometer obras sociales").status).toBe("rejected");

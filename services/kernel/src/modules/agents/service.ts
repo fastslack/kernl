@@ -1072,6 +1072,30 @@ export class AgentService {
     return (this.db.prepare("SELECT * FROM agent_office_inbox WHERE id = ?").get(id) as AgentOfficeInboxMessage | undefined) ?? null;
   }
 
+  /**
+   * A letter to an office, not to a named agent: it goes to the office's lead (Aprobaciones hands a draft over this
+   * way). Signed by `agent_id` when that agent still exists and is not the lead; otherwise by the chief or another
+   * agent of the office, since the inbox needs a sender.
+   */
+  postToOffice(flowId: string, input: { agent_id: string; subject: string; body: string; project_id: string | null }):
+    { ok: boolean; to_agent_id?: string; error?: string } {
+    const flow = this.getFlow(flowId);
+    if (!flow || flow.active !== 1) return { ok: false, error: `Office not found: ${flowId}` };
+    const lead = this.db.prepare(
+      `SELECT id FROM agents WHERE flow_id = ? AND role = 'manager' AND active = 1 AND COALESCE(rank_id, '') NOT IN (${TOP_RANK_IDS_SQL})
+       ORDER BY created_at LIMIT 1`,
+    ).get(flowId) as { id: string } | undefined;
+    if (!lead) return { ok: false, error: `La oficina ${flow.name} no tiene líder que reciba el pedido` };
+    const author = this.getAgent(input.agent_id);
+    const top = this.getTopAgent();
+    const peer = this.db.prepare("SELECT id FROM agents WHERE flow_id = ? AND active = 1 AND id <> ? ORDER BY created_at LIMIT 1")
+      .get(flowId, lead.id) as { id: string } | undefined;
+    const from = [author?.id, top?.id, peer?.id].find((id) => id && id !== lead.id);
+    if (!from) return { ok: false, error: `No hay quién firme la carta a ${flow.name}` };
+    const r = this.postToColleague({ from_agent_id: from, to_agent_id: lead.id, subject: input.subject, body: input.body, project_id: input.project_id });
+    return r.message ? { ok: true, to_agent_id: lead.id } : { ok: false, error: r.error ?? "La carta no salió" };
+  }
+
   postToColleague(input: {
     from_agent_id: string;
     to_agent_id: string;

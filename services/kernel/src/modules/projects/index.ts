@@ -11,7 +11,7 @@ import { placesTool } from "./places.js";
 import { outboxTools, projectTools, type RunLookup, type FlowOfAgent } from "./tools.js";
 import { ProjectAccountsService, deployEnvForRepo } from "./accounts.js";
 import { configureGoogleClient } from "./google-link.js";
-import { registerProjectsRoutes } from "./api-routes.js";
+import { registerProjectsRoutes, type ProjectsRouteDeps } from "./api-routes.js";
 
 /** data/projects/{slug}/ — each project's home (BRIEF.md, MEMORY.md, assets/). */
 export const PROJECTS_ROOT = resolve(process.cwd(), "data", "projects");
@@ -46,6 +46,7 @@ export interface ProjectsModule extends ExtensibleModule {
     flowOf: FlowOfAgent;
     flowName?: (flowId: string) => string;
     listFlows?: () => Array<{ id: string; name: string }>;
+    postToOffice?: ProjectsRouteDeps["postToOffice"];
   }): void;
 }
 
@@ -68,6 +69,7 @@ export function createProjectsModule(): ProjectsModule {
     flowOf: FlowOfAgent;
     flowName?: (flowId: string) => string;
     listFlows?: () => Array<{ id: string; name: string }>;
+    postToOffice?: ProjectsRouteDeps["postToOffice"];
   } = { getRun: () => undefined, flowOf: () => "" };
 
   return {
@@ -132,6 +134,7 @@ export function createProjectsModule(): ProjectsModule {
           deployEnv: (repo, origin) => deployEnvForRepo(ctx.sqlite, ac, repo, origin),
           flowName: (id) => lookups.flowName?.(id) ?? id,
           listFlows: () => lookups.listFlows?.() ?? [],
+          postToOffice: (flowId, letter) => lookups.postToOffice?.(flowId, letter) ?? { ok: false, error: "Offices are not available" },
         }),
         nav: [
           { id: "projects", label: "Proyectos", icon: "📁", group: "work", order: 40 },

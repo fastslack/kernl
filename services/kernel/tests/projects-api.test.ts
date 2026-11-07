@@ -40,7 +40,7 @@ outbox.registerChannel("fake", {
 const server = new KernelHttpServer({
   config: { dashboard: { port: 0, bind: "127.0.0.1" }, auth: { token: TOKEN }, cors: { allowedOrigins: [] } } as unknown as KernelConfig,
 });
-registerProjectsRoutes(server, { projects, outbox, connector, accounts: new ProjectAccountsService(db, generateKey()), flowName: (id) => agents.getFlow(id)?.name ?? id, listFlows: () => agents.listFlows() });
+registerProjectsRoutes(server, { projects, outbox, connector, accounts: new ProjectAccountsService(db, generateKey()), flowName: (id) => agents.getFlow(id)?.name ?? id, listFlows: () => agents.listFlows(), postToOffice: (f, l) => agents.postToOffice(f, l) });
 
 let base = "";
 const auth = { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" };
@@ -120,5 +120,21 @@ describe("projects REST", () => {
     expect(sent).toEqual([{ text: "uno editado", project_id: pid }]);
     const again = await call(`/api/outbox/${a.id}/approve`, { method: "POST", body: "{}" });
     expect(again.status).toBe(409);
+  });
+
+  it("hands a draft to an office: its lead gets the letter and the draft leaves the queue", async () => {
+    const pid = projects.get("acme")!.id;
+    const flow = agents.createFlow({ name: "Desarrollo" }).id;
+    const lead = agents.createAgent({ name: "Líder", flow_id: flow, role: "manager" }).id;
+    const author = agents.createAgent({ name: "Autor" }).id;
+    const d = outbox.propose({ project_id: pid, flow_id: "F", agent_id: author, run_id: "R", channel: "fake", account_ref: "fake:1", payload: { text: "arreglar el token" } });
+    expect((await call(`/api/outbox/${d.id}/handoff`, { method: "POST", body: JSON.stringify({ flow_id: "nope" }) })).status).toBe(404);
+    const r = await call(`/api/outbox/${d.id}/handoff`, { method: "POST", body: JSON.stringify({ flow_id: flow, note: "mirá el scope" }) });
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as { item: { status: string; review_note: string } }).item).toMatchObject({ status: "rejected", review_note: "Pasado a Desarrollo: mirá el scope" });
+    const inbox = db.prepare("SELECT body FROM agent_office_inbox WHERE to_agent_id = ?").all(lead) as Array<{ body: string }>;
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0].body).toContain("arreglar el token");
+    expect((await call(`/api/outbox/${d.id}/handoff`, { method: "POST", body: JSON.stringify({ flow_id: flow }) })).status).toBe(409);
   });
 });

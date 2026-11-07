@@ -333,6 +333,7 @@ export async function initCoreModules(args: {
       flowOf: (agentId) => agentsModule.getService()?.getAgent(agentId)?.flow_id ?? "",
       flowName: (flowId) => agentsModule.getService()?.getFlow(flowId)?.name ?? flowId,
       listFlows: () => (agentsModule.getService()?.listFlows() ?? []).filter((f) => f.active === 1),
+      postToOffice: (flowId, letter) => agentsModule.getService()?.postToOffice(flowId, letter) ?? { ok: false, error: "Offices are not available" },
     });
     // A rejected draft's note becomes a learning for that project.
     ctx.events.on("outbox:rejected", (p) => {
