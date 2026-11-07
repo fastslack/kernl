@@ -21,16 +21,28 @@ const KINDS = new Set<AgendaKind>(["appointment", "event", "deadline", "expiry"]
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 
-export const AGENDA_PROMPT_RULES = [
-  `Also extract "agenda_items": every dated thing the RECIPIENT should have on their calendar.`,
-  `kind: "appointment" (a meeting/call/visit the recipient attends), "event" (something happening they may attend),`,
-  `"deadline" (something the recipient must deliver or do by a date), "expiry" (a payment, renewal, document or offer that expires/is due).`,
-  `start_at: absolute local time "YYYY-MM-DDTHH:MM", or "YYYY-MM-DD" with all_day=true when no time is given.`,
-  `Resolve relative dates ("tomorrow", "el jueves", "next Friday") against NOW given above. Never return past dates.`,
-  `confidence: "high" when day and time are explicit; "low" when you had to guess (e.g. "la semana que viene").`,
-  `evidence: the exact phrase of the mail the date came from. Omit items with no resolvable date. Newsletters and promotions have none.`,
-  `Each agenda item: { "kind", "title" (short, in the mail's language), "start_at", "end_at"?, "all_day", "location"?, "confidence", "evidence" }.`,
-].join("\n");
+/** The language agenda titles are written in, whatever the mail's (app setting comms.agenda.language). */
+export const AGENDA_LANGUAGE_KEY = "comms.agenda.language";
+export const DEFAULT_AGENDA_LANGUAGE = "español (Spanish)";
+
+export function agendaPromptRules(language: string = DEFAULT_AGENDA_LANGUAGE): string {
+  return [
+    `Also extract "agenda_items": every dated thing the RECIPIENT should have on their calendar.`,
+    `kind: "appointment" (a meeting/call/visit/trip the recipient attends), "event" (something happening they may attend),`,
+    `"deadline" (something the recipient must deliver or do by a date), "expiry" (a payment, renewal, document or offer that expires/is due).`,
+    `A ticket, booking or reservation confirmation (flight, ferry, bus, train, hotel, show, medical appointment) is an "appointment" on the date it is for — read the attached documents below the body when the date is there.`,
+    `start_at: absolute local time "YYYY-MM-DDTHH:MM", or "YYYY-MM-DD" with all_day=true when no time is given.`,
+    `Resolve relative dates ("tomorrow", "el jueves", "next Friday") against NOW given above. Never return past dates.`,
+    `confidence: "high" when day and time are explicit; "low" when you had to guess (e.g. "la semana que viene").`,
+    `evidence: the exact phrase of the mail the date came from. Omit items with no resolvable date. Newsletters and promotions have none.`,
+    `Never extract verification codes, one-time passwords, login links or anything that expires within minutes or hours: they are not calendar items.`,
+    `When a mail mentions the same thing several times, return it once.`,
+    `Each agenda item: { "kind", "title" (short, written in ${language} — translate it when the mail is in another language), "start_at", "end_at"?, "all_day", "location"?, "confidence", "evidence" }.`,
+  ].join("\n");
+}
+
+/** The rules in the default language (kept for callers that do not read the setting). */
+export const AGENDA_PROMPT_RULES = agendaPromptRules();
 
 function clip(s: unknown, n: number): string {
   return typeof s === "string" ? s.trim().slice(0, n) : "";

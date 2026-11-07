@@ -32,6 +32,25 @@ export function extractHeader(
  * Recursively extract text/plain and text/html body from Gmail message parts.
  * Body data from Gmail is base64url encoded.
  */
+/** Biggest attachment worth reading for the agenda: tickets, bookings and invoices are far smaller. */
+export const MAX_PDF_ATTACHMENT_BYTES = 2_000_000;
+
+/** The PDF attachments of a message (by type or by .pdf name), at any depth, under the size cap. */
+export function pdfAttachmentRefs(part: GmailMessagePart): Array<{ attachmentId: string; filename: string; size: number }> {
+  const out: Array<{ attachmentId: string; filename: string; size: number }> = [];
+  const walk = (p: GmailMessagePart) => {
+    const id = p.body?.attachmentId;
+    const name = p.filename ?? "";
+    const size = p.body?.size ?? 0;
+    if (id && (p.mimeType === "application/pdf" || /\.pdf$/i.test(name)) && size > 0 && size <= MAX_PDF_ATTACHMENT_BYTES) {
+      out.push({ attachmentId: id, filename: name || "adjunto.pdf", size });
+    }
+    for (const sub of p.parts ?? []) walk(sub);
+  };
+  walk(part);
+  return out;
+}
+
 export function extractGmailBody(part: GmailMessagePart): { text: string; html: string } {
   let text = "";
   let html = "";

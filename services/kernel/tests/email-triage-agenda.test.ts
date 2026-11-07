@@ -170,6 +170,30 @@ describe("EmailTriageService.getUnclassified (google_emails)", () => {
     const old = db.prepare("SELECT attention_needed FROM google_emails WHERE gmail_id = 'old'").get() as { attention_needed: number };
     expect(old.attention_needed).toBe(-1);
   });
+
+  // 07/11: a ferry booking came from noreply@ (never triaged) and its date was only in the attached e-ticket.
+  function insertFrom(id: string, from: string, subject: string) {
+    db.prepare(`INSERT INTO google_emails (gmail_id, thread_id, from_email, from_name, to_emails, subject, snippet, body_text, date, labels)
+                VALUES (?, ?, ?, '', '', ?, 'snip', 'body', ?, '["INBOX"]')`).run(id, `t-${id}`, from, subject, daysAgo(1));
+  }
+
+  it("a booking or ticket from a noreply sender is triaged; other noreply mail is not", () => {
+    insertFrom("booking", "noreply@ferry.example", "Booking Confirmation");
+    insertFrom("reserva", "no-reply@hotel.example", "Confirmación de tu reserva");
+    insertFrom("promo", "noreply@shop.example", "50% OFF this weekend");
+    const svc = new EmailTriageService(db as any, {} as any);
+    expect(svc.getUnclassified(10).map((r) => r.gmail_id).sort()).toEqual(["booking", "reserva"]);
+  });
+
+  it("the attachments' text goes to the model with the body", () => {
+    db.run("ALTER TABLE google_emails ADD COLUMN attachments_text TEXT");
+    insertFrom("ticket", "ventas@ferry.example", "Confirmación de compra");
+    db.prepare("UPDATE google_emails SET attachments_text = ? WHERE gmail_id = 'ticket'").run("[Adjunto: eticket.pdf]\nSalida lunes 09/11/2026 08:30");
+    const svc = new EmailTriageService(db as any, {} as any);
+    const [row] = svc.getUnclassified(10);
+    expect(row.body_excerpt).toContain("body");
+    expect(row.body_excerpt).toContain("Salida lunes 09/11/2026 08:30");
+  });
 });
 
 describe("EmailTriageService.classifyBatch agenda_items", () => {

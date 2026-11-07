@@ -285,6 +285,15 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
 
         if (!triageService) return `Email triage service not available.${drainedNote}`;
 
+        // Calendar titles from mail in the agenda language (older items, and any the model left untranslated).
+        let translated = 0;
+        try {
+          translated = await triageService.translateAgendaTitles();
+        } catch (err) {
+          log.warn(`EmailTriage: title translation failed: ${String(err)}`);
+        }
+        const translatedNote = translated > 0 ? ` ${translated} título(s) de la agenda traducidos.` : "";
+
         // Two sources of unclassified mail:
         //  - Gmail rows in google_emails (synced via gsync:gmail).
         //  - IMAP rows in communications (synced via comms:inbox-fetch — any
@@ -297,7 +306,7 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
         const commsRows = triageService.getUnclassifiedComms(8);
 
         if (gmailRows.length === 0 && commsRows.length === 0) {
-          return `No new emails to classify (Gmail + IMAP).${drainedNote}`;
+          return `No new emails to classify (Gmail + IMAP).${drainedNote}${translatedNote}`;
         }
 
         const allRows = [...gmailRows, ...commsRows];
@@ -434,7 +443,7 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
         }
 
         const router = office?.routerName() ?? "la oficina";
-        return `Classified ${results.length} (${gmailResults.length} Gmail, ${commsResults.length} IMAP): ${critical.length} critical, ${high.length} high, ${needAttention.length} need attention. ${draftsCreated} drafts${draftErrors > 0 ? ` (${draftErrors} errors)` : ""}. ${agendaCreated} al calendario, ${lettersSent} a ${router}${capped ? `, ${capped} en cola por tope` : ""}${retrying ? `, ${retrying} en cola hasta que ${router} esté disponible` : ""}.${drainedNote}`;
+        return `Classified ${results.length} (${gmailResults.length} Gmail, ${commsResults.length} IMAP): ${critical.length} critical, ${high.length} high, ${needAttention.length} need attention. ${draftsCreated} drafts${draftErrors > 0 ? ` (${draftErrors} errors)` : ""}. ${agendaCreated} al calendario, ${lettersSent} a ${router}${capped ? `, ${capped} en cola por tope` : ""}${retrying ? `, ${retrying} en cola hasta que ${router} esté disponible` : ""}.${drainedNote}${translatedNote}`;
       },
     },
   ];

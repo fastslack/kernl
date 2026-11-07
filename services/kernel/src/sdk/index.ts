@@ -14,7 +14,7 @@
  * kernel with it. `tests/sdk-boundary.test.ts` enforces that.
  *
  * Heavy npm dependencies stay off this entry: `@kernl/extension-sdk/html`
- * (sanitize-html), `@kernl/extension-sdk/nostr` (nostr-tools) and
+ * (sanitize-html), `@kernl/extension-sdk/pdf` (pdf.js), `@kernl/extension-sdk/nostr` (nostr-tools) and
  * `@kernl/extension-sdk/social` (share envelope, @noble/curves). When an
  * extension loads part of itself with `import()`, bun initialises this whole
  * barrel for that part — unused exports and their dependencies included.

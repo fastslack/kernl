@@ -10,7 +10,7 @@
 import { readFile } from "node:fs/promises";
 import { fromBuffer, type Entry as ZipEntry } from "yauzl";
 import mammoth from "mammoth";
-import { getDocumentProxy } from "unpdf";
+import { extractPdfFromBytes } from "../../sdk/pdf.js";
 
 /** Characters of extracted text kept per document. */
 export const TEXT_CAP = 100_000;
@@ -29,31 +29,13 @@ function truncate(text: string, marker: string): string {
 }
 
 export async function extractPdf(absPath: string): Promise<Extracted> {
-  const data = new Uint8Array(await readFile(absPath));
-  const pdf = await getDocumentProxy(data);
-  const pages = pdf.numPages;
-  const parts: string[] = [];
-  let length = 0;
-  try {
-    for (let i = 1; i <= pages && length <= TEXT_CAP; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      let pageText = "";
-      for (const item of content.items as Array<{ str?: string; hasEOL?: boolean }>) {
-        if (typeof item.str !== "string") continue;
-        pageText += item.str + (item.hasEOL ? "\n" : "");
-      }
-      pageText = pageText.trim();
-      parts.push(pageText);
-      length += pageText.length + 2;
-    }
-  } finally {
-    // unpdf's typings leave out destroy(); pdf.js has it and it frees the worker-side document.
-    await (pdf as unknown as { destroy?: () => Promise<void> }).destroy?.().catch(() => {});
-  }
-  const text = parts.join("\n\n").trim();
-  const warnings = text ? [] : ["el PDF no tiene texto extraíble (¿es un escaneo?)"];
-  return { text: truncate(text, `${pages} páginas en total`), pages, warnings };
+  return extractPdfBuffer(new Uint8Array(await readFile(absPath)));
+}
+
+/** The same, from bytes already in memory (the SDK's /pdf entry holds the one implementation). */
+export async function extractPdfBuffer(data: Uint8Array): Promise<Extracted> {
+  const r = await extractPdfFromBytes(data, TEXT_CAP);
+  return { text: truncate(r.text, `${r.pages} páginas en total`), pages: r.pages, warnings: r.text ? [] : ["el PDF no tiene texto extraíble (¿es un escaneo?)"] };
 }
 
 /** Sum of the uncompressed sizes the zip's central directory declares. */

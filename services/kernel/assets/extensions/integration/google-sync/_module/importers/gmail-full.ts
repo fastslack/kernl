@@ -10,7 +10,18 @@ import {
 import type { CrmService } from "../../../../people/crm/_module/service.js";
 import type { GoogleClient } from "../google-client.js";
 import type { Contact } from "../../../../people/crm/_module/types.js";
-import { extractGmailBody, stripHtml, storableHtml, extractHeader, parseEmailAddress, parseEmailName } from "../../../../people/comms/_module/gmail-helpers.js";
+import { extractGmailBody, stripHtml, storableHtml, extractHeader, parseEmailAddress, parseEmailName, pdfAttachmentRefs } from "../../../../people/comms/_module/gmail-helpers.js";
+import { readPdfAttachments } from "./gmail-attachments.js";
+
+/** Rows synced before attachments were read, filled a few per sync (recent ones only). */
+const ATTACHMENT_BACKFILL_PER_SYNC = 20;
+const ATTACHMENT_BACKFILL_DAYS = 30;
+
+/** pdf.js is loaded only when a mail really has a PDF to read. */
+async function extractPdf(bytes: Uint8Array): Promise<string> {
+  const { extractPdfText } = await import("@kernl/extension-sdk/pdf");
+  return extractPdfText(bytes);
+}
 
 const GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
 const MAX_BODY_LENGTH = 10_240; // 10KB truncation
@@ -186,6 +197,12 @@ export async function importGmailFull(
 
         insertSyncMap.run(newId(), msg.id, emailId, now);
 
+        // A ticket or booking often has its date only in the attached PDF: keep that text for the agenda.
+        if (pdfAttachmentRefs(msg.payload).length) {
+          const text = await readPdfAttachments(client, msg.id, msg.payload, extractPdf).catch(() => "");
+          db.prepare("UPDATE google_emails SET attachments_text = ? WHERE id = ?").run(text, emailId);
+        }
+
         // Backward compat: log CRM interaction for matched contacts
         const matchedContact = emailIndex.get(fromEmail) ?? toList.find((t) => emailIndex.has(t.email)) ? emailIndex.get(toList.find((t) => emailIndex.has(t.email))?.email ?? "") : undefined;
         if (matchedContact) {
@@ -209,6 +226,8 @@ export async function importGmailFull(
     }
   }
 
+  await backfillAttachments(client, db).catch((err) => log.warn(`Gmail attachments backfill: ${String(err)}`));
+
   // Aggregate threads
   aggregateThreads(db);
 
@@ -224,6 +243,26 @@ export async function importGmailFull(
 }
 
 /** Aggregate google_emails into google_email_threads */
+/**
+ * Mails synced before attachments were read: a few recent ones per sync get their PDFs read now (and '' when they
+ * have none, so they are not looked at again).
+ */
+async function backfillAttachments(client: GoogleClient, db: SqliteDb): Promise<void> {
+  const cutoff = new Date(Date.now() - ATTACHMENT_BACKFILL_DAYS * 86_400_000).toISOString();
+  const rows = db.prepare(
+    `SELECT id, gmail_id FROM google_emails WHERE has_attachments = 1 AND attachments_text IS NULL AND date >= ? ORDER BY date DESC LIMIT ?`,
+  ).all(cutoff, ATTACHMENT_BACKFILL_PER_SYNC) as Array<{ id: string; gmail_id: string }>;
+  const set = db.prepare("UPDATE google_emails SET attachments_text = ? WHERE id = ?");
+  for (const r of rows) {
+    try {
+      const msg = await client.get<GmailMessageFull>(`${GMAIL_MESSAGES_URL}/${r.gmail_id}?format=full`);
+      set.run(await readPdfAttachments(client, r.gmail_id, msg.payload, extractPdf), r.id);
+    } catch (err) {
+      log.warn(`Gmail attachments: ${r.gmail_id} — ${String(err).slice(0, 160)}`);
+    }
+  }
+}
+
 function aggregateThreads(db: SqliteDb): void {
   const now = isoNow();
 
