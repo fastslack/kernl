@@ -194,24 +194,24 @@
 <style>
   .deploy { margin-top: 0; }
   h3 { margin: 0 0 4px; font-size: 14px; color: var(--text-1); }
-  .help { margin: 4px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--text-2); }
+  .help { margin: 2px 0 0; font-size: 12px; line-height: 1.4; color: var(--text-2); }
   .help b { color: var(--text-1); font-weight: 600; }
-  .rows { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-  .rows li { border: 1px solid var(--border); border-radius: 12px; background: var(--surface-1); padding: 6px 8px 6px 12px;
+  .rows { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .rows li { border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1); padding: 3px 6px 3px 10px;
     transition: border-color 150ms ease-out, box-shadow 150ms ease-out, background 150ms ease-out; }
   .rows li:hover { border-color: var(--border-h); }
-  .rows li.open { padding: 10px 14px 14px; border-color: rgba(34, 211, 238, 0.45);
+  .rows li.open { padding: 8px 10px 10px; border-color: rgba(34, 211, 238, 0.45);
     background: linear-gradient(160deg, color-mix(in srgb, #22d3ee 6%, var(--surface-1)), var(--surface-1) 60%);
     box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.12), 0 12px 28px -18px rgba(34, 211, 238, 0.6); }
   .rows li.open .name { color: #a5f3fc; }
-  .row { display: flex; align-items: center; gap: 10px; min-height: 32px; }
+  .row { display: flex; align-items: center; gap: 8px; min-height: 30px; }
   .name { font-size: 13px; font-weight: 600; width: 84px; flex: none; color: var(--text-1); }
   .state { flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.35; color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
   .state.ok { color: var(--text-1); }
   .state.bad { color: var(--danger, #e5484d); }
   .acts { display: flex; gap: 6px; flex: none; }
-  .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; align-items: end; margin: 12px 0 8px; }
-  .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; align-items: end; margin: 8px 0 6px; }
+  .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .field.wide, .fields .var, .fields > .btn, .fields .submit { grid-column: 1 / -1; }
   .fields > .btn { justify-self: start; }
   .field textarea { font-family: var(--font-mono, monospace); font-size: 12px; resize: vertical; }

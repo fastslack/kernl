@@ -9,7 +9,6 @@
   */
   import { onMount, tick } from 'svelte';
   import { apiFetchRaw, readApiError, rpcPost } from '$lib/api.js';
-  import ViewHeader from '$shared/components/ViewHeader.svelte';
   import Skeleton from '$shared/components/Skeleton.svelte';
   import BriefFields, { emptyBrief, type BriefDraft } from '$lib/components/projects/BriefFields.svelte';
   import DeployAccounts from '$lib/components/projects/DeployAccounts.svelte';
@@ -61,8 +60,9 @@
   };
   /** GitLab/GitHub accounts have their own rows (ForgeAccess), not a line in the repo list. */
   const FORGE_KINDS = ['gitlab_connection', 'github_connection'];
-  /** Two columns on a wide screen: what the agents publish on the left, what they build and deploy with on the right. */
-  const COLUMNS: Array<readonly string[]> = [['sites', 'social', 'work'], ['code']];
+  /** Each resource group is its own tab, so the whole project fits one screen without scrolling. */
+  type Tab = 'brief' | 'sites' | 'social' | 'code' | 'deploy' | 'work' | 'offices' | 'connector';
+  const RESOURCE_TABS: readonly Tab[] = ['sites', 'social', 'code', 'deploy', 'work'];
   const kindsOf = (gid: string) => LINK_KINDS.filter((k) => (GROUPS.find((x) => x.id === gid)?.kinds as readonly string[] | undefined)?.includes(k.id));
   /** The section whose "Agregar" form is open ('' = none); the sites section always shows its own input. */
   let addOpen = '';
@@ -134,7 +134,7 @@
   let error = '';
   let selectedId = '';
   let mode: 'view' | 'create' = 'view';
-  let tab: 'brief' | 'resources' | 'offices' | 'connector' = 'brief';
+  let tab: Tab = 'brief';
 
   let detail: { project: Project; links: Link[]; offices: OfficeRow[] } | null = null;
   let editName = '';
@@ -174,7 +174,9 @@
   }
 
   // ?project=<id>&tab=<tab> opens that project on that tab (Growth sends here to set up «Datos del producto»).
-  const TABS = ['brief', 'resources', 'offices', 'connector'] as const;
+  const TABS: readonly Tab[] = ['brief', ...RESOURCE_TABS, 'offices', 'connector'];
+  /** Older links (Growth's «Sitios y cuentas») say `resources`: that was the sites first. */
+  const tabFromLink = (t: string): Tab | null => (t === 'resources' ? 'sites' : (TABS as readonly string[]).includes(t) ? (t as Tab) : null);
   let deepLink: { id: string; tab: string } | null = (() => {
     try {
       const u = new URL(window.location.href);
@@ -193,7 +195,7 @@
         const want = deepLink;
         deepLink = null;
         await select(projects.find((p) => p.id === want.id || p.slug === want.id)!.id);
-        if ((TABS as readonly string[]).includes(want.tab)) tab = want.tab as typeof tab;
+        tab = tabFromLink(want.tab) ?? tab;
       } else if (mode === 'view') {
         if (selectedId && projects.some((p) => p.id === selectedId)) await select(selectedId, false);
         else if (projects.length) await select(projects[0].id);
@@ -408,11 +410,12 @@
   $: if (kind.pick && !options.some((o) => o.ref === linkRef)) linkRef = options[0]?.ref ?? '';
   let lastKind = linkKind;
   $: if (linkKind !== lastKind) { lastKind = linkKind; if (!kind.pick) linkRef = ''; }
-  $: if (tab === 'resources') void loadAccountOptions();
+  $: if (RESOURCE_TABS.includes(tab)) void loadAccountOptions();
+  $: linksIn = (gid: string) => (detail?.links ?? []).filter((l) => groupOfLink(l) === gid && !FORGE_KINDS.includes(l.kind)).length;
   $: steps = detail
     ? [
         { done: true, label: 'Ficha del proyecto', go: () => (tab = 'brief') },
-        { done: detail.links.length > 0, label: 'Vincular una cuenta', go: () => (tab = 'resources') },
+        { done: detail.links.length > 0, label: 'Vincular una cuenta', go: () => (tab = 'social') },
         { done: officeOn.size > 0, label: 'Asignar una oficina', go: () => (tab = 'offices') },
         { done: !!detail.project.connector_url, label: 'Conectar datos', optional: true, go: () => (tab = 'connector') },
       ]
@@ -421,8 +424,6 @@
 </script>
 
 <svelte:window on:click={() => (menuFor = '')} />
-
-<ViewHeader title="Proyectos" sub="Los productos o negocios para los que trabajan tus oficinas de agentes" />
 
 <div class="pj k-form">
 {#if error}<div class="banner err" role="alert">{error}</div>{/if}
@@ -539,9 +540,14 @@
 
       <div class="tabs" role="tablist">
         <button role="tab" aria-selected={tab === 'brief'} class:on={tab === 'brief'} on:click={() => (tab = 'brief')}>Ficha</button>
-        <button role="tab" aria-selected={tab === 'resources'} class:on={tab === 'resources'} on:click={() => (tab = 'resources')}>Sitios y cuentas <small>{detail.links.length}</small></button>
+        {#each GROUPS as g (g.id)}
+          <button role="tab" aria-selected={tab === g.id} class:on={tab === g.id} on:click={() => (tab = g.id)}>{g.title} <small>{linksIn(g.id)}</small></button>
+          {#if g.id === 'code'}
+            <button role="tab" aria-selected={tab === 'deploy'} class:on={tab === 'deploy'} on:click={() => (tab = 'deploy')}>Despliegue</button>
+          {/if}
+        {/each}
         <button role="tab" aria-selected={tab === 'offices'} class:on={tab === 'offices'} on:click={() => (tab = 'offices')}>Oficinas <small>{officeOn.size}</small></button>
-        <button role="tab" aria-selected={tab === 'connector'} class:on={tab === 'connector'} on:click={() => (tab = 'connector')}>Datos del producto <small>opcional</small></button>
+        <button role="tab" aria-selected={tab === 'connector'} class:on={tab === 'connector'} on:click={() => (tab = 'connector')}>Datos del producto</button>
       </div>
 
       {#if tab === 'brief'}
@@ -553,25 +559,18 @@
           <BriefFields bind:this={editFields} bind:brief={editBrief} productName={editName} idPrefix="edit" />
           <div class="actions"><button class="btn primary" disabled={saving}>{saving ? 'Guardando…' : 'Guardar ficha'}</button></div>
         </form>
-      {:else if tab === 'resources'}
-        <p class="help">Todo lo de <b>{detail.project.name}</b> en un lugar: sus sitios, desde dónde escriben los agentes, su código y sus cuentas de deploy. Los agentes usan solo lo que está acá.</p>
-        <nav class="res-sum" aria-label="Resumen de recursos">
-          {#each GROUPS as g}
-            {@const n = detail.links.filter((l) => groupOfLink(l) === g.id && !FORGE_KINDS.includes(l.kind)).length}
-            <a href="#res-{g.id}" class:none={n === 0}><span aria-hidden="true">{g.icon}</span>{g.title}<b>{n}</b></a>
-          {/each}
-        </nav>
-        <div class="res-cols">
-        {#each COLUMNS as col, ci}
-        <div class="res-col">
-        {#each GROUPS.filter((x) => col.includes(x.id)) as g (g.id)}
+      {:else if tab === 'deploy'}
+        <section class="res-group" id="res-deploy">
+          <DeployAccounts projectId={detail.project.id} projectName={detail.project.name} except={['git']} title="Despliegue y servicios" />
+        </section>
+      {:else if RESOURCE_TABS.includes(tab)}
+        {#each GROUPS.filter((x) => x.id === tab) as g (g.id)}
           {@const mine = detail.links.filter((l) => groupOfLink(l) === g.id && !FORGE_KINDS.includes(l.kind))}
           <section class="res-group" class:dense={g.id === 'code'} id="res-{g.id}">
             <header class="res-head">
-              <h3><span class="res-ico" aria-hidden="true">{g.icon}</span>{g.title}<small>{mine.length}</small></h3>
+              <p class="help">{g.help}</p>
               {#if g.id !== 'sites'}<button class="btn sm" on:click={() => openAdd(g)} aria-expanded={addOpen === g.id}>{addOpen === g.id ? 'Cerrar' : '+ Agregar'}</button>{/if}
             </header>
-            <p class="help">{g.help}</p>
             {#if g.id === 'sites'}
               <form class="link-form" on:submit|preventDefault={addSite}>
                 <div class="field grow">
@@ -621,23 +620,15 @@
               {/each}
             </ul>
             {#if g.id === 'code'}
-              <ForgeAccess projectId={detail.project.id} projectSlug={detail.project.slug} projectName={detail.project.name}
-                links={detail.links} options={{ gitlab: accountOptions.gitlab, github: accountOptions.github }} link={linkForge} unlink={unlinkForge} />
-              <div class="git-id">
+              <div class="code-side">
+                <ForgeAccess projectId={detail.project.id} projectSlug={detail.project.slug} projectName={detail.project.name}
+                  links={detail.links} options={{ gitlab: accountOptions.gitlab, github: accountOptions.github }} link={linkForge} unlink={unlinkForge} />
                 <DeployAccounts projectId={detail.project.id} projectName={detail.project.name} only={['git']} title="Autor de los commits"
                   help="Con qué nombre y email firman los agentes sus commits y, si hace falta, una clave SSH de deploy sin passphrase (su parte pública va como Deploy key con escritura en los repos)." />
               </div>
             {/if}
           </section>
         {/each}
-        {#if ci === 1}
-          <section class="res-group" id="res-deploy">
-            <DeployAccounts projectId={detail.project.id} projectName={detail.project.name} except={['git']} title="Despliegue y servicios" />
-          </section>
-        {/if}
-        </div>
-        {/each}
-        </div>
       {:else if tab === 'offices'}
       <div class="offices-box">
         <h3>¿Qué oficinas trabajan para {detail.project.name}?</h3>
@@ -716,7 +707,9 @@
 <style>
   /* The page's own palette. The active theme may flatten --teal & co. to grey;
      these hues stay warm and alive whatever theme is on. */
+  /* Full-bleed view (+layout FULL_BLEED_VIEWS): the page brings its own thin margin and fills the height. */
   .pj {
+    display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 6px;
     --pj-life: #34D399; --pj-life-2: #2DD4BF; --pj-on-life: #052E22;
     --pj-sun: #FBBF24; --pj-sky: #38BDF8; --pj-coral: #FB7185; --pj-violet: #A78BFA;
     --pj-h0: #34D399; --pj-h1: #38BDF8; --pj-h2: #FBBF24; --pj-h3: #FB7185; --pj-h4: #A78BFA; --pj-h5: #A3E635;
@@ -725,21 +718,21 @@
   }
   .banner { border-radius: var(--radius-sm); padding: 9px 12px; margin-bottom: 10px; font-size: 13.5px; }
   .banner.err { background: color-mix(in srgb, var(--pj-coral) 10%, transparent); border: 1px solid var(--pj-coral); color: var(--pj-coral); }
-  .layout { display: grid; grid-template-columns: minmax(320px, 34%) 1fr; gap: 16px; height: calc(100vh - 150px); min-height: 0; }
+  .layout { display: grid; grid-template-columns: minmax(280px, 27%) 1fr; gap: 10px; flex: 1; min-height: 0; }
   section { background: var(--panel, var(--surface-1)); border: 1px solid var(--border); border-radius: 14px; min-height: 0; overflow: auto; }
-  .list { padding: 12px 10px; background: linear-gradient(180deg, color-mix(in srgb, var(--pj-life) 7%, var(--surface-1)), var(--surface-1) 160px); }
-  .detail { padding: 20px 24px; }
+  .list { padding: 8px 6px; background: linear-gradient(180deg, color-mix(in srgb, var(--pj-life) 7%, var(--surface-1)), var(--surface-1) 160px); }
+  .detail { padding: 10px 12px; }
   h2 { margin: 0; font-family: var(--font-display); font-size: 18px; color: var(--text-1); font-weight: 600; }
-  .list-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 4px 12px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+  .list-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 4px 8px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
   .list-head h2 { font-size: 15px; display: flex; align-items: center; gap: 8px; }
   .count { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--pj-life) 18%, transparent); color: var(--pj-life); font-size: 12px; font-weight: 700; }
   ul { list-style: none; margin: 0; padding: 0; }
-  .list li { position: relative; display: flex; align-items: center; border-radius: 10px; margin-bottom: 4px; border: 1px solid transparent; transition: background 150ms ease-out, border-color 150ms ease-out; }
+  .list li { position: relative; display: flex; align-items: center; border-radius: 10px; margin-bottom: 2px; border: 1px solid transparent; transition: background 150ms ease-out, border-color 150ms ease-out; }
   .list li:hover { background: color-mix(in srgb, var(--hue) 6%, transparent); }
   .list li.sel { background: color-mix(in srgb, var(--hue) 11%, var(--surface-1)); border-color: color-mix(in srgb, var(--hue) 45%, transparent); box-shadow: inset 3px 0 0 var(--hue); }
-  .row { flex: 1; display: grid; grid-template-columns: 36px 1fr 66px 50px; align-items: center; gap: 10px; min-height: 56px; padding: 7px 8px 7px 10px; background: none; border: 0; color: var(--text-1); text-align: left; cursor: pointer; font: inherit; border-radius: 10px; }
+  .row { flex: 1; display: grid; grid-template-columns: 34px 1fr 60px 44px; align-items: center; gap: 8px; min-height: 50px; padding: 5px 6px 5px 8px; background: none; border: 0; color: var(--text-1); text-align: left; cursor: pointer; font: inherit; border-radius: 10px; }
   .avatar { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; font-family: var(--font-display); font-weight: 700; font-size: 13.5px; color: var(--hue); background: color-mix(in srgb, var(--hue) 16%, transparent); border: 1px solid color-mix(in srgb, var(--hue) 35%, transparent); }
-  .avatar.big { width: 48px; height: 48px; border-radius: 13px; font-size: 17px; flex: none; }
+  .avatar.big { width: 40px; height: 40px; border-radius: 11px; font-size: 15px; flex: none; }
   .name { display: flex; flex-direction: column; gap: 3px; font-size: 14.5px; font-weight: 600; min-width: 0; }
   .name small { display: flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 12px; font-weight: 400; }
   .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 999px; line-height: 1.6; vertical-align: middle; }
@@ -769,7 +762,7 @@
   .btn:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
   .link { background: none; border: 0; padding: 0; color: var(--pj-life); font: inherit; font-size: 12.5px; cursor: pointer; }
   .link:hover { text-decoration: underline; }
-  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
   .field.grow { flex: 1; }
   label { font-size: 14px; font-weight: 600; color: var(--text-1); }
   .req { color: var(--pj-coral); }
@@ -788,50 +781,45 @@
   .slug-edit label { font-size: 12.5px; font-weight: 500; color: var(--text-2); }
   .slug-edit input { flex: 1; min-height: 34px; padding: 6px 9px; font-family: var(--font-mono); font-size: 13px; }
   .actions { display: flex; justify-content: flex-end; gap: 10px; }
-  .stack { display: flex; flex-direction: column; gap: 16px; max-width: 760px; }
-  .dhead { display: flex; align-items: center; gap: 14px; margin: -20px -24px 16px; padding: 18px 24px; background: linear-gradient(120deg, color-mix(in srgb, var(--hue) 16%, transparent), transparent 70%); border-bottom: 1px solid color-mix(in srgb, var(--hue) 25%, var(--border)); }
+  .stack { display: flex; flex-direction: column; gap: 8px; max-width: 760px; }
+  .dhead { display: flex; align-items: center; gap: 10px; margin: -10px -12px 6px; padding: 6px 12px; background: linear-gradient(120deg, color-mix(in srgb, var(--hue) 16%, transparent), transparent 70%); border-bottom: 1px solid color-mix(in srgb, var(--hue) 25%, var(--border)); }
   .dtitle { flex: 1; min-width: 0; }
-  .dtitle h2 { display: flex; align-items: center; gap: 10px; font-size: 20px; }
+  .dtitle h2 { display: flex; align-items: center; gap: 10px; font-size: 18px; }
+  .dtitle .small { margin-top: 2px; }
   .notice { color: var(--pj-life); font-size: 13px; font-weight: 600; background: color-mix(in srgb, var(--pj-life) 12%, transparent); padding: 4px 10px; border-radius: 999px; }
-  .steps { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; padding: 8px; margin: 0 0 14px; background: color-mix(in srgb, var(--pj-sun) 6%, var(--surface-1)); border: 1px solid color-mix(in srgb, var(--pj-sun) 25%, var(--border)); border-radius: 12px; }
+  .steps { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; padding: 4px; margin: 0 0 8px; background: color-mix(in srgb, var(--pj-sun) 6%, var(--surface-1)); border: 1px solid color-mix(in srgb, var(--pj-sun) 25%, var(--border)); border-radius: 12px; }
   .steps button { display: flex; align-items: center; gap: 8px; background: none; border: 0; color: var(--text-1); font: inherit; font-size: 13.5px; cursor: pointer; padding: 6px 10px; border-radius: 8px; }
   .steps button:hover:not(:disabled) { background: color-mix(in srgb, var(--pj-sun) 12%, transparent); }
   .steps em { color: var(--text-3); font-style: normal; font-size: 12px; }
   .mark { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--pj-sun); color: var(--pj-sun); font-size: 12px; font-weight: 700; }
   .steps li.is-done .mark { background: var(--pj-life); border-color: var(--pj-life); color: var(--pj-on-life); }
-  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 18px; }
-  .tabs button { position: relative; background: none; border: 0; color: var(--text-2); padding: 10px 14px; cursor: pointer; font: inherit; font-size: 14px; border-radius: 8px 8px 0 0; transition: color 150ms ease-out, background 150ms ease-out; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+  .tabs button { position: relative; background: none; border: 0; color: var(--text-2); padding: 7px 10px; cursor: pointer; font: inherit; font-size: 13.5px; border-radius: 8px 8px 0 0; white-space: nowrap; transition: color 150ms ease-out, background 150ms ease-out; }
   .tabs button:hover { color: var(--text-1); background: var(--surface-2); }
   .tabs button.on { color: var(--text-1); font-weight: 600; }
   .tabs button.on::after { content: ''; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 3px; border-radius: 3px 3px 0 0; background: var(--pj-grad); }
   .tabs small { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 4px; border-radius: 999px; background: var(--surface-3); color: var(--text-2); font-size: 11px; font-weight: 600; }
   .tabs button.on small { background: color-mix(in srgb, var(--pj-life) 18%, transparent); color: var(--pj-life); }
-  .link-form { display: flex; gap: 10px; align-items: flex-end; margin: 12px 0 6px; max-width: 760px; }
+  .link-form { display: flex; gap: 8px; align-items: flex-end; margin: 8px 0 4px; max-width: 760px; }
   .link-form select { min-width: 170px; }
-  .res-cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 14px; align-items: start; }
-  /* The accounts column carries rows with three buttons each: it gets the larger share. */
-  @media (min-width: 1280px) { .res-cols { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); } }
-  .res-col { min-width: 0; }
-  .res-col .res-group { max-width: none; }
-  .git-id { margin-top: 14px; }
-  .res-sum { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
-  .res-sum a { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 12.5px; text-decoration: none;
-    color: var(--text-1); border: 1px solid color-mix(in srgb, var(--pj-life) 35%, var(--border)); background: color-mix(in srgb, var(--pj-life) 8%, transparent); }
-  .res-sum a b { font-variant-numeric: tabular-nums; color: var(--pj-life); }
-  .res-sum a.none { color: var(--text-2); border-style: dashed; background: none; }
-  .res-sum a.none b { color: var(--text-3); }
-  .res-group { margin-top: 12px; padding: 12px 14px; max-width: 800px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-1); overflow: visible; }
-  .res-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
-  .res-head h3 { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: var(--text-1); }
-  .res-head h3 small { font-size: 12px; font-weight: 700; color: var(--pj-life); background: color-mix(in srgb, var(--pj-life) 14%, transparent); border-radius: 999px; padding: 0 8px; }
-  .res-ico { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; font-size: 14px; background: color-mix(in srgb, var(--pj-life) 14%, transparent); }
+  .res-group { margin-top: 0; padding: 8px 10px; max-width: none; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-1); overflow: visible; }
+  .res-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+  .res-head .help { max-width: 760px; }
+  /* Code: the repos on the left, the forge account and the commit author on the right. */
+  .code-side { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+  @media (min-width: 1280px) {
+    .res-group.dense { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 10px; align-items: start; }
+    .res-group.dense > * { grid-column: 1; }
+    .res-group.dense > .res-head { grid-column: 1 / -1; }
+    .res-group.dense > .code-side { grid-column: 2; grid-row: 2 / span 4; margin-top: 4px; }
+  }
   .btn.sm { min-height: 30px; padding: 4px 12px; font-size: 12.5px; }
-  .res-group .links { margin-top: 8px; }
+  .res-group .links { margin-top: 6px; }
   a.ref { color: var(--pj-sky); text-decoration: none; }
   a.ref:hover { text-decoration: underline; }
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-  .links { margin-top: 12px; max-width: 760px; display: flex; flex-direction: column; gap: 6px; }
-  .links li { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1); }
+  .links { margin-top: 8px; max-width: 760px; display: flex; flex-direction: column; gap: 4px; }
+  .links li { display: flex; align-items: center; gap: 8px; padding: 3px 4px 3px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1); }
   .links .no-links { color: var(--text-2); font-size: 13.5px; border-style: dashed; padding: 14px; background: none; }
   .chip { font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; color: var(--pj-sky); background: color-mix(in srgb, var(--pj-sky) 14%, transparent); white-space: nowrap; }
   .ref { flex: 1; font-size: 14px; color: var(--text-1); }
@@ -870,6 +858,6 @@
   .how { list-style: none; padding: 0; margin: 6px 0; display: flex; flex-direction: column; gap: 10px; text-align: left; width: 100%; }
   .how li { display: flex; gap: 12px; align-items: center; font-size: 14px; color: var(--text-1); background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
   .how span { display: inline-grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 50%; background: var(--pj-grad); color: var(--pj-on-life); font-weight: 700; font-size: 13px; }
-  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; height: auto; } .link-form { flex-wrap: wrap; } }
+  @media (max-width: 900px) { .pj { flex: none; } .layout { grid-template-columns: 1fr; } .link-form { flex-wrap: wrap; } }
   @media (prefers-reduced-motion: reduce) { .btn, .list li, .tabs button, .toggle, input, select { transition: none; } .btn:active:not(:disabled) { transform: none; } }
 </style>

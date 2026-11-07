@@ -80,7 +80,7 @@
 {/if}
 
 <style>
-  .pa { margin: 0 0 14px; padding: 12px 14px; border-radius: 14px; border: 1px solid rgba(251, 191, 36, 0.45);
+  .pa { margin: 0 0 8px; padding: 8px 10px; border-radius: 14px; border: 1px solid rgba(251, 191, 36, 0.45);
     background: linear-gradient(160deg, rgba(251, 191, 36, 0.1), transparent 70%); }
   header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
   h3 { margin: 0; font-size: 14px; font-weight: 700; color: #fde68a; display: flex; align-items: center; gap: 8px; }

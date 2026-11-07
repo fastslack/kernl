@@ -149,21 +149,21 @@
 {/if}
 
 <style>
-	.field { display: flex; flex-direction: column; gap: 6px; }
+	.field { display: flex; flex-direction: column; gap: 4px; }
 	.lab { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 	label { font-size: 14px; font-weight: 600; color: var(--text-1); }
 	.req { color: var(--teal); }
 	.tools { display: flex; gap: 12px; }
-	.link { background: none; border: 0; padding: 4px 0; color: var(--teal); font: inherit; font-size: 12.5px; cursor: pointer; }
+	.link { background: none; border: 0; padding: 2px 0; color: var(--teal); font: inherit; font-size: 12.5px; cursor: pointer; }
 	.link:disabled { color: var(--text-3); cursor: default; }
 	.link:not(:disabled):hover { text-decoration: underline; }
 	textarea, input {
 		background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-1);
-		padding: 9px 11px; font: inherit; font-size: 14px; line-height: 1.5; resize: vertical;
+		padding: 7px 10px; font: inherit; font-size: 14px; line-height: 1.45; resize: vertical;
 	}
 	textarea:focus, input:focus { outline: 2px solid var(--teal); outline-offset: 1px; border-color: transparent; }
 	textarea[aria-invalid='true'] { border-color: var(--red); }
-	.help { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-2); }
+	.help { margin: 0; font-size: 12px; line-height: 1.4; color: var(--text-2); }
 	.help b { color: var(--text-1); font-weight: 600; }
 	.example {
 		margin: 0; font-size: 13px; line-height: 1.5; color: var(--text-1);
@@ -171,13 +171,13 @@
 	}
 	.err { margin: 0; font-size: 12.5px; color: var(--red); }
 	.extras-toggle {
-		display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 6px 0; cursor: pointer;
+		display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 2px 0; cursor: pointer;
 		color: var(--text-1); font: inherit; font-size: 14px; font-weight: 600; text-align: left;
 	}
 	.opt { font-weight: 400; font-size: 12.5px; color: var(--text-3); }
 	.chev { display: inline-block; transition: transform 150ms ease-out; color: var(--text-2); }
 	.chev.open { transform: rotate(90deg); }
-	.extras { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 18px; }
+	.extras { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
 	@media (prefers-reduced-motion: reduce) { .chev { transition: none; } }
 	@media (max-width: 900px) { .extras { grid-template-columns: 1fr; } }
 </style>
