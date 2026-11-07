@@ -138,7 +138,9 @@ export function createProjectsModule(): ProjectsModule {
         }),
         nav: [
           { id: "projects", label: "Proyectos", icon: "📁", group: "work", order: 40 },
-          { id: "outbox", label: "Aprobaciones", icon: "📤", group: "work", order: 50 },
+          // Everything that waits on the operator. Approvals keeps its page (/outbox, the full editor the Bandeja links to)
+          // but leaves the nav, like Overview, Tasks and Reminders (work-suite).
+          { id: "inbox", label: "Bandeja", icon: "📥", group: "work", order: 5 },
         ],
       };
     },

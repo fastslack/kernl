@@ -344,6 +344,10 @@
     'commander', 'agents', 'agents-flow', 'workspace', 'files', 'models',
     'providers', 'memory', 'skills',
     'autogenesis',
+    // The Bandeja: everything that waits on the operator (approvals, questions, tasks, reminders). Core.
+    'inbox',
+    // Out of the nav since the Bandeja, still linked from it: the full approvals editor, and /work → /inbox.
+    'outbox', 'work',
     // Instance peering. Core, not an extension: it is how this kernel knows
     // who it is and which other instances it trusts.
     'friends',
@@ -679,7 +683,7 @@
     <div class="header-right">
       <!-- Status cluster: live state of the kernel (tasks pending, mail drafts) -->
       <div class="hdr-cluster hdr-status">
-        <button class="header-icon-btn" on:click={() => navigate('tasks')}
+        <button class="header-icon-btn" on:click={() => goto('/inbox?kind=task')}
           title={taskOverdue > 0 ? `Tareas — ${taskOverdue} vencida${taskOverdue === 1 ? '' : 's'}` : 'Tareas'}
           aria-label={taskOverdue > 0 ? `Tareas: ${taskOverdue} vencidas` : 'Tareas'}>
           <HeaderIcon name="tasks" />
@@ -688,7 +692,7 @@
           {/if}
         </button>
         <MailBadge />
-        <OutboxBadge onOpen={() => navigate('outbox')} />
+        <OutboxBadge onOpen={() => goto('/inbox?kind=approve')} />
         <NotificationDropdown
           open={notifOpen}
           notifications={$notifications}

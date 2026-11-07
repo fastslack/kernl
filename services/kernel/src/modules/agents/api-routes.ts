@@ -302,6 +302,19 @@ export function registerAgentRoutes(
     return { state };
   });
 
+  // A letter to an office's lead from the operator's inbox (a task handed to an office). Signed by the chief.
+  server.route<{ subject?: unknown; body?: unknown; project_id?: unknown }>("POST", "/api/agents/flows/:id/handoff", ({ params: { id }, body }) => {
+    const subject = typeof body?.subject === "string" ? body.subject.trim() : "";
+    const text = typeof body?.body === "string" ? body.body.trim() : "";
+    if (!subject || !text) throw new HttpError(400, "subject and body are required");
+    const r = service.postToOffice(id, {
+      agent_id: "", subject: subject.slice(0, 300), body: text.slice(0, 20_000),
+      project_id: typeof body?.project_id === "string" && body.project_id ? body.project_id : null,
+    });
+    if (!r.ok) throw new HttpError(/not found/i.test(r.error ?? "") ? 404 : 409, r.error ?? "The letter did not go out");
+    return { success: true, to_agent_id: r.to_agent_id };
+  });
+
   server.route("POST", "/api/agents/questions/:id/dismiss", ({ params: { id } }) => {
     const r = resolveHumanChoice(service, executor, events, id, { kind: "dismiss" });
     if (!r.ok) throw new HttpError(404, "Question not found or already handled");
