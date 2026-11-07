@@ -13,6 +13,7 @@
   import Skeleton from '$shared/components/Skeleton.svelte';
   import BriefFields, { emptyBrief, type BriefDraft } from '$lib/components/projects/BriefFields.svelte';
   import DeployAccounts from '$lib/components/projects/DeployAccounts.svelte';
+  import ForgeAccess from '$lib/components/projects/ForgeAccess.svelte';
   import PendingApprovals from '$lib/components/projects/PendingApprovals.svelte';
   import { goto } from '$app/navigation';
 
@@ -49,7 +50,7 @@
   const GROUPS = [
     { id: 'sites', title: 'Sitios web', icon: '🌐', kinds: ['website'], help: 'Las direcciones del producto. Growth las audita para SEO, revisa qué ven los asistentes de IA y muestra sus visitas en vivo.', empty: 'Sin sitios todavía. Agregá la dirección del producto.' },
     { id: 'social', title: 'Correo y redes', icon: '✉', kinds: ['email', 'linkedin', 'whatsapp', 'other'], help: 'Desde dónde escriben y publican los agentes. Siempre como borrador para que lo apruebes.', empty: 'Sin cuentas. Vinculá el correo o la red desde la que querés que trabajen.' },
-    { id: 'code', title: 'Código', icon: '⌘', kinds: ['github', 'gitlab', 'repo'], help: 'Repos del producto y las cuentas de GitHub o GitLab con las que los agentes los leen y abren issues.', empty: 'Sin repos ni cuentas de código.' },
+    { id: 'code', title: 'Código', icon: '⌘', kinds: ['repo'], help: 'Los repos del producto, la cuenta con la que los agentes entran a GitLab o GitHub y el autor de sus commits.', empty: 'Sin repos todavía.' },
     { id: 'work', title: 'Tareas y archivos', icon: '▤', kinds: ['task_project', 'workspace'], help: 'Dónde las oficinas anotan tareas y guardan material de este proyecto.', empty: 'Nada vinculado.' },
   ] as const;
   const groupOfLink = (l: Link) => {
@@ -58,6 +59,10 @@
     if (l.kind === 'repo' || l.kind === 'github_connection' || l.kind === 'gitlab_connection') return 'code';
     return 'work';
   };
+  /** GitLab/GitHub accounts have their own rows (ForgeAccess), not a line in the repo list. */
+  const FORGE_KINDS = ['gitlab_connection', 'github_connection'];
+  /** Two columns on a wide screen: what the agents publish on the left, what they build and deploy with on the right. */
+  const COLUMNS: Array<readonly string[]> = [['sites', 'social', 'work'], ['code']];
   const kindsOf = (gid: string) => LINK_KINDS.filter((k) => (GROUPS.find((x) => x.id === gid)?.kinds as readonly string[] | undefined)?.includes(k.id));
   /** The section whose "Agregar" form is open ('' = none); the sites section always shows its own input. */
   let addOpen = '';
@@ -311,21 +316,17 @@
     await load();
   }, 'Vinculado');
 
-  // A new GitHub/GitLab connection, tested by the forge before it is kept, then linked here.
-  let newConn = { name: '', token: '', host: '' };
-  const addConnection = () => run(async () => {
-    if (!detail || !newConn.token.trim()) return;
-    const forge = kind.id;
-    const created = await rpcPost(`${forge}.connections.add`, {
-      project_id: detail.project.id,
-      name: newConn.name.trim() || `${detail.project.slug}-${forge}`,
-      token: newConn.token.trim(),
-      ...(forge === 'gitlab' && newConn.host.trim() ? { host: newConn.host.trim() } : {}),
-    });
-    await call(`/api/projects/${detail.project.id}/links`, { method: 'POST', body: JSON.stringify({ kind: kind.kind, ref_id: created.id }) });
-    newConn = { name: '', token: '', host: '' };
+  // ForgeAccess tests the account before it calls these; they only write the link and reload.
+  async function linkForge(kind: string, ref: string) {
+    if (!detail) return;
+    await call(`/api/projects/${detail.project.id}/links`, { method: 'POST', body: JSON.stringify({ kind, ref_id: ref }) });
     await Promise.all([load(), loadAccountOptions()]);
-  }, 'Conexión creada y vinculada');
+  }
+  async function unlinkForge(kind: string, ref: string) {
+    if (!detail) return;
+    await call(`/api/projects/${detail.project.id}/links?kind=${encodeURIComponent(kind)}&ref_id=${encodeURIComponent(ref)}`, { method: 'DELETE' });
+    await load();
+  }
 
   const removeLink = (l: Link) => run(async () => {
     if (!detail) return;
@@ -556,13 +557,16 @@
         <p class="help">Todo lo de <b>{detail.project.name}</b> en un lugar: sus sitios, desde dónde escriben los agentes, su código y sus cuentas de deploy. Los agentes usan solo lo que está acá.</p>
         <nav class="res-sum" aria-label="Resumen de recursos">
           {#each GROUPS as g}
-            {@const n = detail.links.filter((l) => groupOfLink(l) === g.id).length}
+            {@const n = detail.links.filter((l) => groupOfLink(l) === g.id && !FORGE_KINDS.includes(l.kind)).length}
             <a href="#res-{g.id}" class:none={n === 0}><span aria-hidden="true">{g.icon}</span>{g.title}<b>{n}</b></a>
           {/each}
         </nav>
-        {#each GROUPS as g (g.id)}
-          {@const mine = detail.links.filter((l) => groupOfLink(l) === g.id)}
-          <section class="res-group" id="res-{g.id}">
+        <div class="res-cols">
+        {#each COLUMNS as col, ci}
+        <div class="res-col">
+        {#each GROUPS.filter((x) => col.includes(x.id)) as g (g.id)}
+          {@const mine = detail.links.filter((l) => groupOfLink(l) === g.id && !FORGE_KINDS.includes(l.kind))}
+          <section class="res-group" class:dense={g.id === 'code'} id="res-{g.id}">
             <header class="res-head">
               <h3><span class="res-ico" aria-hidden="true">{g.icon}</span>{g.title}<small>{mine.length}</small></h3>
               {#if g.id !== 'sites'}<button class="btn sm" on:click={() => openAdd(g)} aria-expanded={addOpen === g.id}>{addOpen === g.id ? 'Cerrar' : '+ Agregar'}</button>{/if}
@@ -603,39 +607,12 @@
                 <button class="btn" disabled={saving || !linkRef.trim()}>Vincular</button>
               </form>
               <p class="help">{kind.help}</p>
-              {#if kind.id === 'github' || kind.id === 'gitlab'}
-                <details class="new-conn" open={options.length === 0}>
-                  <summary>Conexión nueva de {kind.label}</summary>
-                  <form class="link-form" on:submit|preventDefault={addConnection}>
-                    <div class="field">
-                      <label for="conn-name">Nombre</label>
-                      <input id="conn-name" bind:value={newConn.name} placeholder="{detail.project.slug}-{kind.id}" />
-                    </div>
-                    {#if kind.id === 'gitlab'}
-                      <div class="field">
-                        <label for="conn-host">Servidor</label>
-                        <input id="conn-host" bind:value={newConn.host} placeholder="https://gitlab.com" />
-                      </div>
-                    {/if}
-                    <div class="field grow">
-                      <label for="conn-token">Token</label>
-                      <input id="conn-token" type="password" autocomplete="off" bind:value={newConn.token} />
-                    </div>
-                    <button class="btn" disabled={saving || !newConn.token.trim()}>Conectar y vincular</button>
-                  </form>
-                  {#if kind.id === 'github'}
-                    <p class="help">En GitHub: Settings → Developer settings → <b>Fine-grained tokens</b>. Dale acceso solo a los repos de {detail.project.name}, con permiso de lectura y escritura en <b>Issues</b>, <b>Pull requests</b> y <b>Contents</b>. Kernl prueba que llegue a los repos de {detail.project.name} antes de guardarlo, y lo guarda cifrado.</p>
-                  {:else}
-                    <p class="help">En GitLab: Preferences → <b>Access tokens</b>, con alcance <b>api</b>. Kernl prueba que llegue a los repos de {detail.project.name} antes de guardarlo, y lo guarda cifrado.</p>
-                  {/if}
-                </details>
-              {/if}
             {/if}
             <ul class="links">
               {#each mine as l (l.kind + l.ref_id)}
                 {@const ll = linkLabel(l, accountOptions)}
                 <li>
-                  {#if g.id !== 'sites'}<span class="chip">{ll.kind}</span>{/if}
+                  {#if g.id !== 'sites' && g.id !== 'code'}<span class="chip">{ll.kind}</span>{/if}
                   {#if l.kind === 'website'}<a class="ref" href={l.ref_id} target="_blank" rel="noopener noreferrer">{ll.text} ↗</a>{:else}<span class="ref" title={l.ref_id}>{ll.text}</span>{/if}
                   <button class="x" aria-label="Quitar {ll.text}" title="Quitar" on:click={() => removeLink(l)}>×</button>
                 </li>
@@ -643,11 +620,24 @@
                 <li class="no-links">{g.empty}</li>
               {/each}
             </ul>
+            {#if g.id === 'code'}
+              <ForgeAccess projectId={detail.project.id} projectSlug={detail.project.slug} projectName={detail.project.name}
+                links={detail.links} options={{ gitlab: accountOptions.gitlab, github: accountOptions.github }} link={linkForge} unlink={unlinkForge} />
+              <div class="git-id">
+                <DeployAccounts projectId={detail.project.id} projectName={detail.project.name} only={['git']} title="Autor de los commits"
+                  help="Con qué nombre y email firman los agentes sus commits y, si hace falta, una clave SSH de deploy sin passphrase (su parte pública va como Deploy key con escritura en los repos)." />
+              </div>
+            {/if}
           </section>
         {/each}
-        <section class="res-group" id="res-deploy">
-          <DeployAccounts projectId={detail.project.id} projectName={detail.project.name} />
-        </section>
+        {#if ci === 1}
+          <section class="res-group" id="res-deploy">
+            <DeployAccounts projectId={detail.project.id} projectName={detail.project.name} except={['git']} title="Despliegue y servicios" />
+          </section>
+        {/if}
+        </div>
+        {/each}
+        </div>
       {:else if tab === 'offices'}
       <div class="offices-box">
         <h3>¿Qué oficinas trabajan para {detail.project.name}?</h3>
@@ -818,9 +808,12 @@
   .tabs button.on small { background: color-mix(in srgb, var(--pj-life) 18%, transparent); color: var(--pj-life); }
   .link-form { display: flex; gap: 10px; align-items: flex-end; margin: 12px 0 6px; max-width: 760px; }
   .link-form select { min-width: 170px; }
-  .new-conn { margin: 10px 0 4px; max-width: 760px; border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; background: var(--surface-1); }
-  .new-conn summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-1); }
-  .new-conn .link-form { margin: 10px 0 8px; }
+  .res-cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 14px; align-items: start; }
+  /* The accounts column carries rows with three buttons each: it gets the larger share. */
+  @media (min-width: 1280px) { .res-cols { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); } }
+  .res-col { min-width: 0; }
+  .res-col .res-group { max-width: none; }
+  .git-id { margin-top: 14px; }
   .res-sum { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
   .res-sum a { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 12.5px; text-decoration: none;
     color: var(--text-1); border: 1px solid color-mix(in srgb, var(--pj-life) 35%, var(--border)); background: color-mix(in srgb, var(--pj-life) 8%, transparent); }
@@ -842,6 +835,10 @@
   .links .no-links { color: var(--text-2); font-size: 13.5px; border-style: dashed; padding: 14px; background: none; }
   .chip { font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; color: var(--pj-sky); background: color-mix(in srgb, var(--pj-sky) 14%, transparent); white-space: nowrap; }
   .ref { flex: 1; font-size: 14px; color: var(--text-1); }
+  /* Repos: one line each (name · remote), the full text on hover. */
+  .res-group.dense .links { gap: 4px; }
+  .res-group.dense .links li { padding: 3px 4px 3px 10px; min-height: 32px; }
+  .res-group.dense .ref { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .no-acc { margin: 0; min-height: 40px; display: flex; align-items: center; font-size: 13px; color: var(--text-2); }
   .x { background: none; border: 0; color: var(--text-3); cursor: pointer; font-size: 18px; width: 36px; height: 36px; border-radius: 8px; }
   .x:hover { color: var(--pj-coral); background: color-mix(in srgb, var(--pj-coral) 10%, transparent); }

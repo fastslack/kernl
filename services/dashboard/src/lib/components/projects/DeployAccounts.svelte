@@ -14,6 +14,12 @@
 
   export let projectId: string;
   export let projectName: string;
+  /** Which services this block shows (the git identity lives with the code, the rest under deploy). Empty = all. */
+  export let only: string[] = [];
+  export let except: string[] = [];
+  export let title = 'Cuentas y conexiones';
+  /** Plain text under the title; empty = the default sentence. */
+  export let help = '';
 
   interface Account {
     provider: string; identity: string; config: Record<string, string>; secrets: Record<string, string>;
@@ -29,7 +35,7 @@
     { id: 'google', label: 'Google', help: '', fields: [] },
     { id: 'aws', label: 'AWS', help: 'Un usuario IAM propio de este proyecto, con solo los permisos de su deploy. Nunca la clave de la cuenta raíz.',
       fields: [{ key: 'region', label: 'Región', placeholder: 'eu-west-1' }, { key: 'access_key_id', label: 'Access key ID', placeholder: 'AKIA…' }, { key: 'secret_access_key', label: 'Secret access key', secret: true }] },
-    { id: 'git', label: 'Git', help: 'El autor de los commits y, si hace falta, una clave SSH de deploy sin passphrase: agregá su parte pública como Deploy key con escritura en los repos del proyecto.',
+    { id: 'git', label: 'Autor y SSH', help: 'El autor de los commits y, si hace falta, una clave SSH de deploy sin passphrase: agregá su parte pública como Deploy key con escritura en los repos del proyecto.',
       fields: [{ key: 'name', label: 'Nombre' }, { key: 'email', label: 'Email' }, { key: 'ssh_private_key', label: 'Clave SSH privada', secret: true, optional: true, multiline: true, placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----' }] },
     { id: 'env', label: 'Entorno', custom: true, fields: [],
       help: 'Cualquier otra cosa que necesite el deploy (un token de Vercel, Fly, Netlify, GCP…): variables con el nombre que lea tu herramienta, todas cifradas. Y si el deploy necesita herramientas que no están en la imagen de Kernl (git, ssh, rsync, aws, wrangler), una imagen de Docker propia, que tenga sh y base64.' },
@@ -110,12 +116,13 @@
 </script>
 
 <section class="deploy">
-  <h3>Cuentas y conexiones</h3>
-  <p class="help">Con estas cuentas despliega y lee <b>{projectName}</b>, y con ninguna otra. Cada una se prueba contra su servicio antes de guardarse y queda cifrada.</p>
+  {#if title}<h3>{title}</h3>{/if}
+  {#if help}<p class="help">{help}</p>
+  {:else}<p class="help">Con estas cuentas despliega y lee <b>{projectName}</b>, y con ninguna otra. Cada una se prueba contra su servicio antes de guardarse y queda cifrada.</p>{/if}
   {#if error}<p class="err" role="alert">{error}</p>{/if}
   {#if notice}<p class="ok-note">{notice}</p>{/if}
   <ul class="rows">
-    {#each PROVIDERS as p (p.id)}
+    {#each PROVIDERS.filter((x) => (!only.length || only.includes(x.id)) && !except.includes(x.id)) as p (p.id)}
       {@const a = accountOf(p.id, accounts)}
       {@const st = status(a, p.id)}
       <li class:open={open === p.id}>
@@ -185,7 +192,7 @@
 </section>
 
 <style>
-  .deploy { margin-top: 18px; max-width: 760px; }
+  .deploy { margin-top: 0; }
   h3 { margin: 0 0 4px; font-size: 14px; color: var(--text-1); }
   .help { margin: 4px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--text-2); }
   .help b { color: var(--text-1); font-weight: 600; }
@@ -199,7 +206,7 @@
   .rows li.open .name { color: #a5f3fc; }
   .row { display: flex; align-items: center; gap: 10px; min-height: 32px; }
   .name { font-size: 13px; font-weight: 600; width: 84px; flex: none; color: var(--text-1); }
-  .state { flex: 1; min-width: 0; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
+  .state { flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.35; color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
   .state.ok { color: var(--text-1); }
   .state.bad { color: var(--danger, #e5484d); }
   .acts { display: flex; gap: 6px; flex: none; }
