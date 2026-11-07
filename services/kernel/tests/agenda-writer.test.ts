@@ -153,6 +153,21 @@ describe("AgendaWriter", () => {
       expect(db.query("SELECT COUNT(*) n FROM events").get()).toEqual({ n: 2 });
     });
 
+    it("singular and plural are the same words", () => {
+      writer.write(lab, [closed("Laboratorio cerrado por feriados extraordinarios")]);
+      writer.write({ ...lab, source_id: "m9", thread_key: "z", from: "" }, [closed("Laboratorio cerrado por feriado extraordinario")]);
+      expect(db.query("SELECT COUNT(*) n FROM events").get()).toEqual({ n: 1 });
+    });
+
+    it("one sender's two different items on the same day stay two (two stock lots expiring)", () => {
+      const lot = (title: string): AgendaItem => ({ kind: "expiry", title, start_at: "2030-11-10", all_day: true, confidence: "high", evidence: "x" });
+      const wh = { ...lab, from: "stock@warehouse.example" };
+      writer.write({ ...wh, thread_key: "a" }, [lot("YOG-1KG L2999-Q expires (30 @ E-01-02-A) — quarantine")]);
+      writer.write({ ...wh, thread_key: "b", source_id: "m7" }, [lot("ALC-500 L2743-1 expires (40 @ B-02-03-C) — promote")]);
+      writer.write({ ...wh, thread_key: "a", source_id: "m8" }, [lot("GRN-2KG L3001-B expires (12 @ C-04-01-A) — sell first")]);
+      expect(db.query("SELECT COUNT(*) n FROM reminders").get()).toEqual({ n: 3 });
+    });
+
     it("an unrelated sender and title on the same day stays separate", () => {
       writer.write(lab, [closed("Laboratorio cerrado por feriado")]);
       writer.write({ ...lab, source_id: "m6", thread_key: "y", from: "amigo@example.com" }, [closed("Cumpleaños de Juan")]);
