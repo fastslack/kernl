@@ -3,8 +3,8 @@
   // (Fase 2b). Lives in the events extension: it owns the `calendar` WS
   // channel + `dashboard.calendar` RPC that hydrate the planner store. All
   // mutations preserve the shell's rpcOrCall / WS-only semantics via ctx.rpc.
+  import { onMount } from 'svelte';
   import ViewHeader from '$shared/components/ViewHeader.svelte';
-  import TodayPanel from './TodayPanel.svelte';
   import Panel from '$shared/components/Panel.svelte';
   import Empty from '$shared/components/Empty.svelte';
   import DayModal from '$shared/components/DayModal.svelte';
@@ -167,6 +167,7 @@
     event: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3M16 3v3M4 9h16"/><rect x="4" y="5.5" width="16" height="15" rx="2.4"/></svg>',
   };
   const TYPE_LABEL: Record<string, string> = { task: 'Task', reminder: 'Reminder', event: 'Event' };
+  const TYPE_ES: Record<string, string> = { task: 'tareas', reminder: 'avisos', event: 'eventos' };
   const GROUP_ORDER = ['event', 'reminder', 'task'];
 
   // Collapse a day's items into one chip per type with a count + importance flag.
@@ -263,7 +264,7 @@
       const days = Math.round(
         (new Date(next.date + 'T00:00:00Z').getTime() - new Date(todayStr + 'T00:00:00Z').getTime()) / 86400000
       );
-      countdown = days <= 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days} days`;
+      countdown = days <= 0 ? 'hoy' : days === 1 ? 'mañana' : `en ${days} días`;
     }
     return { counts, next, countdown };
   }
@@ -283,6 +284,65 @@
 
   $: selectedEvents = visibleEvents(cal?.days?.[selectedDay] ?? [], importantOnly);
 
+  // ── The lists under the calendar ──────────────────────────────────────
+  // «Hoy y vencido» is the agenda brain's plan (what to do today, overdue first); «Próximos 7 días» and
+  // «Importantes» come from the same calendar payload as the grid. A row opens its day, where it is acted on.
+  let plan: any = null;
+  let planLoading = true;
+  onMount(async () => {
+    // The calendar store is filled by the live `calendar` channel, which can take a while to push after the page
+    // opens: ask for it now when it is still empty (the kernel answers in well under a second).
+    if (!$planner) {
+      ctx.rpc('dashboard.calendar', {}, () => ctx.fetchJson('/api/dashboard/calendar'))
+        .then((fresh: any) => { if (fresh && !$planner) planner.set(fresh); })
+        .catch(() => { /* the live channel still fills it */ });
+    }
+    try { plan = await ctx.rpc('agendaBrain.today', {}, () => ctx.fetchJson('/api/dashboard/agenda-today')); } catch { plan = null; }
+    planLoading = false;
+  });
+
+  function dayOffset(n: number): string {
+    const d = new Date(todayStr + 'T12:00:00Z');
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().split('T')[0];
+  }
+  const DOW = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'];
+  function dayLabel(date: string): string {
+    if (date === todayStr) return 'Hoy';
+    if (date === dayOffset(1)) return 'Mañana';
+    const d = new Date(date + 'T12:00:00Z');
+    return `${DOW[d.getUTCDay()]} ${d.getUTCDate()}/${d.getUTCMonth() + 1}`;
+  }
+  /** The plan's reasons come in English from the agenda brain. */
+  function why(s: string): string {
+    return String(s ?? '')
+      .replace(/(\d+)d overdue/g, 'vencida hace $1 d')
+      .replace(/due today/g, 'vence hoy')
+      .replace(/due tomorrow/g, 'vence mañana')
+      .replace(/due in (\d+)d/g, 'vence en $1 d')
+      .replace(/high priority/g, 'prioridad alta')
+      .replace(/urgent/g, 'urgente')
+      .replace(/not urgent/g, 'sin apuro');
+  }
+
+  $: upcoming = cal ? buildUpcoming(cal.days, importantOnly) : [];
+  function buildUpcoming(days: any, important: boolean) {
+    const out: Array<{ date: string; ev: any }> = [];
+    for (let i = 0; i < 7; i++) {
+      const date = dayOffset(i);
+      for (const ev of visibleEvents(days?.[date] ?? [], important)) out.push({ date, ev });
+    }
+    return out;
+  }
+  $: importantList = cal ? buildImportant(cal.days) : [];
+  function buildImportant(days: any) {
+    const out: Array<{ date: string; ev: any }> = [];
+    for (const [date, list] of Object.entries(days ?? {})) {
+      for (const ev of (list as any[]) ?? []) if (isImportant(ev)) out.push({ date, ev });
+    }
+    return out.sort((a, b) => a.date.localeCompare(b.date));
+  }
+
   function openDayModal(date: string) {
     // Open for any in-range day so items can be added even to empty days.
     selectedDay = date;
@@ -290,66 +350,55 @@
   }
 </script>
 
-<ViewHeader title="Planner" sub="Your tasks, reminders and events" />
-<TodayPanel {ctx} />
+<div class="pl-page">
+<ViewHeader title="Agenda" sub="Tu calendario arriba; abajo, lo de hoy, lo que viene y lo importante" />
 
 {#if !cal}
-  <div class="loading-view">Loading planner data...</div>
+  <div class="pl-loading" role="status" aria-live="polite">
+    <span class="pl-spin" aria-hidden="true"></span><span>Cargando la agenda…</span>
+  </div>
+  <div class="pl-skel-board" aria-hidden="true">
+    {#each Array(7) as _, r}
+      <div class="pl-skel-row">{#each Array(26) as _, c}<span class="pl-skel-cell" style="--i:{(r + c) % 12}"></span>{/each}</div>
+    {/each}
+  </div>
+  <div class="pl-lists" aria-hidden="true">
+    {#each Array(3) as _}
+      <div class="pl-list">{#each Array(6) as _, i}<span class="pl-skel-line" style="--i:{i}; width:{90 - (i % 3) * 18}%"></span>{/each}</div>
+    {/each}
+  </div>
 {:else if !gridData}
   <Panel cls="anim"><Empty message="Timeline data not available." /></Panel>
 {:else}
-  <!-- Legend + filter -->
+  <!-- One bar: what the range holds (the counters double as the legend), the next item, the view toggles -->
   <div class="pl-bar">
     <div class="pl-legend">
       {#each GROUP_ORDER as t}
-        <div class="pl-legend-item">
+        <div class="pl-sum-item" title={TYPE_LABEL[t]}>
           <span class="pl-ic" style="color:{TL_COLORS[t]}">{@html ICON[t]}</span>
-          {TYPE_LABEL[t]}
+          <span class="pl-sum-n">{summary?.counts[t] ?? 0}</span>
+          <span class="pl-sum-l">{TYPE_ES[t]}</span>
         </div>
       {/each}
-      <div class="pl-legend-sep"></div>
-      <div class="pl-legend-item">
-        <span class="pl-star">★</span> Importante
-      </div>
+      <div class="pl-legend-item"><span class="pl-star">★</span> Importante</div>
     </div>
+    {#if summary?.next}
+      <div class="pl-sum-next">
+        <span class="pl-sum-next-lbl">Próximo</span>
+        <span class="pl-ic" style="color:{summary.next.ev.color ?? TL_COLORS[summary.next.ev.type]}">{@html ICON[summary.next.ev.type]}</span>
+        <span class="pl-sum-next-title">{summary.next.ev.title}</span>
+        <span class="pl-sum-next-cd">{summary.countdown}</span>
+      </div>
+    {/if}
     <div class="pl-actions">
-      <button
-        class="pl-filter {expanded ? 'active' : ''}"
-        on:click={() => (expanded = !expanded)}
-        title="Toggle compact / expanded view (with titles)"
-      >
+      <button class="pl-filter {expanded ? 'active' : ''}" on:click={() => (expanded = !expanded)} title="Compacto o con títulos">
         {expanded ? '▤ Ampliado' : '▦ Compacto'}
       </button>
-      <button
-        class="pl-filter {importantOnly ? 'active' : ''}"
-        on:click={() => (importantOnly = !importantOnly)}
-        title="Show only important tasks (high/urgent)"
-      >
+      <button class="pl-filter {importantOnly ? 'active' : ''}" on:click={() => (importantOnly = !importantOnly)} title="Solo tareas importantes (alta o urgente)">
         <span class="pl-filter-star">{importantOnly ? '★' : '☆'}</span> Solo importantes
       </button>
     </div>
   </div>
-
-  <!-- Summary strip -->
-  {#if summary}
-    <div class="pl-summary">
-      {#each GROUP_ORDER as t}
-        <div class="pl-sum-item">
-          <span class="pl-ic" style="color:{TL_COLORS[t]}">{@html ICON[t]}</span>
-          <span class="pl-sum-n">{summary.counts[t]}</span>
-          <span class="pl-sum-l">{TYPE_LABEL[t]}{summary.counts[t] === 1 ? '' : 's'}</span>
-        </div>
-      {/each}
-      {#if summary.next}
-        <div class="pl-sum-next">
-          <span class="pl-sum-next-lbl">Próximo</span>
-          <span class="pl-ic" style="color:{summary.next.ev.color ?? TL_COLORS[summary.next.ev.type]}">{@html ICON[summary.next.ev.type]}</span>
-          <span class="pl-sum-next-title">{summary.next.ev.title}</span>
-          <span class="pl-sum-next-cd">{summary.countdown}</span>
-        </div>
-      {/if}
-    </div>
-  {/if}
 
   <!-- Calendar board -->
   <div class="pl-board {expanded ? 'expanded' : ''}">
@@ -378,7 +427,7 @@
             {@const cls = ['pl-cell', dd.outside ? 'outside' : '', isToday ? 'today' : '', events.length ? 'has' : '', (dd.dow === 0 || dd.dow === 6) ? 'weekend' : '', dragOverDay === dd.date ? 'dragover' : '', (weekOfToday >= 0 && Math.floor(i / 7) === weekOfToday) ? 'thisweek' : ''].filter(Boolean).join(' ')}
             <div
               class={cls}
-              style="--d:{Math.floor(i / 7) * 20}ms"
+              style="--d:{Math.floor(i / 7) * 4}ms"
               title={events.length ? dayTooltip(events) : ''}
               on:click={() => !dd.outside && openDayModal(dd.date)}
               role="button"
@@ -391,7 +440,7 @@
               <div class="pl-cell-card">
                 <div class="pl-cell-top">
                   <span class="pl-num">{dd.day}</span>
-                  {#if isToday}<span class="pl-today-tag">TODAY</span>{/if}
+                  {#if isToday}<span class="pl-today-tag">HOY</span>{/if}
                 </div>
                 {#if events.length}
                   {#if expanded}
@@ -436,7 +485,55 @@
       </div>
     </div>
   </div>
+
+  <div class="pl-lists">
+    <section class="pl-list">
+      <h3>Hoy y vencido {#if plan?.counts}<small>{plan.counts.overdue} vencidas · {plan.counts.dueToday} hoy</small>{/if}</h3>
+      <ul>
+        {#if planLoading}
+          {#each Array(5) as _, i}<li class="pl-skel-li" aria-hidden="true"><span class="pl-skel-line" style="--i:{i}; width:{88 - (i % 3) * 16}%"></span></li>{/each}
+        {/if}
+        {#each plan?.items ?? [] as it}
+          <li><button on:click={() => openDayModal(dayOffset(Math.max(0, it.daysUntilDue ?? 0)))}>
+            <span class="pl-li-ic" style="color:{TL_COLORS[it.type ?? 'task']}">{@html ICON[it.type ?? 'task']}</span>
+            <span class="pl-li-txt"><span class="pl-li-t">{it.title}</span><small class:late={(it.daysUntilDue ?? 0) < 0}>{why(it.why)}</small></span>
+          </button></li>
+        {:else}
+          {#if !planLoading}<li class="pl-empty">Nada para hoy.</li>{/if}
+        {/each}
+      </ul>
+    </section>
+    <section class="pl-list">
+      <h3>Próximos 7 días <small>{upcoming.length}</small></h3>
+      <ul>
+        {#each upcoming as u}
+          <li><button on:click={() => openDayModal(u.date)}>
+            <span class="pl-li-day">{dayLabel(u.date)}</span>
+            <span class="pl-li-ic" style="color:{u.ev.color ?? TL_COLORS[u.ev.type]}">{@html ICON[u.ev.type]}</span>
+            <span class="pl-li-txt"><span class="pl-li-t">{u.ev.title}</span>{#if u.ev.time && !String(u.ev.time).startsWith('00:00')}<small>{String(u.ev.time).slice(0, 5)}</small>{/if}</span>
+          </button></li>
+        {:else}
+          <li class="pl-empty">Nada en la semana.</li>
+        {/each}
+      </ul>
+    </section>
+    <section class="pl-list">
+      <h3>Importantes <small>{importantList.length}</small></h3>
+      <ul>
+        {#each importantList as u}
+          <li><button on:click={() => openDayModal(u.date)}>
+            <span class="pl-li-day" class:late={u.date < todayStr}>{dayLabel(u.date)}</span>
+            <span class="pl-star">★</span>
+            <span class="pl-li-txt"><span class="pl-li-t">{u.ev.title}</span></span>
+          </button></li>
+        {:else}
+          <li class="pl-empty">Ninguna tarea con prioridad alta o urgente.</li>
+        {/each}
+      </ul>
+    </section>
+  </div>
 {/if}
+</div>
 
 <DayModal
   open={modalOpen}
@@ -499,17 +596,65 @@
   }
   .pl-filter-star { font-size: 13px; line-height: 1; }
 
+  /* ── The whole page fits the screen: calendar on top, the lists take what is left ── */
+  .pl-page { display: flex; flex-direction: column; gap: 10px; height: calc(100vh - 118px); min-height: 620px; }
+  .pl-page > :global(*) { flex: none; }
+  .pl-page .pl-bar { margin: 0; flex-wrap: wrap; row-gap: 6px; }
+  .pl-page .pl-legend { flex-wrap: wrap; gap: 6px; }
+  .pl-page .pl-sum-item { padding: 4px 10px; }
+  .pl-page .pl-sum-next { margin-left: auto; }
+  .pl-lists { flex: 1 1 auto !important; min-height: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .pl-list { display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-1); padding: 10px 10px 6px; }
+  .pl-list h3 { margin: 0 0 6px; font: 700 13px var(--font-display); color: var(--text-1); display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .pl-list h3 small { font: 500 11px var(--font-mono); color: var(--gold); }
+  .pl-list ul { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; min-height: 0; }
+  .pl-list li button { width: 100%; display: flex; align-items: flex-start; gap: 8px; padding: 6px 6px; border: 0; border-radius: 8px; background: none; color: var(--text-1); font: inherit; text-align: left; cursor: pointer; }
+  .pl-list li button:hover { background: var(--surface-2); }
+  .pl-li-ic { width: 14px; height: 14px; flex: none; display: inline-flex; margin-top: 2px; }
+  .pl-li-ic :global(svg) { width: 100%; height: 100%; }
+  .pl-li-day { flex: none; width: 70px; white-space: nowrap; font: 600 11px var(--font-mono); color: var(--text-2); margin-top: 2px; }
+  .pl-li-day.late, .pl-li-txt small.late { color: #fb7185; }
+  .pl-li-txt { display: flex; flex-direction: column; min-width: 0; }
+  .pl-li-t { font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .pl-li-txt small { font-size: 11px; color: var(--text-3); }
+  .pl-empty { padding: 10px 6px; font-size: 12.5px; color: var(--text-3); }
+
+  /* ── Loader: a spinner line plus a shimmering outline of the calendar and the lists ── */
+  .pl-loading { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-2); }
+  .pl-spin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--gold) 25%, transparent); border-top-color: var(--gold); animation: plSpin .8s linear infinite; }
+  @keyframes plSpin { to { transform: rotate(360deg); } }
+  .pl-skel-board { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-1); padding: 30px 12px 10px 52px; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+  .pl-skel-row { display: flex; gap: 4px; }
+  .pl-skel-cell { flex: none; width: 46px; height: 34px; border-radius: 8px; }
+  .pl-skel-cell, .pl-skel-line {
+    background: linear-gradient(90deg, var(--surface-2) 0%, color-mix(in srgb, var(--gold) 10%, var(--surface-3)) 50%, var(--surface-2) 100%);
+    background-size: 300% 100%;
+    animation: plShimmer 1.4s ease-in-out infinite;
+    animation-delay: calc(var(--i, 0) * 60ms);
+  }
+  .pl-skel-line { display: block; height: 12px; border-radius: 6px; margin: 10px 6px; }
+  .pl-skel-li { list-style: none; }
+  @keyframes plShimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .pl-spin, .pl-skel-cell, .pl-skel-line { animation: none; }
+  }
+  @media (max-width: 1100px) {
+    .pl-page { height: auto; }
+    .pl-lists { grid-template-columns: 1fr; }
+    .pl-list ul { max-height: 260px; }
+  }
+
   /* ── Board container ─────────────────────────────────────────── */
   .pl-board {
-    --cw: 52px;
-    --ch: 58px;
+    --cw: 50px;
+    --ch: 38px;
     position: relative;
     border: 1px solid var(--border);
     border-radius: var(--radius);
     background:
       radial-gradient(120% 80% at 0% 0%, rgba(212, 168, 75, .05), transparent 55%),
       linear-gradient(180deg, var(--surface-1), var(--bg));
-    padding: 14px 14px 16px;
+    padding: 8px 12px 10px;
     overflow: hidden;
     box-shadow: 0 1px 0 rgba(255, 255, 255, .02) inset, 0 12px 30px -18px rgba(0, 0, 0, .6);
     animation: plRise .4s ease both;
@@ -520,7 +665,7 @@
 
   /* ── Sticky day-of-week rail ─────────────────────────────────── */
   .pl-rowlabels { display: flex; flex-direction: column; flex-shrink: 0; width: 40px; }
-  .pl-monthbar { height: 30px; }
+  .pl-monthbar { height: 22px; }
   .pl-rowlbl {
     height: var(--ch);
     transition: height .22s ease;
@@ -542,7 +687,7 @@
   .pl-scroll::-webkit-scrollbar-track { background: transparent; }
 
   /* ── Month headers ───────────────────────────────────────────── */
-  .pl-monthrow { display: flex; height: 30px; }
+  .pl-monthrow { display: flex; height: 22px; }
   .pl-monthlbl {
     display: flex;
     align-items: center;
@@ -567,7 +712,7 @@
     padding: 3px;
     outline: none;
     transition: width .22s ease, height .22s ease;
-    animation: plCell .32s ease both;
+    animation: plCell .18s ease-out both;
     animation-delay: var(--d);
   }
   @keyframes plCell { from { opacity: 0; transform: scale(.9); } to { opacity: 1; transform: none; } }
