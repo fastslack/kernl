@@ -128,6 +128,13 @@ Use `/arch` to discover modules, tools, API routes, and project structure.
 | Neo4j Browser | **17474** | `http://localhost:17474` |
 | Neo4j Bolt | **17687** | `bolt://localhost:17687` |
 | Dashboard/MCP HTTP | **3086** | `http://localhost:3086` |
+
+**Restarting the kernel: one door only.** Restart or recreate the live kernel with `scripts/kernl.sh restart` /
+`scripts/kernl.sh recreate kernel` (or `npm run reload:local`, which ends there) — never `docker restart` or a bare
+`docker compose up --force-recreate kernel`. Several sessions share the stack: the script takes a lock so a second
+restart waits for the first, pauses the active offices so no new agent run starts, lets the running ones finish (up
+to `KERNL_DRAIN_TIMEOUT`, 600 s), restarts, and resumes exactly the offices it paused. `--no-drain` only for an
+emergency; `scripts/kernl.sh resume-offices` if a drain was cut short.
 </docker-compose>
 
 <scripts>
