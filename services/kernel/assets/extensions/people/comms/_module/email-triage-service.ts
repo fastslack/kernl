@@ -151,9 +151,11 @@ export class EmailTriageService {
   }
 
   /** One batch of calendar titles from mail checked/translated into the agenda language, on the mail model. */
-  async translateAgendaTitles(limit = 40): Promise<number> {
+  async translateAgendaTitles(limit = 25): Promise<number> {
+    // Reasoning models (the mail model is one) think before answering: with 4 096 tokens the thinking ate the whole
+    // budget and the list never came (07/11). Same headroom as triage.
     return translateAgendaTitles(this.db, (system, user) =>
-      mailLlmChat(this.db, this.config, { system, user, caller: "email-agenda-translate", maxTokens: 4096 }), this.agendaLanguage(), limit);
+      mailLlmChat(this.db, this.config, { system, user, caller: "email-agenda-translate", maxTokens: 12_000 }), this.agendaLanguage(), limit);
   }
 
   /** LLM call on the mail model (see mail-llm.ts), else the default chain. */
