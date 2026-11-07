@@ -85,6 +85,26 @@ describe("agent_runs retention", () => {
     expect(left.sort()).toEqual([recentPoll, oldLlmRun, recentFail].sort());
   });
 
+  it("drops the step trace of old LLM runs but keeps the runs and recent traces", async () => {
+    const writer = service.createAgent({ name: "Writer" });
+    const oldRun = insertRun(writer.id, 45);
+    const newRun = insertRun(writer.id, 3);
+    const step = (runId: string, ageDays: number) =>
+      db.prepare(
+        `INSERT INTO agent_run_steps (id, run_id, step_number, type, content, tool_name, tool_input, tool_output, tokens, created_at)
+         VALUES (?, ?, 1, 'tool_call', '', 'Bash', '{}', 'lots of output', 0, ?)`,
+      ).run(crypto.randomUUID(), runId, new Date(Date.now() - ageDays * DAY_MS).toISOString());
+    step(oldRun, 45);
+    step(newRun, 3);
+
+    await svc.run("manual");
+
+    const runs = (db.prepare("SELECT id FROM agent_runs").all() as Array<{ id: string }>).map((r) => r.id);
+    expect(runs.sort()).toEqual([oldRun, newRun].sort());
+    const steps = (db.prepare("SELECT run_id FROM agent_run_steps").all() as Array<{ run_id: string }>).map((r) => r.run_id);
+    expect(steps).toEqual([newRun]);
+  });
+
   it("does not embed the goal of builtin agents' runs", () => {
     const calls: string[] = [];
     (service as unknown as { memory: { scheduleEmbed: (...a: unknown[]) => void } }).memory.scheduleEmbed =

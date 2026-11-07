@@ -30,4 +30,14 @@ export const toolMemoryMigrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_tool_memory_owner ON tool_memory(owner_agent_id, created_at DESC);
     `,
   },
+  {
+    // Outputs are kept as a 2 KB preview from now on (see clipOutput); cut the
+    // ones stored whole before that. Same text clipOutput would produce.
+    version: 2,
+    sql: `
+      UPDATE tool_memory
+         SET output_json = substr(output_json, 1, 2048) || '… [truncated: ' || length(output_json) || ' chars]'
+       WHERE length(output_json) > 2048;
+    `,
+  },
 ];

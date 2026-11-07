@@ -49,4 +49,15 @@ export const storageMigrations: Migration[] = [
     version: 2,
     sql: `ALTER TABLE retention_settings ADD COLUMN cap INTEGER;`,
   },
+  {
+    // Graph limits (graph.ts): instance-wide max_gb and txlog, and per budget
+    // "<id>.max_items", "<id>.excluded" (JSON list) and "<id>.last_apply".
+    version: 3,
+    sql: `
+      CREATE TABLE IF NOT EXISTS graph_settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `,
+  },
 ];

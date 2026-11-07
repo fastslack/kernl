@@ -17,6 +17,7 @@
 import { cinemaCatalogCap } from "./catalog-cap.js";
 import { type SqliteDb, type PatchColumn, newId, isoNow, buildPatch, jsonArray } from "@kernl/extension-sdk";
 import { rebuildWorks, type RebuildWorksResult } from "./works.js";
+import { isGraphFrozen } from "./graph-state.js";
 import type {
   ArchiveScrapeRow,
   CinemaCanonical,
@@ -556,6 +557,11 @@ function posterUrlFor(identifier: string): string {
 export class CinemaService {
   constructor(private db: SqliteDb) {}
 
+  /** Over the graph size ceiling: write nothing new to the graph. */
+  graphFrozen(): boolean {
+    return isGraphFrozen(this.db);
+  }
+
   /** Titles the ingester may hold before it parks itself; 0 = no limit. */
   catalogCap(): number {
     return cinemaCatalogCap(this.db);
@@ -811,6 +817,7 @@ export class CinemaService {
         SELECT identifier FROM cinema_titles
         WHERE deleted_at IS NULL AND has_torrent = 1
           AND (embedded_at IS NULL OR embedded_model <> ? OR embedded_dim <> ?)
+          AND identifier NOT IN (SELECT identifier FROM cinema_graph_out)
         ORDER BY downloads DESC
         LIMIT ?
       `)

@@ -89,7 +89,7 @@ export class ToolMemoryService {
           args.tool,
           buf,
           JSON.stringify(args.input ?? {}),
-          JSON.stringify(args.output ?? {}),
+          clipOutput(JSON.stringify(args.output ?? {})),
           args.receiptId ?? null,
           args.succeeded === false ? 0 : 1,
           args.ownerAgentId ?? "",
@@ -206,3 +206,16 @@ function blobToFloatArray(blob: Buffer | Uint8Array): number[] {
   return out;
 }
 
+/**
+ * How much of a call's output is kept. The pre-call hint only reads tool,
+ * similarity and success; `kernel_memory_search` shows the output as a
+ * reminder of what came back, and a preview does that. Full outputs reached
+ * 62 KB a call (the agent directory) and made this table 1.2 GB.
+ */
+export const OUTPUT_PREVIEW_CHARS = 2048;
+
+/** The output as stored: whole when short, a preview with its length when not. */
+export function clipOutput(json: string): string {
+  if (json.length <= OUTPUT_PREVIEW_CHARS) return json;
+  return `${json.slice(0, OUTPUT_PREVIEW_CHARS)}… [truncated: ${json.length} chars]`;
+}
