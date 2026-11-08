@@ -7,6 +7,81 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-11-08
+
+### Actualizar desde 0.4.5
+
+- **Las migraciones corren al arrancar**: agents 58–59, projects 9–13, storage 3
+  y tool-memory 2, más versiones nuevas en las extensiones de mail, Google sync,
+  Cine y GitHub. No hay que hacer nada a mano.
+- **El menú Trabajo ahora es una sola bandeja.** La Bandeja reemplaza en el menú
+  a Resumen, Tareas, Avisos y Aprobaciones. Esas páginas siguen abriéndose desde
+  un link: Aprobaciones queda como editor completo y `/work` lleva a la Bandeja.
+- **Las oficinas nuevas usan claude-sonnet-5-5.** claude-sonnet-4-5 ya no se
+  sirve, así que las oficinas y cadenas que lo nombraban caían a su respaldo.
+- **Reiniciá el stack de Docker con `scripts/kernl.sh`.** Pausa las oficinas,
+  deja terminar a los agentes que están corriendo, reinicia y las reanuda.
+
+### Agregado
+
+- **Bandeja.** Todo lo que espera algo de vos en una lista, primero lo más
+  urgente: borradores para aprobar, preguntas de los agentes, tareas y avisos
+  vencidos, con las acciones de cada uno al lado.
+- **Cuentas propias de cada proyecto.** Cloudflare, Datadog, AWS, una identidad
+  de git, una cuenta de Google vinculada con tu consentimiento y variables de
+  deploy propias, cada una probada antes de guardarse y entregada solo a los
+  deploys de ese proyecto.
+- **Aprobaciones con opciones.** Un borrador puede ofrecer una elección antes de
+  aprobarlo, un envío fallido se puede descartar y cualquier borrador o envío
+  fallido se le puede pasar a una oficina para que lo resuelva.
+- **Varias suscripciones de Claude Code.** Kernl pasa a la siguiente cuenta
+  cuando una llega a su límite, y el indicador de modelos en vivo muestra el
+  uso de 5 horas, semanal y por modelo de cada cuenta.
+- **La agenda lee mejor tus mails.** Las fechas de pasajes y reservas adjuntos
+  llegan al calendario, lo mismo mencionado en varios mails queda como una sola
+  cosa y los títulos salen en tu idioma.
+- **Techos de almacenamiento para el grafo.** Un límite de tamaño para la base
+  de grafo y presupuestos por módulo (primero Cine), más retención para la
+  memoria de herramientas y las corridas viejas de agentes.
+- **Los agentes eligen skills por su significado** y pueden correr solo con su
+  propia cadena de modelos, aprendiendo de sus corridas un modelo más barato
+  por tipo de carta.
+- **Etiqueta automática de spam** para IMAP y Gmail, conservadora y solo para
+  revisar.
+
+### Cambiado
+
+- **Pantallas que entran en una pantalla.** Resumen de IA, Agentes, Evoluciones,
+  Rangos y Oficinas, Proyectos y la Agenda muestran todo sin scroll.
+- **Las oficinas gastan menos tokens.** Una ficha por ticket, cartas que esperan
+  novedades, lecciones largas enfocadas en la tarea y un solo pedido de seguir
+  cuando un modelo devuelve una respuesta vacía.
+- **Un modelo retirado sale de la cadena.** Después de tres fallas, un modelo
+  que su proveedor dejó de servir pasa al final de la cadena y aparece en la
+  lista de descartados con su nombre.
+- **Amigos muestra lo que hace Tor**: el circuito que se arma y el camino que
+  recorre el pedido de un amigo.
+- **Íconos del encabezado de una misma familia**, y el botón de mail abre lo
+  que necesita respuesta en todas las cuentas.
+
+### Corregido
+
+- **Los límites de uso de Claude ya no terminan las corridas como completas.**
+  Una corrida cortada por el límite conserva su carta, y una corrida programada
+  vuelve a correr cuando el límite se levanta.
+- **Los modelos que razonan ya no responden vacío** después de un resultado
+  largo de una herramienta: cada turno de un agente tiene hasta 16k tokens de
+  salida, en vez de los 4k del adaptador.
+- **Sanitizador de HTML de mails** actualizado a sanitize-html 2.18.1, que
+  cierra seis formas publicadas de saltarlo.
+- **Las páginas de extensiones se actualizan solas**: un bundle nuevo llega al
+  navegador sin recargar a la fuerza.
+- **Una oficina que atiende varios proyectos** archiva cada borrador en el
+  proyecto del que trata, y las respuestas vuelven al proyecto de la corrida
+  que preguntó.
+- **Las reconstrucciones mantienen los overlays de compose del stack**, así que
+  ya no se pierden los montajes del host.
+
 ## [0.4.5] - 2026-10-16
 
 ### Actualizar desde 0.4.4

@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-11-08
+
+### Upgrading from 0.4.5
+
+- **Migrations run on start**: agents 58–59, projects 9–13, storage 3 and
+  tool-memory 2, plus new versions in the comms, Google sync, Cinema and GitHub
+  extensions. Nothing to do by hand.
+- **The Work menu is now one inbox.** Bandeja replaces Overview, Tasks,
+  Reminders and Approvals in the menu. Those pages still open from a link:
+  Approvals stays as the full editor and `/work` goes to the Bandeja.
+- **New offices default to claude-sonnet-5-5.** claude-sonnet-4-5 is no longer
+  served, so offices and chains that named it were falling through to their
+  fallback.
+- **Restart the Docker stack with `scripts/kernl.sh`.** It pauses the offices,
+  lets running agents finish, restarts and resumes them.
+
+### Added
+
+- **Bandeja.** Everything that waits on you in one list, most urgent first:
+  drafts to approve, agents' questions, tasks and due reminders, with each
+  item's actions beside it.
+- **A project's own accounts.** Cloudflare, Datadog, AWS, a git identity, a
+  Google account linked by consent and any custom deploy variables, each tested
+  before it is saved and handed only to that project's deploys.
+- **Approvals that branch.** A draft can offer a choice before you approve it,
+  a failed send can be discarded, and any draft or failed item can be handed to
+  an office to sort out.
+- **Several Claude Code subscriptions.** Kernl rotates to the next account when
+  one hits its usage limit, and the Live models pill shows each account's
+  5-hour, weekly and per-model usage.
+- **The agenda reads your mail better.** Dates inside attached tickets and
+  bookings reach the calendar, the same thing mentioned in several mails stays
+  one item, and titles come in your language.
+- **Storage ceilings for the graph.** A size limit for the graph database and
+  per-module budgets (Cinema first), plus retention for tool memory and old
+  agent runs.
+- **Agents pick skills by meaning** and can run on their own model chain only,
+  learning a cheaper model per kind of letter from their own runs.
+- **Spam auto-label** for IMAP and Gmail, conservative and review-only.
+
+### Changed
+
+- **Screens that fit one screen.** AI Overview, Agents, Evolutions, Ranks and
+  Offices, Projects and the Agenda show their content without scrolling.
+- **Offices spend fewer tokens.** A dossier per ticket, letters that wait for
+  news, long lessons focused on the task, and one nudge to continue when a model
+  returns an empty reply.
+- **A retired model leaves the chain.** After three failures a model its
+  provider stopped serving moves to the end of the chain and shows in the
+  discarded list under its own name.
+- **Friends shows what Tor is doing**: the circuit building and the path a
+  friend's request travels.
+- **Header icons in one family**, and the mail button opens what needs an
+  answer across every account.
+
+### Fixed
+
+- **Claude usage limits no longer end runs as completed.** A run cut by the
+  limit keeps its letter, and a scheduled run goes again when the limit lifts.
+- **Reasoning models no longer answer with nothing** after a long tool result:
+  an agent's turn now gets up to 16k output tokens instead of the adapter's 4k.
+- **Email HTML sanitizer** updated to sanitize-html 2.18.1, closing six
+  published bypasses.
+- **Extension pages update in place**: a new bundle reaches the browser without
+  a hard reload.
+- **An office serving several projects** files each draft under the project it
+  is about, and answers resume in the asking run's project.
+- **Rebuilds keep the stack's compose overlays**, so host mounts are no longer
+  dropped.
+
 ## [0.4.5] - 2026-10-16
 
 ### Upgrading from 0.4.4
