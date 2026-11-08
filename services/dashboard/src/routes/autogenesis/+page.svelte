@@ -1,12 +1,19 @@
 <script lang="ts">
+  /*
+    /autogenesis — how each agent's instructions evolve, on one screen.
+
+    Left, the agents that can evolve (LLM agents with a prompt), each with its
+    office color and a success bar from its run stats; sort by most failures to
+    find the ones worth improving. Right, the picked agent: who it is (and a
+    link to it in the 3D), its prompt lineage (RSPL) with diff, activate and
+    restore, the diff itself, and its evolution cycles (SEPL) with accept and
+    reject. Only the lists scroll, inside their cards.
+  */
   import { onMount } from 'svelte';
   import { toast, confirm as confirmDialog } from '$shared/feedback';
-  import ViewHeader from '$shared/components/ViewHeader.svelte';
-  import Panel from '$shared/components/Panel.svelte';
-  import KpiCard from '$shared/components/KpiCard.svelte';
-  import Empty from '$shared/components/Empty.svelte';
-  import Badge from '$shared/components/Badge.svelte';
   import { timeAgo } from '$shared/utils';
+  import { locale } from '$lib/i18n';
+  import { PALETTE } from '$lib/components/bench/model.js';
   import {
     listPromptVersions,
     diffPromptVersions,
@@ -56,12 +63,65 @@
   }
   interface DiffLine { kind: 'same' | 'added' | 'removed'; text: string }
 
+  const L = {
+    es: {
+      title: 'Evoluciones', sub: 'Cómo mejoran las instrucciones de cada agente: versiones, comparaciones y ciclos de mejora',
+      kAgents: 'agentes que pueden evolucionar', kFailing: 'con corridas fallidas', kVersions: 'versiones de {a}', kPending: 'propuestas por revisar', kAccepted: 'mejoras aceptadas',
+      agents: 'Agentes', filter: 'Buscar agente u oficina…', sortFail: 'Más fallas', sortName: 'Nombre', sortOffice: 'Oficina', noMatch: 'Ningún agente coincide.',
+      noRuns: 'sin corridas', okFail: '{ok} bien · {f} con error', loadingAgents: 'Cargando agentes…',
+      pick: 'Elegí un agente de la lista.', provider: 'Proveedor', model: 'Modelo', office: 'Oficina', version: 'Versión activa', see3d: 'Ver en el 3D',
+      reflect: 'Ciclo de reflexión', reflecting: 'Reflexionando…',
+      reflectHint: 'Corre un ciclo completo (reflexionar → elegir → mejorar → evaluar) en modo prueba: propone, pero no activa nada solo.',
+      lineage: 'Linaje de instrucciones', lineageSub: 'cada cambio queda como una versión', loading: 'Cargando…',
+      noVersions: 'No hay historial de instrucciones guardado para este agente. Al editar su prompt o aceptar un ciclo de mejora se guarda una versión, y desde ahí se puede comparar y volver atrás.',
+      src: { reflection: 'reflexión', restore: 'restaurada', initial: 'inicial', manual: 'manual' } as Record<string, string>,
+      asRight: 'Comparar como versión nueva (derecha)', asLeft: 'Comparar como versión vieja (izquierda)', activate: 'activar', restore: 'restaurar', active: 'activa',
+      restoreTitle: '¿Volver las instrucciones del agente a la versión {v}?', restoreBody: 'No se pisa nada: se crea una versión nueva con el contenido de esta y la actual queda en el historial.', restoreOk: 'Restaurar',
+      restoreHint: 'Crea una versión nueva con el contenido de v{v}',
+      diff: 'Comparación v{a} → v{b}', comparing: 'Comparando…', noDiff: 'Las dos versiones son iguales.', diffHint: 'Elegí dos versiones con ◀ y ▶ para compararlas.',
+      cycles: 'Ciclos de mejora', cyclesSub: 'propuestas del agente para sus propias instrucciones',
+      noCycles: 'Todavía no corrió ningún ciclo de mejora para este agente. Un ciclo lee sus corridas fallidas, propone instrucciones mejores y las evalúa contra las actuales; nada se activa sin tu OK. Tocá «Ciclo de reflexión» para probar uno: hace falta que el agente tenga fallas recientes de las que aprender.',
+      st: { accepted: 'aceptada', rejected: 'rechazada', failed: 'fallida', rolled_back: 'revertida', proposed: 'propuesta' } as Record<string, string>,
+      hypothesis: 'Hipótesis', judge: 'Juez', error: 'Error', seeProposal: 'Ver la propuesta ({n} caracteres)', accept: 'Aceptar y activar v{v}', reject: 'Rechazar',
+      base: 'actual', cand: 'propuesta', notStarted: 'No se inició ningún ciclo de mejora', notEnough: 'Todavía no hay suficientes fallas de las que aprender.',
+      errLoad: 'No se pudo cargar', errDetail: 'No se pudo cargar el agente', errDiff: 'No se pudo comparar', errRestore: 'No se pudo restaurar', errActivate: 'No se pudo activar',
+      errReflect: 'Falló el ciclo de reflexión', errAccept: 'No se pudo aceptar', errReject: 'No se pudo rechazar', noOffice: 'sin oficina',
+    },
+    en: {
+      title: 'Evolutions', sub: "How each agent's instructions improve: versions, comparisons and improvement cycles",
+      kAgents: 'agents that can evolve', kFailing: 'with failed runs', kVersions: 'versions of {a}', kPending: 'proposals to review', kAccepted: 'accepted improvements',
+      agents: 'Agents', filter: 'Search agent or office…', sortFail: 'Most failures', sortName: 'Name', sortOffice: 'Office', noMatch: 'No agent matches.',
+      noRuns: 'no runs', okFail: '{ok} ok · {f} failed', loadingAgents: 'Loading agents…',
+      pick: 'Pick an agent from the list.', provider: 'Provider', model: 'Model', office: 'Office', version: 'Active version', see3d: 'Open in the 3D',
+      reflect: 'Reflection cycle', reflecting: 'Reflecting…',
+      reflectHint: 'Runs a full cycle (reflect → select → improve → evaluate) as a dry run: it proposes, it never activates anything on its own.',
+      lineage: 'Instruction lineage', lineageSub: 'every change is kept as a version', loading: 'Loading…',
+      noVersions: 'No instruction history is saved for this agent. Editing its prompt or accepting an improvement cycle saves a version, and from there you can compare and roll back.',
+      src: { reflection: 'reflection', restore: 'restored', initial: 'initial', manual: 'manual' } as Record<string, string>,
+      asRight: 'Compare as the new version (right)', asLeft: 'Compare as the old version (left)', activate: 'activate', restore: 'restore', active: 'active',
+      restoreTitle: "Restore the agent's instructions to version {v}?", restoreBody: 'Nothing is overwritten: a new version is created from this one, and the current one stays in the history.', restoreOk: 'Restore',
+      restoreHint: 'Creates a new version holding the contents of v{v}',
+      diff: 'Comparison v{a} → v{b}', comparing: 'Comparing…', noDiff: 'Both versions are the same.', diffHint: 'Pick two versions with ◀ and ▶ to compare them.',
+      cycles: 'Improvement cycles', cyclesSub: "the agent's proposals for its own instructions",
+      noCycles: 'No improvement cycle has run for this agent yet. A cycle reads its failed runs, proposes better instructions and evaluates them against the current ones; nothing is activated without your OK. Press "Reflection cycle" to try one: the agent needs recent failures to learn from.',
+      st: { accepted: 'accepted', rejected: 'rejected', failed: 'failed', rolled_back: 'rolled back', proposed: 'proposed' } as Record<string, string>,
+      hypothesis: 'Hypothesis', judge: 'Judge', error: 'Error', seeProposal: 'See the proposal ({n} chars)', accept: 'Accept & activate v{v}', reject: 'Reject',
+      base: 'current', cand: 'proposed', notStarted: 'No improvement cycle was started', notEnough: 'There are not enough failures to learn from yet.',
+      errLoad: 'Could not load', errDetail: 'Could not load the agent', errDiff: 'Could not compare', errRestore: 'Restore failed', errActivate: 'Activate failed',
+      errReflect: 'Reflection failed', errAccept: 'Accept failed', errReject: 'Reject failed', noOffice: 'no office',
+    },
+  };
+  $: tx = $locale === 'es' ? L.es : L.en;
+  const fill = (s: string, p: Record<string, unknown>) => s.replace(/\{(\w+)\}/g, (_, k) => String(p[k] ?? ''));
+  const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
   let agents: AgentRow[] = [];
   let flows: Flow[] = [];
   let stats: Record<string, { total_runs: number; completed: number; failed: number; success_rate: number }> = {};
   let loading = true;
   let error = '';
   let filterText = '';
+  let sortBy: 'fail' | 'name' | 'office' = 'fail';
 
   // Selection state
   let selectedAgentId = '';
@@ -90,8 +150,8 @@
         stats: typeof stats;
       };
       // Only LLM agents with an actual prompt can evolve — scripts (builtin
-       // handlers) and empty-prompt rows have nothing for the reflection
-       // loop to rewrite, so they'd clutter the sidebar.
+      // handlers) and empty-prompt rows have nothing for the reflection
+      // loop to rewrite, so they'd clutter the sidebar.
       agents = (graphRes.agents ?? []).filter(a =>
         a.active !== 0
         && !((a.builtin_handler ?? '').trim())
@@ -99,11 +159,13 @@
       );
       flows = graphRes.flows ?? [];
       stats = graphRes.stats ?? {};
+      // First visit: the agent with the most failed runs — the one most worth improving.
       if (!selectedAgentId && agents.length > 0) {
-        await selectAgent(agents[0].id);
+        const first = [...agents].sort((a, b) => (stats[b.id]?.failed ?? 0) - (stats[a.id]?.failed ?? 0))[0];
+        await selectAgent(first.id);
       }
     } catch (e) {
-      error = `Error: ${e instanceof Error ? e.message : String(e)}`;
+      error = `${tx.errLoad}: ${msg(e)}`;
     } finally {
       loading = false;
     }
@@ -131,7 +193,7 @@
         }
       }
     } catch (e) {
-      error = `Load detail failed: ${e instanceof Error ? e.message : String(e)}`;
+      error = `${tx.errDetail}: ${msg(e)}`;
     } finally {
       loadingDetail = false;
     }
@@ -144,7 +206,7 @@
       const res = await diffPromptVersions(selectedAgentId, diffFrom, diffTo) as { lines: DiffLine[] };
       diffLines = res.lines ?? [];
     } catch (e) {
-      error = `Diff failed: ${e instanceof Error ? e.message : String(e)}`;
+      error = `${tx.errDiff}: ${msg(e)}`;
     } finally {
       diffLoading = false;
     }
@@ -153,16 +215,16 @@
   async function doRestore(version: number) {
     if (!selectedAgentId) return;
     if (!(await confirmDialog({
-      title: `Restore the agent's instructions to version ${version}?`,
-      body: 'Nothing is overwritten: a new version is created from this one, and the current one stays in the history.',
-      confirmLabel: 'Restore',
+      title: fill(tx.restoreTitle, { v: version }),
+      body: tx.restoreBody,
+      confirmLabel: tx.restoreOk,
     }))) return;
     busyAction = `restore:${version}`;
     try {
       await restorePromptVersion(selectedAgentId, version);
       await selectAgent(selectedAgentId);
     } catch (e) {
-      error = `Restore failed: ${e instanceof Error ? e.message : String(e)}`;
+      error = `${tx.errRestore}: ${msg(e)}`;
     } finally {
       busyAction = '';
     }
@@ -175,7 +237,7 @@
       await activatePromptVersion(selectedAgentId, version);
       await selectAgent(selectedAgentId);
     } catch (e) {
-      error = `Activate failed: ${e instanceof Error ? e.message : String(e)}`;
+      error = `${tx.errActivate}: ${msg(e)}`;
     } finally {
       busyAction = '';
     }
@@ -187,11 +249,11 @@
     try {
       const res = await runEvolutionCycle(selectedAgentId, { dryRun: true }) as { triggered: boolean; reason?: string };
       if (!res.triggered) {
-        toast.info('No improvement cycle was started', { detail: res.reason ?? 'There are not enough failures to learn from yet.' });
+        toast.info(tx.notStarted, { detail: res.reason ?? tx.notEnough });
       }
       await selectAgent(selectedAgentId);
     } catch (e) {
-      error = `Reflection failed: ${e instanceof Error ? e.message : String(e)}`;
+      error = `${tx.errReflect}: ${msg(e)}`;
     } finally {
       busyAction = '';
     }
@@ -203,7 +265,7 @@
       await acceptEvolution(runId);
       await selectAgent(selectedAgentId);
     } catch (e) {
-      error = `Accept failed: ${e instanceof Error ? e.message : String(e)}`;
+      error = `${tx.errAccept}: ${msg(e)}`;
     } finally {
       busyAction = '';
     }
@@ -215,495 +277,362 @@
       await rejectEvolution(runId);
       await selectAgent(selectedAgentId);
     } catch (e) {
-      error = `Reject failed: ${e instanceof Error ? e.message : String(e)}`;
+      error = `${tx.errReject}: ${msg(e)}`;
     } finally {
       busyAction = '';
     }
   }
 
+  const flowOf = (fid?: string) => flows.find(f => f.id === fid);
   function flowName(fid?: string): string {
-    if (!fid) return '—';
-    return flows.find(f => f.id === fid)?.name ?? '—';
+    return flowOf(fid)?.name ?? tx.noOffice;
   }
+  const flowColor = (fid?: string) => flowOf(fid)?.color || '#94A3B8';
 
-  function sourceBadgeVariant(src: PromptVersion['source']): string {
-    if (src === 'reflection') return 'teal';
-    if (src === 'restore') return 'gold';
-    if (src === 'initial') return 'text-3';
-    return 'blue';
-  }
+  const SRC_HUE: Record<string, string> = { reflection: PALETTE.cyan, restore: PALETTE.gold, initial: '#94A3B8', manual: PALETTE.sky };
+  const ST_HUE: Record<string, string> = { accepted: PALETTE.emerald, rejected: '#F43F5E', failed: '#F43F5E', rolled_back: PALETTE.gold, proposed: PALETTE.violet };
 
-  function sourceLabel(src: PromptVersion['source']): string {
-    if (src === 'reflection') return 'reflexión';
-    if (src === 'restore') return 'restaurado';
-    if (src === 'initial') return 'inicial';
-    return 'manual';
-  }
-
-  function statusBadgeVariant(st: EvolutionRun['status']): string {
-    if (st === 'accepted') return 'teal';
-    if (st === 'rejected') return 'red';
-    if (st === 'failed') return 'red';
-    if (st === 'rolled_back') return 'gold';
-    return 'blue';
-  }
-
-  function statusLabel(st: EvolutionRun['status']): string {
-    if (st === 'accepted') return 'aceptada';
-    if (st === 'rejected') return 'rechazada';
-    if (st === 'failed') return 'fallida';
-    if (st === 'rolled_back') return 'revertida';
-    if (st === 'proposed') return 'propuesta';
-    return st;
-  }
-
+  const fold = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
   $: filtered = filterText
-    ? agents.filter(a =>
-        a.name.toLowerCase().includes(filterText.toLowerCase()) ||
-        flowName(a.flow_id).toLowerCase().includes(filterText.toLowerCase()),
-      )
+    ? agents.filter(a => fold(`${a.name} ${flowName(a.flow_id)}`).includes(fold(filterText)))
     : agents;
+  $: sorted = [...filtered].sort((a, b) => {
+    if (sortBy === 'name') return a.name.localeCompare(b.name);
+    if (sortBy === 'office') return flowName(a.flow_id).localeCompare(flowName(b.flow_id)) || a.name.localeCompare(b.name);
+    return (stats[b.id]?.failed ?? 0) - (stats[a.id]?.failed ?? 0) || a.name.localeCompare(b.name);
+  });
 
   $: selectedAgent = agents.find(a => a.id === selectedAgentId) ?? null;
   $: totalVersions = versions.length;
   $: totalProposed = evolution.filter(e => e.status === 'proposed').length;
   $: totalAccepted = evolution.filter(e => e.status === 'accepted').length;
-  $: evolvedAgents = agents.filter(a => {
-    // A proxy: agents whose active_version > 1 would need a per-agent fetch.
-    // Keep it simple — just show overall evolution count across visible selection.
-    return true;
-  }).length;
+  $: failingAgents = agents.filter(a => (stats[a.id]?.failed ?? 0) > 0).length;
+  $: maxRuns = Math.max(1, ...agents.map(a => stats[a.id]?.total_runs ?? 0));
+  $: selColor = selectedAgent ? flowColor(selectedAgent.flow_id) : PALETTE.violet;
 </script>
 
-<ViewHeader
-  title="Autogenesis"
-  sub="Prompt version lineage and self-evolution · {agents.length} agents · {totalProposed} pending proposals · {totalAccepted} auto-committed"
->
-  <input type="text" class="filter-input" placeholder="Filter agents…" bind:value={filterText} />
-</ViewHeader>
+<div class="ev">
+  <header class="top">
+    <div class="ttl">
+      <h1>{tx.title}</h1>
+      <p>{tx.sub}</p>
+    </div>
+    <div class="kpis">
+      <div class="kpi" style="--c: {PALETTE.violet}"><b class="num">{agents.length}</b><small>{tx.kAgents}</small></div>
+      <button class="kpi" class:on={sortBy === 'fail'} style="--c: {failingAgents ? '#F43F5E' : PALETTE.emerald}" on:click={() => (sortBy = 'fail')}>
+        <b class="num">{failingAgents}</b><small>{tx.kFailing}</small>
+      </button>
+      <div class="kpi" style="--c: {PALETTE.cyan}"><b class="num">{totalVersions}</b><small>{fill(tx.kVersions, { a: selectedAgent?.name ?? '—' })}</small></div>
+      <div class="kpi" class:alert={totalProposed > 0} style="--c: {totalProposed ? PALETTE.gold : '#94A3B8'}"><b class="num">{totalProposed}</b><small>{tx.kPending}</small></div>
+      <div class="kpi" style="--c: {PALETTE.emerald}"><b class="num">{totalAccepted}</b><small>{tx.kAccepted}</small></div>
+    </div>
+  </header>
 
-{#if error}
-  <div class="err-banner">{error} <button class="close" on:click={() => (error = '')}>×</button></div>
-{/if}
+  {#if error}
+    <div class="err" role="alert">{error}<button aria-label="×" on:click={() => (error = '')}>×</button></div>
+  {/if}
 
-{#if loading}
-  <div class="loading-view">Loading agents…</div>
-{:else}
+  {#if loading}
+    <p class="muted pad">{tx.loadingAgents}</p>
+  {:else}
+    <div class="body">
+      <!-- ── agents ── -->
+      <section class="card list-card">
+        <h2>{tx.agents}<em>{sorted.length}</em></h2>
+        <input class="search" type="search" placeholder={tx.filter} aria-label={tx.filter} bind:value={filterText} />
+        <div class="sorts" role="group">
+          <button class="chip" class:on={sortBy === 'fail'} on:click={() => (sortBy = 'fail')}>{tx.sortFail}</button>
+          <button class="chip" class:on={sortBy === 'name'} on:click={() => (sortBy = 'name')}>{tx.sortName}</button>
+          <button class="chip" class:on={sortBy === 'office'} on:click={() => (sortBy = 'office')}>{tx.sortOffice}</button>
+        </div>
+        <ul class="agents">
+          {#each sorted as a (a.id)}
+            {@const s = stats[a.id]}
+            <li>
+              <button class="ag" class:sel={a.id === selectedAgentId} style="--oc: {flowColor(a.flow_id)}" on:click={() => selectAgent(a.id)}
+                title={s ? fill(tx.okFail, { ok: s.completed, f: s.failed }) : tx.noRuns}>
+                <span class="odot"></span>
+                <span class="who"><b>{a.name}</b><small>{flowName(a.flow_id)}</small></span>
+                {#if s && s.total_runs}
+                  <span class="rate">
+                    <span class="rbar" style="width: {Math.max(18, (100 * s.total_runs) / maxRuns)}%">
+                      <i class="ok" style="flex: {s.completed}"></i><i class="ko" style="flex: {s.failed}"></i>
+                    </span>
+                    <span class="nums num"><span class="okn">{s.completed}</span>/<span class="kon" class:zero={!s.failed}>{s.failed}</span></span>
+                  </span>
+                {:else}
+                  <span class="rate none">{tx.noRuns}</span>
+                {/if}
+              </button>
+            </li>
+          {:else}
+            <li class="muted pad">{tx.noMatch}</li>
+          {/each}
+        </ul>
+      </section>
 
-<div class="kpi-row anim">
-  <KpiCard label="Active agents" value={agents.length} accent="--blue" />
-  <KpiCard label="Active prompt versions" value={totalVersions} sub="for the selected agent" accent="--teal" />
-  <KpiCard label="Pending proposals" value={totalProposed} accent="--gold" color={totalProposed > 0 ? 'var(--gold)' : 'var(--text-2)'} />
-  <KpiCard label="Auto-commiteadas" value={totalAccepted} accent="--teal" />
-</div>
-
-<div class="layout">
-  <!-- Agent list -->
-  <Panel title="Agents" dotColor="var(--blue)" cls="anim d1">
-    <div class="agent-list">
-      {#each filtered as a (a.id)}
-        <button
-          class="agent-item"
-          class:selected={a.id === selectedAgentId}
-          on:click={() => selectAgent(a.id)}
-        >
-          <div class="agent-main">
-            <div class="agent-name">{a.name}</div>
-            <div class="agent-sub">{flowName(a.flow_id)}</div>
-          </div>
-          {#if stats[a.id]}
-            <div class="agent-stat">
-              <span class="stat-ok">{stats[a.id].completed}</span>
-              <span class="stat-sep">/</span>
-              <span class="stat-fail">{stats[a.id].failed}</span>
+      <!-- ── picked agent ── -->
+      {#if !selectedAgent}
+        <section class="card"><p class="muted pad">{tx.pick}</p></section>
+      {:else}
+        <div class="detail" style="--oc: {selColor}">
+          <section class="head">
+            <span class="mark" aria-hidden="true">{selectedAgent.name.slice(0, 2).toUpperCase()}</span>
+            <div class="hx">
+              <h2 class="aname">{selectedAgent.name}</h2>
+              <div class="chips">
+                <span class="tag"><em>{tx.provider}</em>{selectedAgent.provider || '—'}</span>
+                <span class="tag"><em>{tx.model}</em>{selectedAgent.model || '—'}</span>
+                <span class="tag office"><em>{tx.office}</em>{flowName(selectedAgent.flow_id)}</span>
+                <span class="tag ver"><em>{tx.version}</em>v{activeVersion ?? '—'}</span>
+                {#if stats[selectedAgent.id]?.total_runs}
+                  <span class="tag"><em>%</em>{stats[selectedAgent.id].success_rate}% · {fill(tx.okFail, { ok: stats[selectedAgent.id].completed, f: stats[selectedAgent.id].failed })}</span>
+                {/if}
+              </div>
             </div>
-          {/if}
-        </button>
-      {/each}
-      {#if filtered.length === 0}
-        <div class="empty-list">Sin coincidencias.</div>
+            <a class="btn ghost" href="/agents-flow?agent={selectedAgent.id}">{tx.see3d} ↗</a>
+            <button class="btn primary" disabled={busyAction === 'reflect'} on:click={triggerReflection} title={tx.reflectHint}>
+              {busyAction === 'reflect' ? tx.reflecting : `↻ ${tx.reflect}`}
+            </button>
+          </section>
+
+          <div class="panes">
+            <div class="pcol">
+              <!-- RSPL -->
+              <section class="card grow">
+                <h2>{tx.lineage}<small>{tx.lineageSub}</small><em>{versions.length}</em></h2>
+                {#if loadingDetail}
+                  <p class="muted pad">{tx.loading}</p>
+                {:else if versions.length === 0}
+                  <div class="explain">{tx.noVersions}</div>
+                {:else}
+                  <ul class="versions">
+                    {#each versions as v (v.id)}
+                      <li class="vr" class:on={v.active === 1} class:from={diffFrom === v.version} class:to={diffTo === v.version} style="--sc: {SRC_HUE[v.source] ?? '#94A3B8'}">
+                        <span class="vnum num">v{v.version}{#if v.parent_version > 0}<small> ← v{v.parent_version}</small>{/if}</span>
+                        <span class="src">{tx.src[v.source] ?? v.source}</span>
+                        <span class="vnote" title={v.note}>{v.note || '—'}<small>{timeAgo(v.created_at)}</small></span>
+                        <span class="vact">
+                          <button class="xs" class:pick={diffFrom === v.version} title={tx.asLeft} aria-label={tx.asLeft}
+                            on:click={() => { diffFrom = v.version; refreshDiff(); }}>◀</button>
+                          <button class="xs" class:pick={diffTo === v.version} title={tx.asRight} aria-label={tx.asRight}
+                            on:click={() => { diffTo = v.version; if (diffFrom === null) diffFrom = v.version; refreshDiff(); }}>▶</button>
+                          {#if v.active !== 1}
+                            <button class="xs" disabled={busyAction === `activate:${v.version}`} on:click={() => doActivate(v.version)}>{tx.activate}</button>
+                            <button class="xs danger" disabled={busyAction === `restore:${v.version}`} on:click={() => doRestore(v.version)}
+                              title={fill(tx.restoreHint, { v: v.version })}>{tx.restore}</button>
+                          {:else}
+                            <span class="act-on">● {tx.active}</span>
+                          {/if}
+                        </span>
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+              </section>
+
+              <!-- Diff -->
+              <section class="card grow">
+                {#if diffFrom !== null && diffTo !== null}
+                  <h2>{fill(tx.diff, { a: diffFrom, b: diffTo })}</h2>
+                  {#if diffLoading}
+                    <p class="muted pad">{tx.comparing}</p>
+                  {:else if diffLines.length === 0}
+                    <p class="muted pad">{tx.noDiff}</p>
+                  {:else}
+                    <pre class="diff"><code>{#each diffLines as line}<span class="d-{line.kind}">{line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : ' '} {line.text}</span>{/each}</code></pre>
+                  {/if}
+                {:else}
+                  <h2>{fill(tx.diff, { a: '·', b: '·' })}</h2>
+                  <p class="muted pad">{tx.diffHint}</p>
+                {/if}
+              </section>
+            </div>
+
+            <!-- SEPL -->
+            <section class="card">
+              <h2>{tx.cycles}<small>{tx.cyclesSub}</small><em>{evolution.length}</em></h2>
+              {#if evolution.length === 0}
+                <div class="explain">{tx.noCycles}</div>
+              {:else}
+                <ul class="evos">
+                  {#each evolution as evo (evo.id)}
+                    {@const delta = evo.candidate_score - evo.baseline_score}
+                    <li class="evo" style="--sc: {ST_HUE[evo.status] ?? PALETTE.violet}">
+                      <div class="ehead">
+                        <span class="pill">{tx.st[evo.status] ?? evo.status}</span>
+                        <span class="ever num">v{evo.base_version} → v{evo.candidate_version || '·'}</span>
+                        <span class="etime">{timeAgo(evo.created_at)}</span>
+                        <span class="scores num">
+                          {tx.base} <b>{evo.baseline_score.toFixed(1)}</b> · {tx.cand} <b>{evo.candidate_score.toFixed(1)}</b>
+                          {#if delta > 0}<span class="dp">Δ+{delta.toFixed(1)}</span>{:else if delta < 0}<span class="dn">Δ{delta.toFixed(1)}</span>{/if}
+                        </span>
+                      </div>
+                      {#if evo.hypothesis}<div class="eline"><em>{tx.hypothesis}</em><span>{evo.hypothesis}</span></div>{/if}
+                      {#if evo.evaluation}<div class="eline"><em>{tx.judge}</em><span>{evo.evaluation}</span></div>{/if}
+                      {#if evo.error}<div class="eline err-line"><em>{tx.error}</em><span>{evo.error}</span></div>{/if}
+                      {#if evo.proposal}
+                        <details class="prop"><summary>{fill(tx.seeProposal, { n: evo.proposal.length })}</summary><pre>{evo.proposal}</pre></details>
+                      {/if}
+                      {#if (evo.status === 'proposed' || evo.status === 'rejected') && evo.candidate_version > 0}
+                        <div class="eact">
+                          <button class="btn primary sm" disabled={busyAction === `accept:${evo.id}`} on:click={() => doAccept(evo.id)}>{fill(tx.accept, { v: evo.candidate_version })}</button>
+                          {#if evo.status === 'proposed'}
+                            <button class="btn ghost sm" disabled={busyAction === `reject:${evo.id}`} on:click={() => doReject(evo.id)}>{tx.reject}</button>
+                          {/if}
+                        </div>
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </section>
+          </div>
+        </div>
       {/if}
     </div>
-  </Panel>
-
-  <!-- Detail pane -->
-  <div class="detail-col">
-    {#if !selectedAgent}
-      <Empty message="Select an agent on the left." />
-    {:else}
-      <Panel title="{selectedAgent.name}" dotColor="var(--teal)" cls="anim d2">
-        <div class="agent-header">
-          <div class="agent-meta">
-            <div class="meta-item"><span class="meta-label">Provider</span><span class="meta-value">{selectedAgent.provider || '—'}</span></div>
-            <div class="meta-item"><span class="meta-label">Modelo</span><span class="meta-value">{selectedAgent.model || '—'}</span></div>
-            <div class="meta-item"><span class="meta-label">Office</span><span class="meta-value">{flowName(selectedAgent.flow_id)}</span></div>
-            <div class="meta-item"><span class="meta-label">Active version</span><span class="meta-value">v{activeVersion ?? '—'}</span></div>
-          </div>
-          <button
-            class="btn-sm btn-primary"
-            disabled={busyAction === 'reflect'}
-            on:click={triggerReflection}
-            title="Run a full SEPL cycle (reflect → select → improve → evaluate) — dryRun by default, does not auto-commit."
-          >
-            {busyAction === 'reflect' ? 'Reflecting…' : '↻ Reflection cycle'}
-          </button>
-        </div>
-      </Panel>
-
-      <!-- Prompt versions -->
-      <Panel title="Prompt lineage (RSPL)" dotColor="var(--blue)" cls="anim d3">
-        {#if loadingDetail}
-          <div class="loading-pad">Loading…</div>
-        {:else if versions.length === 0}
-          <Empty message="This agent has no versions (unusual)." />
-        {:else}
-          <div class="versions-table">
-            <div class="vt-header">
-              <span>v</span>
-              <span>Fuente</span>
-              <span>Creada</span>
-              <span>Note</span>
-              <span class="vt-actions">Actions</span>
-            </div>
-            {#each versions as v (v.id)}
-              <div class="vt-row" class:vt-active={v.active === 1}>
-                <span class="vt-ver">v{v.version}{#if v.parent_version > 0}<span class="vt-parent"> ← v{v.parent_version}</span>{/if}</span>
-                <span><Badge text={sourceLabel(v.source)} variant={sourceBadgeVariant(v.source)} /></span>
-                <span class="vt-time">{timeAgo(v.created_at)}</span>
-                <span class="vt-note" title={v.note}>{v.note || '—'}</span>
-                <span class="vt-actions">
-                  <button
-                    class="btn-xs"
-                    on:click={() => { diffTo = v.version; if (diffFrom === null) diffFrom = v.version; refreshDiff(); }}
-                    title="Use as the right-hand side of the diff"
-                  >▶ diff</button>
-                  <button
-                    class="btn-xs"
-                    on:click={() => { diffFrom = v.version; refreshDiff(); }}
-                    title="Use as the left-hand side of the diff"
-                  >◀ diff</button>
-                  {#if v.active !== 1}
-                    <button
-                      class="btn-xs"
-                      disabled={busyAction === `activate:${v.version}`}
-                      on:click={() => doActivate(v.version)}
-                    >activate</button>
-                    <button
-                      class="btn-xs btn-danger"
-                      disabled={busyAction === `restore:${v.version}`}
-                      on:click={() => doRestore(v.version)}
-                      title="Restore creates a new version holding the contents of v{v.version}"
-                    >restore</button>
-                  {:else}
-                    <span class="badge-active">● active</span>
-                  {/if}
-                </span>
-              </div>
-            {/each}
-          </div>
-        {/if}
-      </Panel>
-
-      <!-- Diff -->
-      {#if diffFrom !== null && diffTo !== null}
-        <Panel title="Diff v{diffFrom} → v{diffTo}" dotColor="var(--gold)" cls="anim d4">
-          {#if diffLoading}
-            <div class="loading-pad">Comparing…</div>
-          {:else if diffLines.length === 0}
-            <div class="loading-pad">No differences.</div>
-          {:else}
-            <pre class="diff"><code>{#each diffLines as line}<span class="d-{line.kind}">{line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : ' '} {line.text}</span>
-{/each}</code></pre>
-          {/if}
-        </Panel>
-      {/if}
-
-      <!-- Evolution runs -->
-      <Panel title="Evolution runs (SEPL)" dotColor="var(--teal)" cls="anim d5">
-        {#if evolution.length === 0}
-          <Empty message="No reflection cycles recorded yet." />
-        {:else}
-          <div class="evo-list">
-            {#each evolution as evo (evo.id)}
-              <div class="evo-card">
-                <div class="evo-head">
-                  <Badge text={statusLabel(evo.status)} variant={statusBadgeVariant(evo.status)} />
-                  <span class="evo-ver">v{evo.base_version} → v{evo.candidate_version || '·'}</span>
-                  <span class="evo-time">{timeAgo(evo.created_at)}</span>
-                  <span class="evo-scores">
-                    base <strong>{evo.baseline_score.toFixed(1)}</strong> · cand <strong>{evo.candidate_score.toFixed(1)}</strong>
-                    {#if evo.candidate_score > evo.baseline_score}
-                      <span class="delta-plus">Δ+{(evo.candidate_score - evo.baseline_score).toFixed(1)}</span>
-                    {:else if evo.candidate_score < evo.baseline_score}
-                      <span class="delta-neg">Δ{(evo.candidate_score - evo.baseline_score).toFixed(1)}</span>
-                    {/if}
-                  </span>
-                </div>
-                {#if evo.hypothesis}
-                  <div class="evo-line">
-                    <span class="evo-label">Hipótesis</span>
-                    <span class="evo-body">{evo.hypothesis}</span>
-                  </div>
-                {/if}
-                {#if evo.evaluation}
-                  <div class="evo-line">
-                    <span class="evo-label">Juez</span>
-                    <span class="evo-body">{evo.evaluation}</span>
-                  </div>
-                {/if}
-                {#if evo.error}
-                  <div class="evo-line evo-err">
-                    <span class="evo-label">Error</span>
-                    <span class="evo-body">{evo.error}</span>
-                  </div>
-                {/if}
-                {#if evo.proposal}
-                  <details class="evo-proposal">
-                    <summary>Ver propuesta ({evo.proposal.length} chars)</summary>
-                    <pre>{evo.proposal}</pre>
-                  </details>
-                {/if}
-                {#if evo.status === 'proposed' || evo.status === 'rejected'}
-                  {#if evo.candidate_version > 0}
-                    <div class="evo-actions">
-                      <button
-                        class="btn-xs btn-primary"
-                        disabled={busyAction === `accept:${evo.id}`}
-                        on:click={() => doAccept(evo.id)}
-                      >Aceptar & activar v{evo.candidate_version}</button>
-                      {#if evo.status === 'proposed'}
-                        <button
-                          class="btn-xs"
-                          disabled={busyAction === `reject:${evo.id}`}
-                          on:click={() => doReject(evo.id)}
-                        >Rechazar</button>
-                      {/if}
-                    </div>
-                  {/if}
-                {/if}
-              </div>
-            {/each}
-          </div>
-        {/if}
-      </Panel>
-    {/if}
-  </div>
+  {/if}
 </div>
 
-{/if}
-
 <style>
-  :global(.view-header .view-title) { font-size: 20px; }
-  :global(.view-header .view-sub) { font-size: 11px; }
+  /* One screen: header, then the agents list and the picked agent share the height; only lists scroll. */
+  .ev { height: 100%; min-height: 0; box-sizing: border-box; padding: 12px 18px 14px; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+  .num { font-variant-numeric: tabular-nums; }
+  a { text-decoration: none; }
 
-  .filter-input {
-    padding: 6px 12px;
-    background: var(--surface-1);
-    border: 1px solid var(--border);
-    color: var(--text-1);
-    border-radius: 4px;
-    font: 500 12px 'Fira Code', monospace;
-    min-width: 240px;
-  }
+  .top { display: grid; grid-template-columns: minmax(220px, auto) minmax(0, 1fr); gap: 16px; align-items: center; }
+  .ttl h1 { margin: 0; font-size: 22px; font-weight: 800; line-height: 1.1;
+    background: linear-gradient(90deg, #22D3EE, #A78BFA 50%, #F472B6); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .ttl p { margin: 2px 0 0; font-size: 11.5px; color: var(--text-3); max-width: 340px; }
+  .kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+  .kpi { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; padding: 7px 12px; border-radius: 12px; font: inherit; color: inherit; text-align: left;
+    background: linear-gradient(160deg, color-mix(in srgb, var(--c) 18%, var(--surface-1)), var(--surface-1) 72%); border: 1px solid color-mix(in srgb, var(--c) 32%, var(--border));
+    transition: transform .15s, box-shadow .15s; }
+  button.kpi { cursor: pointer; }
+  button.kpi:hover { transform: translateY(-1px); box-shadow: 0 10px 22px -16px var(--c); }
+  .kpi.on { border-color: var(--c); }
+  .kpi.alert { animation: ring 2.4s ease-in-out infinite; }
+  @keyframes ring { 50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 20%, transparent); } }
+  .kpi b { font-size: 21px; font-weight: 800; line-height: 1.1; color: color-mix(in srgb, var(--c) 75%, white); text-shadow: 0 0 14px color-mix(in srgb, var(--c) 45%, transparent); }
+  .kpi small { font-size: 10.5px; color: color-mix(in srgb, var(--c) 45%, var(--text-2)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 
-  .err-banner {
-    background: rgba(239, 68, 68, 0.12);
-    border: 1px solid var(--red);
-    color: var(--red);
-    padding: 10px 14px;
-    border-radius: 6px;
-    margin-bottom: 12px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 13px;
-  }
-  .err-banner .close {
-    background: none; border: none; color: inherit; cursor: pointer;
-    font-size: 18px; padding: 0 4px;
-  }
-  .loading-view { padding: 40px; text-align: center; color: var(--text-2); }
-  .loading-pad { padding: 20px; color: var(--text-2); font: 500 12px 'Fira Code', monospace; }
+  .err { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 9px; font-size: 12.5px; flex: none;
+    color: #fda4af; background: color-mix(in srgb, #F43F5E 12%, transparent); border: 1px solid color-mix(in srgb, #F43F5E 40%, transparent); }
+  .err button { background: none; border: 0; color: inherit; font-size: 16px; cursor: pointer; }
+  .muted { margin: 0; font-size: 12px; color: var(--text-3); }
+  .pad { padding: 10px 2px; }
 
-  .layout {
-    display: grid;
-    grid-template-columns: 300px 1fr;
-    gap: 12px;
-    align-items: start;
-  }
+  .body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(250px, 300px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 12px; }
+  .card { min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: 7px; padding: 12px 14px; border-radius: 14px; overflow: hidden;
+    background: linear-gradient(160deg, color-mix(in srgb, var(--oc, #A78BFA) 6%, var(--surface-1)), var(--surface-1) 60%); border: 1px solid var(--border); }
+  .card.grow { flex: 1; }
+  h2 { margin: 0; font-size: 13px; font-weight: 800; color: var(--text-1); display: flex; align-items: baseline; gap: 8px; flex: none; }
+  h2::before { content: ''; align-self: center; width: 3px; height: 14px; border-radius: 2px; background: linear-gradient(#22D3EE, #A78BFA); flex: none; }
+  h2 small { font-size: 10.5px; font-weight: 500; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  h2 em { margin-left: auto; font-style: normal; font-size: 11px; font-weight: 700; color: var(--text-3); }
 
-  .detail-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  /* agents list */
+  .search { flex: none; background: var(--bg, #0d0f16); border: 1px solid var(--border); color: var(--text-1); border-radius: 9px; padding: 6px 10px; font-size: 12.5px; }
+  .search:focus { outline: none; border-color: #A78BFA; }
+  .sorts { display: flex; gap: 5px; flex: none; }
+  .chip { padding: 2px 9px; border-radius: 999px; font: 700 11px var(--font-body, inherit); cursor: pointer; color: var(--text-2); background: none; border: 1px solid var(--border); }
+  .chip.on { color: #ddd6fe; background: color-mix(in srgb, #A78BFA 18%, transparent); border-color: color-mix(in srgb, #A78BFA 45%, transparent); }
+  ul { list-style: none; margin: 0; padding: 0; }
+  .agents { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 3px; }
+  .ag { width: 100%; display: grid; grid-template-columns: 8px minmax(0, 1fr) 86px; gap: 9px; align-items: center; padding: 5px 8px; border-radius: 10px; cursor: pointer;
+    text-align: left; color: inherit; font: inherit; background: none; border: 1px solid transparent; transition: background .15s, border-color .15s; }
+  .ag:hover { background: color-mix(in srgb, var(--oc) 8%, transparent); }
+  .ag.sel { background: linear-gradient(90deg, color-mix(in srgb, var(--oc) 20%, transparent), color-mix(in srgb, var(--oc) 4%, transparent)); border-color: color-mix(in srgb, var(--oc) 50%, transparent); box-shadow: 0 8px 20px -16px var(--oc); }
+  .ag:focus-visible, .chip:focus-visible, .xs:focus-visible, .btn:focus-visible, .kpi:focus-visible { outline: 2px solid #22D3EE; outline-offset: 1px; }
+  .odot { width: 8px; height: 8px; border-radius: 50%; background: var(--oc); box-shadow: 0 0 8px var(--oc); }
+  .who { display: flex; flex-direction: column; min-width: 0; }
+  .who b { font-size: 12.5px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .who small { font-size: 10.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rate { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+  .rate.none { font-size: 10.5px; color: var(--text-3); }
+  .rbar { display: flex; height: 5px; border-radius: 3px; overflow: hidden; background: var(--surface-2, #1f2230); align-self: stretch; margin-left: auto; }
+  .rbar i { display: block; min-width: 0; }
+  .rbar .ok { background: #34D399; box-shadow: 0 0 6px #34D399; }
+  .rbar .ko { background: #F43F5E; }
+  .nums { font-size: 10.5px; color: var(--text-3); }
+  .okn { color: #6ee7b7; font-weight: 700; } .kon { color: #fda4af; font-weight: 700; } .kon.zero { color: var(--text-3); font-weight: 500; }
 
-  .agent-list { display: flex; flex-direction: column; gap: 2px; max-height: 70vh; overflow-y: auto; }
-  .agent-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 7px 10px;
-    background: var(--surface-1);
-    border: 1px solid var(--border);
-    color: var(--text-1);
-    border-radius: 3px;
-    cursor: pointer;
-    text-align: left;
-  }
-  .agent-item:hover { background: var(--surface-2); }
-  .agent-item.selected {
-    background: var(--surface-3);
-    border-left: 3px solid var(--teal);
-  }
-  .agent-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-  .agent-name { font: 700 12px 'Manrope', sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .agent-sub { font: 500 10px 'Fira Code', monospace; color: var(--text-3); }
-  .agent-stat { font: 600 10px 'Fira Code', monospace; white-space: nowrap; }
-  .stat-ok { color: var(--teal); }
-  .stat-fail { color: var(--red); }
-  .stat-sep { color: var(--text-3); margin: 0 2px; }
-  .empty-list { padding: 16px; color: var(--text-3); font-size: 12px; }
+  /* picked agent */
+  .detail { min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+  .head { flex: none; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 10px 14px; border-radius: 14px;
+    background: radial-gradient(120% 160% at 0% 0%, color-mix(in srgb, var(--oc) 20%, transparent), transparent 60%), linear-gradient(160deg, color-mix(in srgb, var(--oc) 8%, var(--surface-1)), var(--surface-1) 70%);
+    border: 1px solid color-mix(in srgb, var(--oc) 32%, var(--border)); }
+  .mark { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; font: 800 13px var(--font-display, inherit);
+    color: color-mix(in srgb, var(--oc) 60%, white); background: color-mix(in srgb, var(--oc) 22%, var(--surface-2, #1f2230)); box-shadow: 0 0 16px -4px var(--oc), inset 0 0 0 1px color-mix(in srgb, var(--oc) 40%, transparent); }
+  .hx { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+  .aname { font-size: 16px; color: color-mix(in srgb, var(--oc) 45%, white); }
+  .aname::before { display: none; }
+  .chips { display: flex; gap: 5px; flex-wrap: wrap; }
+  .tag { display: inline-flex; align-items: baseline; gap: 5px; padding: 1px 8px; border-radius: 999px; font: 600 11px var(--font-mono, monospace); color: var(--text-1);
+    background: color-mix(in srgb, var(--surface-2, #1f2230) 70%, transparent); border: 1px solid var(--border); white-space: nowrap; }
+  .tag em { font-style: normal; font: 600 9.5px var(--font-body, inherit); text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
+  .tag.office { border-color: color-mix(in srgb, var(--oc) 45%, transparent); color: color-mix(in srgb, var(--oc) 65%, white); }
+  .tag.ver { border-color: color-mix(in srgb, #22D3EE 45%, transparent); color: #67e8f9; }
+  .btn { display: inline-flex; align-items: center; gap: 5px; font: 700 12px var(--font-body, inherit); border-radius: 9px; padding: 7px 12px; cursor: pointer; border: 1px solid transparent; white-space: nowrap; transition: transform .15s, filter .15s; }
+  .btn.primary { color: #1a1206; background: linear-gradient(135deg, #FDE68A, #FBBF24); box-shadow: 0 8px 20px -12px #FBBF24; }
+  .btn.primary:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.05); }
+  .btn.ghost { background: none; color: var(--text-2); border-color: var(--border); }
+  .btn.ghost:hover { color: var(--text-1); border-color: var(--text-3); }
+  .btn.sm { padding: 4px 10px; font-size: 11.5px; }
+  .btn:disabled { opacity: .5; cursor: default; }
 
-  .agent-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-  .agent-meta {
-    display: grid;
-    grid-template-columns: repeat(4, auto);
-    gap: 16px 24px;
-  }
-  .meta-item { display: flex; flex-direction: column; gap: 2px; }
-  .meta-label { font: 600 9px 'Fira Code', monospace; color: var(--text-3); text-transform: uppercase; letter-spacing: 1px; }
-  .meta-value { font: 600 12px 'Fira Code', monospace; color: var(--text-1); }
+  .panes { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 10px; }
+  .pcol { min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+  .explain { font-size: 12px; line-height: 1.55; color: var(--text-2); padding: 10px 12px; border-radius: 10px;
+    background: color-mix(in srgb, #A78BFA 7%, transparent); border: 1px dashed color-mix(in srgb, #A78BFA 40%, transparent); }
 
-  .versions-table { display: flex; flex-direction: column; gap: 2px; }
-  .vt-header,
-  .vt-row {
-    display: grid;
-    grid-template-columns: 80px 90px 90px 1fr auto;
-    gap: 8px;
-    align-items: center;
-    padding: 6px 8px;
-    font: 500 11px 'Fira Code', monospace;
-    border-radius: 3px;
-  }
-  .vt-header {
-    color: var(--text-3);
-    text-transform: uppercase;
-    font-size: 10px;
-    letter-spacing: 1px;
-    border-bottom: 1px solid var(--border);
-  }
-  .vt-row {
-    background: var(--surface-1);
-    border: 1px solid var(--border);
-  }
-  .vt-row.vt-active {
-    border-left: 3px solid var(--teal);
-    background: var(--surface-2);
-  }
-  .vt-ver { font-weight: 700; color: var(--text-1); }
-  .vt-parent { color: var(--text-3); font-weight: 400; }
-  .vt-time { color: var(--text-2); }
-  .vt-note { color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .vt-actions { display: flex; gap: 3px; justify-content: flex-end; }
-  .badge-active { color: var(--teal); font-weight: 600; font-size: 10px; padding: 0 6px; }
+  .versions { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 3px; }
+  .vr { display: grid; grid-template-columns: 74px 74px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 5px 8px; border-radius: 9px;
+    background: rgba(255, 255, 255, .03); border: 1px solid transparent; }
+  .vr.on { background: linear-gradient(90deg, color-mix(in srgb, #34D399 14%, transparent), transparent); border-color: color-mix(in srgb, #34D399 35%, transparent); }
+  .vr.from { box-shadow: inset 3px 0 0 #F43F5E; } .vr.to { box-shadow: inset 3px 0 0 #34D399; }
+  .vnum { font: 800 12px var(--font-mono, monospace); color: var(--text-1); }
+  .vnum small { font-weight: 500; color: var(--text-3); }
+  .src { justify-self: start; font: 700 10.5px var(--font-body, inherit); padding: 1px 7px; border-radius: 999px;
+    color: color-mix(in srgb, var(--sc) 70%, white); background: color-mix(in srgb, var(--sc) 16%, transparent); border: 1px solid color-mix(in srgb, var(--sc) 42%, transparent); }
+  .vnote { display: flex; flex-direction: column; min-width: 0; font-size: 11.5px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vnote small { font-size: 10px; color: var(--text-3); }
+  .vact { display: flex; gap: 3px; align-items: center; }
+  .xs { padding: 2px 7px; border-radius: 7px; font: 700 10.5px var(--font-body, inherit); cursor: pointer; color: var(--text-1); background: var(--surface-2, #1f2230); border: 1px solid var(--border); }
+  .xs:hover:not(:disabled) { border-color: var(--text-3); }
+  .xs.pick { border-color: #A78BFA; color: #ddd6fe; }
+  .xs.danger { color: #fda4af; border-color: color-mix(in srgb, #F43F5E 35%, transparent); }
+  .xs:disabled { opacity: .5; cursor: default; }
+  .act-on { font-size: 10.5px; font-weight: 700; color: #6ee7b7; padding: 0 4px; }
 
-  .btn-xs {
-    padding: 3px 8px;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    color: var(--text-1);
-    border-radius: 3px;
-    cursor: pointer;
-    font: 600 10px 'Manrope', sans-serif;
-  }
-  .btn-xs:hover { background: var(--surface-3); }
-  .btn-xs:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn-xs.btn-primary { background: var(--gold); color: #1a1208; border-color: var(--gold); }
-  .btn-xs.btn-danger { color: var(--red); border-color: rgba(239, 68, 68, 0.3); }
-  .btn-xs.btn-danger:hover { background: rgba(239, 68, 68, 0.12); }
-
-  .btn-sm {
-    padding: 5px 12px;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    color: var(--text-1);
-    border-radius: 3px;
-    cursor: pointer;
-    font: 600 11px 'Manrope', sans-serif;
-  }
-  .btn-sm:hover { background: var(--surface-3); }
-  .btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn-sm.btn-primary { background: var(--gold); color: #1a1208; border-color: var(--gold); }
-
-  .diff {
-    padding: 12px;
-    background: var(--surface-2);
-    border-radius: 4px;
-    overflow: auto;
-    max-height: 400px;
-    font: 500 11px 'Fira Code', monospace;
-    line-height: 1.55;
-  }
+  .diff { flex: 1; min-height: 0; margin: 0; padding: 10px; overflow: auto; border-radius: 10px; background: var(--bg, #0d0f16); border: 1px solid var(--border); font: 500 11px var(--font-mono, monospace); line-height: 1.55; }
   .diff code { display: block; }
-  .diff .d-added { color: var(--teal); background: rgba(20, 184, 166, 0.08); display: block; }
-  .diff .d-removed { color: var(--red); background: rgba(239, 68, 68, 0.08); display: block; text-decoration: line-through; opacity: 0.85; }
+  .diff .d-added { color: #6ee7b7; background: rgba(52, 211, 153, .09); display: block; }
+  .diff .d-removed { color: #fda4af; background: rgba(244, 63, 94, .09); display: block; text-decoration: line-through; opacity: .85; }
   .diff .d-same { color: var(--text-2); display: block; }
 
-  .evo-list { display: flex; flex-direction: column; gap: 8px; }
-  .evo-card {
-    padding: 10px 12px;
-    background: var(--surface-1);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .evo-head {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-  .evo-ver { font: 700 11px 'Fira Code', monospace; color: var(--text-1); }
-  .evo-time { font-size: 10px; color: var(--text-3); }
-  .evo-scores { margin-left: auto; font: 500 11px 'Fira Code', monospace; color: var(--text-2); }
-  .evo-scores strong { color: var(--text-1); }
-  .delta-plus { color: var(--teal); margin-left: 4px; font-weight: 700; }
-  .delta-neg { color: var(--red); margin-left: 4px; font-weight: 700; }
+  .evos { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+  .evo { display: flex; flex-direction: column; gap: 5px; padding: 8px 10px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--sc) 25%, var(--border));
+    background: linear-gradient(160deg, color-mix(in srgb, var(--sc) 8%, transparent), transparent 70%); }
+  .ehead { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .pill { font: 800 10px var(--font-body, inherit); text-transform: uppercase; letter-spacing: .06em; padding: 1px 8px; border-radius: 999px;
+    color: color-mix(in srgb, var(--sc) 70%, white); background: color-mix(in srgb, var(--sc) 18%, transparent); border: 1px solid color-mix(in srgb, var(--sc) 45%, transparent); }
+  .ever { font: 800 11.5px var(--font-mono, monospace); color: var(--text-1); }
+  .etime { font-size: 10.5px; color: var(--text-3); }
+  .scores { margin-left: auto; font-size: 11px; color: var(--text-2); } .scores b { color: var(--text-1); }
+  .dp { color: #6ee7b7; font-weight: 800; margin-left: 4px; } .dn { color: #fda4af; font-weight: 800; margin-left: 4px; }
+  .eline { display: flex; gap: 8px; font-size: 12px; color: var(--text-2); line-height: 1.45; }
+  .eline em { font-style: normal; flex: none; width: 64px; padding-top: 2px; font: 700 9.5px var(--font-body, inherit); text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
+  .err-line span { color: #fda4af; }
+  .prop summary { font: 600 11px var(--font-body, inherit); color: var(--text-3); cursor: pointer; }
+  .prop pre { margin: 4px 0 0; padding: 8px; max-height: 220px; overflow: auto; border-radius: 8px; background: var(--bg, #0d0f16); font: 500 11px var(--font-mono, monospace); color: var(--text-1); white-space: pre-wrap; }
+  .eact { display: flex; gap: 6px; }
 
-  .evo-line { display: flex; gap: 8px; font-size: 12px; }
-  .evo-label {
-    font: 600 9px 'Fira Code', monospace;
-    color: var(--text-3);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    flex-shrink: 0;
-    width: 70px;
-    padding-top: 2px;
+  @media (prefers-reduced-motion: reduce) { .kpi.alert { animation: none; } }
+  @media (max-height: 760px) { .kpi b { font-size: 18px; } .head { padding: 7px 12px; } .mark { width: 32px; height: 32px; } }
+  @media (max-width: 1100px) {
+    .ev { height: auto; overflow: visible; }
+    .top { grid-template-columns: 1fr; } .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .body, .panes { grid-template-columns: 1fr; } .agents { max-height: 40vh; } .card { max-height: 70vh; }
   }
-  .evo-body { color: var(--text-2); }
-  .evo-err .evo-body { color: var(--red); }
-
-  .evo-proposal summary {
-    font: 600 10px 'Fira Code', monospace;
-    color: var(--text-3);
-    cursor: pointer;
-    padding: 4px 0;
-  }
-  .evo-proposal pre {
-    padding: 10px;
-    background: var(--surface-2);
-    border-radius: 3px;
-    max-height: 260px;
-    overflow: auto;
-    font: 500 11px 'Fira Code', monospace;
-    color: var(--text-1);
-    white-space: pre-wrap;
-  }
-
-  .evo-actions { display: flex; gap: 6px; }
 </style>

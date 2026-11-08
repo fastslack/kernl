@@ -12,6 +12,45 @@
   import { runAgent, stopAgent, deleteAgent, createAgent, updateAgent } from '$lib/api.js';
   import { agentFromResponse } from '$lib/stores/agent-detail.js';
   import { toast, confirm as confirmDialog, describeError } from '$shared/feedback';
+  import { onMount } from 'svelte';
+  import { locale } from '$lib/i18n';
+  import { PALETTE } from '$lib/components/bench/model.js';
+
+  const L = {
+    es: {
+      title: 'Agentes', sub: '{n} agentes · {a} activos · {w} trabajando ahora', flow: 'Ver en 3D', create: 'Nuevo agente',
+      kTotal: 'agentes', kActive: 'activos', kToday: 'corridas hoy', kDone: 'completadas', kFailed: 'con error', kTokens: 'tokens',
+      list: 'Agentes', search: 'Buscar agente o descripción…', all: 'Todos', working: 'Trabajando', failing: 'Con fallas', paused: 'Pausados',
+      offices: 'Oficinas', allOffices: 'Todas las oficinas', custom: 'Sin oficina', none: 'Ningún agente coincide.', noneSub: 'Probá con otro filtro.', empty: 'Todavía no hay agentes.', emptySub: 'Creá el primero con «Nuevo agente».',
+      last: 'última', never: 'nunca corrió', ok: 'éxito', run: 'Correr', stop: 'Detener', open3d: 'Abrir en el 3D', open: 'Abrir', del: 'Eliminar', keep: 'Mantener (quitar revisión)', reject: 'Apagar (rechazar)',
+      inARow: '{n} fallas seguidas', autoPaused: 'pausado solo', revision: 'en revisión',
+      recent: 'Corridas recientes', top: 'Los que más corren', byStatus: 'Por estado', byTrigger: 'Por disparador', runs: 'corridas', noRuns: 'Todavía no hay corridas.', noData: 'Sin datos.',
+      st: { completed: 'terminó', failed: 'falló', running: 'trabajando', pending: 'en cola', cancelled: 'cancelada' } as Record<string, string>,
+    },
+    en: {
+      title: 'Agents', sub: '{n} agents · {a} active · {w} working now', flow: 'See in 3D', create: 'New agent',
+      kTotal: 'agents', kActive: 'active', kToday: 'runs today', kDone: 'completed', kFailed: 'failed', kTokens: 'tokens',
+      list: 'Agents', search: 'Search agent or description…', all: 'All', working: 'Working', failing: 'Failing', paused: 'Paused',
+      offices: 'Offices', allOffices: 'All offices', custom: 'No office', none: 'No agent matches.', noneSub: 'Try another filter.', empty: 'No agents yet.', emptySub: 'Create the first one with "New agent".',
+      last: 'last', never: 'never ran', ok: 'success', run: 'Run', stop: 'Stop', open3d: 'Open in 3D', open: 'Open', del: 'Delete', keep: 'Keep (clear review)', reject: 'Switch off (reject)',
+      inARow: '{n} failures in a row', autoPaused: 'auto-paused', revision: 'under review',
+      recent: 'Recent runs', top: 'Busiest agents', byStatus: 'By status', byTrigger: 'By trigger', runs: 'runs', noRuns: 'No runs yet.', noData: 'No data.',
+      st: { completed: 'done', failed: 'failed', running: 'working', pending: 'queued', cancelled: 'cancelled' } as Record<string, string>,
+    },
+  };
+  $: tx = $locale === 'es' ? L.es : L.en;
+  const fill = (s: string, p: Record<string, unknown>) => s.replace(/\{(\w+)\}/g, (_, k) => String(p[k] ?? ''));
+
+  // Per-agent success rate: the graph endpoint already computes it; the list store does not carry it.
+  let stats: Record<string, { total_runs: number; success_rate: number }> = {};
+  onMount(() => {
+    fetch('/api/agents/graph').then((r) => r.json()).then((g) => { stats = g?.stats ?? {}; }).catch(() => {});
+    const close = () => (menuFor = '');
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  });
+  let menuFor = '';
+  function toggleMenu(id: string, e: MouseEvent) { e.stopPropagation(); menuFor = menuFor === id ? '' : id; }
 
   $: ag = ($agents as any);
   $: allAgents = ag?.agents ?? [];
@@ -27,6 +66,8 @@
   // ── Filters ──────────────────────────────────
   let filterCategory = 'all';
   let searchQuery = '';
+  let statusFilter: '' | 'working' | 'failing' | 'paused' = '';
+  const isFailing = (a: any) => (a.consecutive_failures ?? 0) > 0 || !!a.auto_paused_at;
 
   $: categories = (() => {
     // Source of truth for the filter: the list of offices (flows). We show
@@ -63,6 +104,11 @@
     else if (filterCategory === 'uncategorized') { if (a.flow_name) return false; }
     else if (filterCategory.startsWith('flow:')) { if (a.flow_name !== filterCategory.slice(5)) return false; }
 
+    // State filter
+    if (statusFilter === 'working' && !runningAgentIds.has(a.id)) return false;
+    if (statusFilter === 'failing' && !isFailing(a)) return false;
+    if (statusFilter === 'paused' && a.enabled) return false;
+
     // Search filter
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
@@ -80,6 +126,17 @@
   );
 
   let stoppingIds = new Set<string>();
+  $: workingN = allAgents.filter((a: any) => runningAgentIds.has(a.id)).length;
+  $: failingN = allAgents.filter(isFailing).length;
+  $: pausedN = allAgents.filter((a: any) => !a.enabled).length;
+  $: flowColor = new Map<string, string>(flows.map((f: any) => [f.name, f.color]));
+  /** The latest run of each agent among the recent ones: its outcome colours the row's dot. */
+  $: maxTopRuns = Math.max(1, ...topAgents.slice(0, 8).map((x: any) => Number(x.run_count) || 0));
+  $: lastRunOf = (() => {
+    const m = new Map<string, any>();
+    for (const r of recentRuns) if (!m.has(r.agent_id)) m.set(r.agent_id, r);
+    return m;
+  })();
 
   // ── Detail panel state ──────────────────────
   type DetailView = 'overview' | 'agent' | 'run';
@@ -554,142 +611,117 @@
   </div>
 {/if}
 
-<div class="ag-page">
-  <!-- Header -->
-  <div class="ag-header">
-    <div class="ag-header-left">
-      <h1 class="ag-title">Agents</h1>
-      <span class="ag-count">{allAgents.length}</span>
+<div class="agp">
+  <header class="top">
+    <div class="ttl">
+      <h1>{tx.title}</h1>
+      <p>{fill(tx.sub, { n: allAgents.length, a: kpis.activeAgents ?? active.length, w: workingN })}</p>
     </div>
-    <div class="ag-header-right">
-      <a href="/agents-flow" class="ag-btn ag-btn-ghost">Flow</a>
-      <button type="button" class="ag-btn ag-btn-primary" on:click={() => showComposer = true}>+ New</button>
+    <div class="tiles">
+      <button class="tile" class:on={statusFilter === ''} style="--c: {PALETTE.sky}" on:click={() => (statusFilter = '')}><b>{kpis.totalAgents ?? allAgents.length}</b><span>{tx.kTotal}</span></button>
+      <div class="tile" style="--c: {PALETTE.emerald}"><b>{kpis.activeAgents ?? active.length}</b><span>{tx.kActive}</span></div>
+      <div class="tile" style="--c: {PALETTE.gold}"><b>{kpis.runsToday ?? 0}</b><span>{tx.kToday}</span></div>
+      <div class="tile" style="--c: {PALETTE.lime}"><b>{fmtTokens(kpis.completedRuns ?? 0)}</b><span>{tx.kDone}</span></div>
+      <button class="tile" class:on={statusFilter === 'failing'} style="--c: {PALETTE.pink}" on:click={() => (statusFilter = statusFilter === 'failing' ? '' : 'failing')}><b>{kpis.failedRuns ?? 0}</b><span>{tx.kFailed}</span></button>
+      <div class="tile" style="--c: {PALETTE.violet}"><b>{fmtTokens(kpis.totalTokens ?? 0)}</b><span>{tx.kTokens}</span></div>
     </div>
-  </div>
+    <div class="hact">
+      <a href="/agents-flow" class="btn ghost">◈ {tx.flow}</a>
+      <button type="button" class="btn primary" on:click={() => showComposer = true}>+ {tx.create}</button>
+    </div>
+  </header>
 
   {#if !ag}
     <div class="ag-loading"><div style="width:100%;max-width:720px;padding:16px"><Skeleton variant="rows" rows={6} /></div></div>
   {:else}
-    <!-- KPI Row -->
-    <div class="ag-kpis">
-      <div class="ag-kpi">
-        <span class="ag-kpi-val" style="color:var(--blue)">{kpis.totalAgents ?? allAgents.length}</span>
-        <span class="ag-kpi-lbl">Total</span>
-      </div>
-      <div class="ag-kpi">
-        <span class="ag-kpi-val" style="color:var(--green)">{kpis.activeAgents ?? active.length}</span>
-        <span class="ag-kpi-lbl">Active</span>
-      </div>
-      <div class="ag-kpi">
-        <span class="ag-kpi-val" style="color:var(--gold)">{kpis.runsToday ?? 0}</span>
-        <span class="ag-kpi-lbl">Runs Today</span>
-      </div>
-      <div class="ag-kpi">
-        <span class="ag-kpi-val" style="color:var(--green)">{kpis.completedRuns ?? 0}</span>
-        <span class="ag-kpi-lbl">Completed</span>
-      </div>
-      <div class="ag-kpi">
-        <span class="ag-kpi-val" style="color:var(--red)">{kpis.failedRuns ?? 0}</span>
-        <span class="ag-kpi-lbl">Failed</span>
-      </div>
-      <div class="ag-kpi">
-        <span class="ag-kpi-val" style="color:var(--teal)">{fmtTokens(kpis.totalTokens ?? 0)}</span>
-        <span class="ag-kpi-lbl">Tokens</span>
-      </div>
-    </div>
-
-    <!-- Main Grid -->
-    <div class="ag-grid">
-      <!-- Left: Agent List -->
-      <div class="ag-panel">
-        <div class="ag-panel-header">
-          <span class="ag-panel-dot" style="background:var(--blue)"></span>
-          <span class="ag-panel-title">Agents</span>
-          <span class="ag-panel-count">{filteredAgents.length}/{allAgents.length}</span>
-        </div>
-        <!-- Category Tabs + Search -->
-        <div class="ag-filters">
-          <div class="ag-categories">
-            {#each categories as cat}
-              <button
-                class="ag-cat"
-                class:ag-cat-active={filterCategory === cat.id}
-                on:click={() => filterCategory = cat.id}
-              >
-                {#if cat.color}<span class="ag-cat-dot" style="background:{cat.color}"></span>{/if}
-                {cat.label}<span class="ag-cat-count">{cat.count}</span>
-              </button>
-            {/each}
+    <div class="body">
+      <!-- ── Left: the agents ── -->
+      <section class="card list-card">
+        <div class="ch"><h2>{tx.list}</h2><em>{filteredAgents.length}/{allAgents.length}</em></div>
+        <div class="filters">
+          <input class="search" type="text" placeholder={tx.search} aria-label={tx.search} bind:value={searchQuery} />
+          <div class="states" role="group">
+            <button class="sc" class:on={statusFilter === ''} on:click={() => (statusFilter = '')}>{tx.all}<i>{allAgents.length}</i></button>
+            <button class="sc" class:on={statusFilter === 'working'} style="--c: #22D3EE" on:click={() => (statusFilter = statusFilter === 'working' ? '' : 'working')}><span class="d live"></span>{tx.working}<i>{workingN}</i></button>
+            <button class="sc" class:on={statusFilter === 'failing'} style="--c: #F43F5E" on:click={() => (statusFilter = statusFilter === 'failing' ? '' : 'failing')}><span class="d"></span>{tx.failing}<i>{failingN}</i></button>
+            <button class="sc" class:on={statusFilter === 'paused'} style="--c: #94A3B8" on:click={() => (statusFilter = statusFilter === 'paused' ? '' : 'paused')}><span class="d"></span>{tx.paused}<i>{pausedN}</i></button>
           </div>
-          <input
-            class="ag-search"
-            type="text"
-            placeholder="Search..."
-            bind:value={searchQuery}
-          />
         </div>
-        <div class="ag-panel-body">
+        <div class="cats" aria-label={tx.offices}>
+          {#each categories as cat (cat.id)}
+            <button class="cat" class:on={filterCategory === cat.id} style="--fc: {cat.color ?? '#94A3B8'}" on:click={() => filterCategory = cat.id}>
+              {#if cat.color}<span class="fd"></span>{/if}{cat.id === 'all' ? tx.allOffices : cat.id === 'uncategorized' ? tx.custom : cat.label}<i>{cat.count}</i>
+            </button>
+          {/each}
+        </div>
+        <div class="rows">
           {#if !filteredAgents.length}
             <div class="ag-empty">
-              <div class="ag-empty-text">{allAgents.length ? 'No matches' : 'No agents yet'}</div>
-              <div class="ag-empty-sub">{allAgents.length ? 'Try a different filter' : 'Create one to get started'}</div>
+              <div class="ag-empty-text">{allAgents.length ? tx.none : tx.empty}</div>
+              <div class="ag-empty-sub">{allAgents.length ? tx.noneSub : tx.emptySub}</div>
             </div>
           {:else}
-            {#each filteredAgents as agent}
+            {#each filteredAgents as agent (agent.id)}
               {@const running = runningAgentIds.has(agent.id)}
-              <button
-                class="ag-card"
-                class:ag-card-running={running}
-                class:ag-card-disabled={!agent.enabled}
-                class:ag-card-selected={selectedAgent?.id === agent.id && detailView !== 'overview'}
-                on:click={() => selectAgent(agent)}
-              >
-                <div class="ag-card-main">
-                  <div class="ag-card-indicator" class:active={agent.enabled} class:running></div>
-                  <div class="ag-card-body">
-                    <div class="ag-card-top">
-                      <span class="ag-card-name">{agent.name}</span>
-                      <div class="ag-card-badges">
-                        {#if agent.builtin_handler?.startsWith('script:')}<Badge text="script" variant="green" />
-                        {:else if agent.builtin_handler?.startsWith('check:')}<Badge text="check" variant="gold" />
-                        {:else if agent.builtin_handler?.startsWith('proactive:')}<Badge text="proactive" variant="blue" />
-                        {:else if !agent.builtin_handler}<Badge text="llm" variant="teal" />{/if}
-                        {#if agent.under_revision}<Badge text="REVISION" variant="orange" />{/if}
-                        {#if agent.cron}<span class="ag-card-cron">{agent.cron}</span>{/if}
-                        {#if running}<Badge text="running" variant="high" />{/if}
-                      </div>
+              {@const lr = lastRunOf.get(agent.id)}
+              {@const st = stats[agent.id]}
+              {@const fails = agent.consecutive_failures ?? 0}
+              {@const tone = running ? '#22D3EE' : !agent.enabled ? '#64748B' : agent.auto_paused_at || fails >= 2 ? '#F43F5E' : lr?.status === 'failed' || fails ? '#FB923C' : '#34D399'}
+              <div class="row" class:sel={selectedAgent?.id === agent.id && detailView !== 'overview'} class:off={!agent.enabled}
+                style="--oc: {flowColor.get(agent.flow_name) ?? '#94A3B8'}; --tc: {tone}">
+                <button class="rmain" on:click={() => selectAgent(agent)} title={agent.description || agent.name}>
+                  <span class="sd" class:live={running} aria-hidden="true"></span>
+                  <span class="rtxt">
+                    <span class="rl1">
+                      <b>{agent.name}</b>
+                      {#if agent.builtin_handler?.startsWith('script:')}<span class="k" style="--c: #34D399">script</span>
+                      {:else if agent.builtin_handler?.startsWith('check:')}<span class="k" style="--c: #FBBF24">check</span>
+                      {:else if agent.builtin_handler?.startsWith('proactive:')}<span class="k" style="--c: #60A5FA">proactive</span>
+                      {:else if !agent.builtin_handler}<span class="k" style="--c: #22D3EE">llm</span>{/if}
+                      {#if agent.under_revision}<span class="k" style="--c: #FB923C">{tx.revision}</span>{/if}
+                      {#if agent.auto_paused_at}<span class="k" style="--c: #F43F5E">{tx.autoPaused}</span>{:else if fails >= 2}<span class="k" style="--c: #F43F5E">{fill(tx.inARow, { n: fails })}</span>{/if}
+                      {#if agent.cron}<span class="cron">{agent.cron}</span>{/if}
+                    </span>
+                    {#if agent.description}<span class="rdesc">{agent.description}</span>{/if}
+                    <span class="rmeta">
+                      {#if agent.flow_name}<span class="of"><span class="fd"></span>{agent.flow_name}</span>{/if}
+                      {#if agent.model}<span class="mono">{agent.model}</span>{:else if agent.providerType}<span>{agent.providerType}</span>{/if}
+                      <span>{agent.last_run_at ? `${tx.last} ${timeAgo(agent.last_run_at)}` : tx.never}</span>
+                    </span>
+                  </span>
+                  {#if st && st.total_runs > 0}
+                    <span class="rate" title="{st.success_rate}% {tx.ok} · {st.total_runs} {tx.runs}">
+                      <span class="rbar"><i style="width: {st.success_rate}%; --rc: {st.success_rate >= 85 ? '#34D399' : st.success_rate >= 60 ? '#FBBF24' : '#F43F5E'}"></i></span>
+                      <small class="mono">{st.success_rate}%</small>
+                    </span>
+                  {:else}<span class="rate"></span>{/if}
+                </button>
+                {#if running || stoppingIds.has(agent.id)}
+                  <button type="button" class="act stop" on:click|stopPropagation={() => doStopAgent(agent.id)} disabled={stoppingIds.has(agent.id)} title={tx.stop} aria-label="{tx.stop} {agent.name}">{stoppingIds.has(agent.id) ? '…' : '■'}</button>
+                {:else}
+                  <button type="button" class="act run" on:click|stopPropagation={() => doRunAgent(agent.id)} title={tx.run} aria-label="{tx.run} {agent.name}">▶</button>
+                {/if}
+                <div class="more">
+                  <button type="button" class="dots" aria-haspopup="menu" aria-expanded={menuFor === agent.id} aria-label="Más acciones" on:click={(e) => toggleMenu(agent.id, e)}>⋯</button>
+                  {#if menuFor === agent.id}
+                    <div class="menu" role="menu" tabindex="-1" on:click|stopPropagation on:keydown|stopPropagation>
+                      <button role="menuitem" on:click={() => { menuFor = ''; selectAgent(agent); }}>{tx.open}</button>
+                      <a role="menuitem" href="/agents-flow?agent={agent.id}">{tx.open3d}</a>
+                      {#if agent.under_revision}
+                        <button role="menuitem" on:click={() => { menuFor = ''; doAcceptRevision(agent.id, agent.name); }}>{tx.keep}</button>
+                        <button role="menuitem" on:click={() => { menuFor = ''; doRejectRevision(agent.id, agent.name); }}>{tx.reject}</button>
+                      {/if}
+                      <button role="menuitem" class="danger" on:click={() => { menuFor = ''; doDeleteAgent(agent.id); }}>{tx.del}</button>
                     </div>
-                    {#if agent.description}
-                      <div class="ag-card-desc">{agent.description}</div>
-                    {/if}
-                    <div class="ag-card-meta">
-                      {#if agent.providerType}<span>{agent.providerType}</span>{/if}
-                      {#if agent.model}<span class="mono">{agent.model}</span>{/if}
-                      {#if agent.last_run_at}<span>Last: {fmtTime(agent.last_run_at)}</span>{/if}
-                    </div>
-                  </div>
-                  <div class="ag-card-actions">
-                    {#if agent.under_revision}
-                      <button type="button" class="ag-act ag-act-accept" on:click|stopPropagation={() => doAcceptRevision(agent.id, agent.name)} title="Accept — clear REVISION, keep agent">✓</button>
-                      <button type="button" class="ag-act ag-act-reject" on:click|stopPropagation={() => doRejectRevision(agent.id, agent.name)} title="Reject — deactivate (rollback-safe)">✗</button>
-                    {/if}
-                    {#if running || stoppingIds.has(agent.id)}
-                      <button type="button" class="ag-act ag-act-stop" on:click|stopPropagation={() => doStopAgent(agent.id)} disabled={stoppingIds.has(agent.id)}>
-                        {stoppingIds.has(agent.id) ? '...' : '■'}
-                      </button>
-                    {:else}
-                      <button type="button" class="ag-act ag-act-run" on:click|stopPropagation={() => doRunAgent(agent.id)} title="Run">▶</button>
-                    {/if}
-                    <button type="button" class="ag-act ag-act-del" on:click|stopPropagation={() => doDeleteAgent(agent.id)} title="Delete">✕</button>
-                  </div>
+                  {/if}
                 </div>
-              </button>
+              </div>
             {/each}
           {/if}
         </div>
-      </div>
+      </section>
 
-      <!-- Right Column -->
+      <!-- ── Right: the agent, a run, or the overview ── -->
       <div class="ag-right">
         {#if detailView === 'agent' && selectedAgent}
           <!-- ═══ Agent Detail — the shared drawer ═══
@@ -879,79 +911,57 @@
 
         {:else}
           <!-- ═══ Overview (default) ═══ -->
-          <!-- Recent Runs -->
-          <div class="ag-panel ag-panel-runs">
-            <div class="ag-panel-header">
-              <span class="ag-panel-dot" style="background:var(--teal)"></span>
-              <span class="ag-panel-title">Recent Runs</span>
-              <span class="ag-panel-count">{recentRuns.length}</span>
-            </div>
-            <div class="ag-panel-body">
+          <section class="card runs-card">
+            <div class="ch"><h2>{tx.recent}</h2><em>{recentRuns.length}</em></div>
+            <div class="rows">
               {#if !recentRuns.length}
-                <div class="ag-empty"><div class="ag-empty-sub">No runs yet</div></div>
+                <div class="ag-empty"><div class="ag-empty-sub">{tx.noRuns}</div></div>
               {:else}
-                {#each recentRuns as run}
-                  <button class="run-row" on:click={() => selectRun(run)}>
-                    <span class="run-dot" style="background:{statusColor(run.status)}"></span>
+                {#each recentRuns as run (run.id)}
+                  <button class="run-row" style="--sc: {statusColor(run.status)}" on:click={() => selectRun(run)}>
+                    <span class="sd" class:live={run.status === 'running'}></span>
                     <span class="run-name">{run.agent_name}</span>
-                    <span class="run-status" style="color:{statusColor(run.status)}">{run.status}</span>
+                    <span class="run-status">{tx.st[run.status] ?? run.status}</span>
                     <span class="run-tokens mono">{fmtTokens(run.tokens_used)}</span>
                     <span class="run-time">{timeAgo(run.created_at)}</span>
                   </button>
                 {/each}
               {/if}
             </div>
-          </div>
-
-          <!-- Top Agents -->
-          <div class="ag-panel ag-panel-top">
-            <div class="ag-panel-header">
-              <span class="ag-panel-dot" style="background:var(--gold)"></span>
-              <span class="ag-panel-title">Top Agents</span>
-            </div>
-            <div class="ag-panel-body">
-              {#if !topAgents.length}
-                <div class="ag-empty"><div class="ag-empty-sub">No data</div></div>
-              {:else}
-                {#each topAgents.slice(0, 8) as ta}
-                  <div class="top-row">
-                    <span class="top-name">{ta.name}</span>
-                    <span class="top-runs mono">{ta.run_count} runs</span>
-                    <span class="top-tokens mono">{fmtTokens(ta.total_tokens)}</span>
-                  </div>
-                {/each}
-              {/if}
-            </div>
-          </div>
-
-          <!-- Stats -->
-          <div class="ag-panel ag-panel-stats">
-            <div class="ag-panel-header">
-              <span class="ag-panel-dot" style="background:var(--green)"></span>
-              <span class="ag-panel-title">Breakdown</span>
-            </div>
-            <div class="ag-panel-body">
-              <div class="stat-grid">
-                <div class="stat-group">
-                  <div class="stat-group-title">By Status</div>
-                  {#each Object.entries(runsByStatus) as [k, v]}
-                    <div class="stat-row">
-                      <span class="stat-label">{k}</span>
-                      <span class="stat-val mono" style="color:{statusColor(k)}">{v}</span>
+          </section>
+          <div class="pair">
+            <section class="card">
+              <div class="ch"><h2>{tx.top}</h2></div>
+              <div class="rows">
+                {#if !topAgents.length}
+                  <div class="ag-empty"><div class="ag-empty-sub">{tx.noData}</div></div>
+                {:else}
+                  {#each topAgents.slice(0, 8) as ta (ta.id ?? ta.name)}
+                    <div class="top-row">
+                      <span class="top-name">{ta.name}</span>
+                      <span class="tbar"><i style="width: {(100 * ta.run_count) / maxTopRuns}%"></i></span>
+                      <span class="top-runs mono">{ta.run_count}</span>
                     </div>
                   {/each}
+                {/if}
+              </div>
+            </section>
+            <section class="card">
+              <div class="ch"><h2>{tx.byStatus}</h2></div>
+              <div class="stat-grid">
+                <div>
+                  {#each Object.entries(runsByStatus) as [k, v]}
+                    <div class="stat-row"><span class="stat-label"><span class="sd" style="--sc: {statusColor(k)}"></span>{tx.st[k] ?? k}</span><span class="stat-val mono">{v}</span></div>
+                  {/each}
                 </div>
-                <div class="stat-group">
-                  <div class="stat-group-title">By Trigger</div>
+                <div>
+                  <div class="stat-group-title">{tx.byTrigger}</div>
                   {#each Object.entries(runsByTrigger) as [k, v]}
-                    <div class="stat-row">
-                      <span class="stat-label">{k}</span>
-                      <span class="stat-val mono">{v}</span>
-                    </div>
+                    <div class="stat-row"><span class="stat-label">{k}</span><span class="stat-val mono">{v}</span></div>
                   {/each}
                 </div>
               </div>
-            </div>
+            </section>
           </div>
         {/if}
       </div>
@@ -1111,25 +1121,117 @@
 {/if}
 
 <style>
-  .ag-page {
-    display: flex;
-    flex-direction: column;
-    height: calc(100vh - 56px - 48px);
-    overflow: hidden;
+  /* ── page: one screen, only the lists scroll inside their cards ── */
+  .agp { height: 100%; min-height: 0; box-sizing: border-box; padding: 12px 18px 14px; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+  .top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 16px; align-items: center; }
+  .ttl h1 { margin: 0; font-size: 22px; font-weight: 800; line-height: 1.1; background: linear-gradient(90deg, #22D3EE, #A78BFA 55%, #F472B6); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .ttl p { margin: 2px 0 0; font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+  .tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+  .tile { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; padding: 6px 11px; border-radius: 12px; font: inherit; color: inherit; text-align: left;
+    background: linear-gradient(160deg, color-mix(in srgb, var(--c) 18%, var(--surface-1)), var(--surface-1) 72%); border: 1px solid color-mix(in srgb, var(--c) 32%, var(--border)); transition: transform .15s, box-shadow .15s; }
+  button.tile { cursor: pointer; }
+  button.tile:hover { transform: translateY(-1px); box-shadow: 0 10px 22px -16px var(--c); }
+  .tile.on { border-color: var(--c); box-shadow: 0 0 0 1px var(--c) inset; }
+  .tile b { font-size: 19px; font-weight: 800; line-height: 1.15; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--c) 75%, white); text-shadow: 0 0 14px color-mix(in srgb, var(--c) 45%, transparent); }
+  .tile span { font-size: 10.5px; color: color-mix(in srgb, var(--c) 45%, var(--text-2)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .hact { display: flex; gap: 6px; }
+  .btn { display: inline-flex; align-items: center; gap: 5px; padding: 7px 12px; border-radius: 9px; font: 700 12px var(--font-body); cursor: pointer; white-space: nowrap; border: 1px solid transparent; text-decoration: none; transition: transform .15s; }
+  .btn.ghost { color: var(--text-2); background: none; border-color: var(--border); }
+  .btn.ghost:hover { color: var(--text-1); border-color: #A78BFA; }
+  .btn.primary { color: #06202a; background: linear-gradient(135deg, #67E8F9, #22D3EE); box-shadow: 0 8px 20px -12px #22D3EE; }
+  .btn.primary:hover { transform: translateY(-1px); }
+
+  .body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 12px; }
+  .card { min-height: 0; display: flex; flex-direction: column; gap: 7px; padding: 11px 13px; border-radius: 14px; overflow: hidden;
+    background: linear-gradient(160deg, rgba(34, 211, 238, .05), var(--surface-1) 55%); border: 1px solid var(--border); }
+  .ch { display: flex; align-items: center; gap: 8px; flex: none; }
+  .ch h2 { margin: 0; font-size: 13px; font-weight: 800; color: var(--text-1); display: flex; align-items: center; gap: 8px; }
+  .ch h2::before { content: ''; width: 3px; height: 14px; border-radius: 2px; background: linear-gradient(#22D3EE, #A78BFA); }
+  .ch em { margin-left: auto; font-style: normal; font-size: 11px; font-weight: 700; color: var(--text-3); }
+  .rows { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 3px; }
+
+  .filters { display: flex; gap: 8px; align-items: center; flex: none; }
+  .search { flex: 1; min-width: 0; background: var(--bg, #0d0f16); border: 1px solid var(--border); color: var(--text-1); border-radius: 9px; padding: 6px 10px; font-size: 12.5px; }
+  .search:focus { outline: none; border-color: #22D3EE; }
+  .states { display: flex; gap: 4px; flex: none; }
+  .sc, .cat { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; font: 700 11px var(--font-body); cursor: pointer; color: var(--text-2); background: none; border: 1px solid var(--border); white-space: nowrap; }
+  .sc i, .cat i { font-style: normal; font-weight: 600; color: var(--text-3); }
+  .sc.on { --c2: var(--c, #22D3EE); color: color-mix(in srgb, var(--c2) 70%, white); background: color-mix(in srgb, var(--c2) 18%, transparent); border-color: color-mix(in srgb, var(--c2) 45%, transparent); }
+  .sc .d { width: 7px; height: 7px; border-radius: 50%; background: var(--c); box-shadow: 0 0 6px var(--c); }
+  .sc .d.live { animation: pulse 1.3s ease-in-out infinite; }
+  .cats { display: flex; flex-wrap: nowrap; gap: 4px; overflow-x: auto; overflow-y: hidden; flex: none; padding-bottom: 3px; scrollbar-width: thin;
+    -webkit-mask-image: linear-gradient(90deg, #000 90%, transparent); mask-image: linear-gradient(90deg, #000 90%, transparent); }
+  .cats > :global(*) { flex: none; }
+  .cat { padding: 2px 8px; font-size: 10.5px; }
+  .cat.on { color: color-mix(in srgb, var(--fc) 70%, white); background: color-mix(in srgb, var(--fc) 18%, transparent); border-color: color-mix(in srgb, var(--fc) 45%, transparent); }
+  .fd { width: 6px; height: 6px; border-radius: 50%; background: var(--fc, var(--oc)); box-shadow: 0 0 5px var(--fc, var(--oc)); flex: none; }
+
+  .row { display: flex; align-items: center; gap: 4px; border-radius: 10px; border: 1px solid transparent; transition: background .15s, border-color .15s; }
+  .row:hover { background: color-mix(in srgb, var(--oc) 7%, transparent); }
+  .row.sel { background: linear-gradient(90deg, color-mix(in srgb, var(--oc) 18%, transparent), transparent); border-color: color-mix(in srgb, var(--oc) 45%, transparent); }
+  .row.off { opacity: .55; }
+  .rmain { flex: 1; min-width: 0; display: grid; grid-template-columns: 10px minmax(0, 1fr) 74px; gap: 9px; align-items: center; padding: 5px 7px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 10px; }
+  .rmain:focus-visible, .act:focus-visible, .dots:focus-visible, .sc:focus-visible, .cat:focus-visible, .tile:focus-visible { outline: 2px solid #22D3EE; outline-offset: 1px; }
+  .sd { width: 8px; height: 8px; border-radius: 50%; background: var(--tc, var(--sc, #94A3B8)); box-shadow: 0 0 8px var(--tc, var(--sc, #94A3B8)); flex: none; display: inline-block; }
+  .sd.live { animation: pulse 1.3s ease-in-out infinite; }
+  .rtxt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .rl1 { display: flex; align-items: center; gap: 5px; min-width: 0; }
+  .rl1 b { font-size: 12.5px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .k { flex: none; font: 800 9.5px var(--font-mono); text-transform: uppercase; letter-spacing: .04em; padding: 0 6px; border-radius: 999px;
+    color: color-mix(in srgb, var(--c) 70%, white); background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 42%, transparent); }
+  .cron { flex: none; font: 600 10px var(--font-mono); color: var(--text-3); }
+  .rdesc { font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rmeta { display: flex; gap: 10px; font-size: 10.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; }
+  .of { display: inline-flex; align-items: center; gap: 5px; color: color-mix(in srgb, var(--oc) 65%, white); font-weight: 700; }
+  .rate { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+  .rbar { width: 64px; height: 5px; border-radius: 3px; background: rgba(148, 163, 184, .15); overflow: hidden; }
+  .rbar i { display: block; height: 100%; border-radius: 3px; background: var(--rc); box-shadow: 0 0 6px var(--rc); }
+  .rate small { font-size: 10px; color: var(--text-3); }
+  .act { flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; cursor: pointer; font-size: 11px; background: none; border: 1px solid var(--border); color: var(--text-3); transition: color .15s, border-color .15s, background .15s; }
+  .act.run:hover { color: #34D399; border-color: #34D399; background: rgba(52, 211, 153, .1); }
+  .act.stop { color: #22D3EE; border-color: color-mix(in srgb, #22D3EE 50%, transparent); }
+  .act.stop:hover { color: #F43F5E; border-color: #F43F5E; }
+  .act:disabled { opacity: .5; cursor: wait; }
+  .more { position: relative; flex: none; margin-right: 4px; }
+  .dots { width: 28px; height: 28px; border-radius: 8px; border: 1px solid transparent; background: none; color: var(--text-3); font-size: 16px; line-height: 1; cursor: pointer; }
+  .row:hover .dots, .dots[aria-expanded='true'] { color: var(--text-1); border-color: var(--border); background: var(--surface-2, #1f2230); }
+  .menu { position: absolute; right: 0; top: 32px; z-index: 30; min-width: 190px; padding: 4px; border-radius: 10px; display: flex; flex-direction: column;
+    background: var(--surface-1); border: 1px solid var(--border); box-shadow: 0 16px 34px -14px rgba(0, 0, 0, .7); }
+  .menu button, .menu a { text-align: left; padding: 7px 10px; border: 0; background: none; color: var(--text-1); font: 600 12.5px var(--font-body); border-radius: 7px; cursor: pointer; text-decoration: none; }
+  .menu button:hover, .menu a:hover { background: var(--surface-2, #1f2230); }
+  .menu .danger { color: #fda4af; }
+  .menu .danger:hover { background: color-mix(in srgb, #F43F5E 14%, transparent); }
+
+  .ag-right { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow: hidden; }
+  .runs-card { flex: 1.25; }
+  .pair { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .run-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) 78px 46px 70px; gap: 8px; align-items: center; padding: 5px 7px; border-radius: 9px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .run-row:hover { background: rgba(255, 255, 255, .05); }
+  .run-name { font-size: 12px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .run-status { font-size: 11px; font-weight: 700; color: color-mix(in srgb, var(--sc) 80%, white); }
+  .run-tokens { font-size: 10.5px; color: var(--text-3); text-align: right; }
+  .run-time { font-size: 10.5px; color: var(--text-3); text-align: right; }
+  .top-row { display: grid; grid-template-columns: minmax(0, 1fr) 54px 44px; gap: 8px; align-items: center; padding: 3px 4px; }
+  .top-name { font-size: 11.5px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tbar { height: 5px; border-radius: 3px; background: rgba(251, 191, 36, .12); overflow: hidden; }
+  .tbar i { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #FBBF24, #F472B6); box-shadow: 0 0 6px rgba(251, 191, 36, .55); }
+  .top-runs { font-size: 11px; color: #fde68a; text-align: right; }
+  .stat-grid { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat-group-title { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); margin-bottom: 2px; }
+  .stat-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 3px 2px; font-size: 11.5px; }
+  .stat-label { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); }
+  .stat-val { color: var(--text-1); font-weight: 700; }
+
+  @media (prefers-reduced-motion: reduce) { .sd.live, .sc .d.live { animation: none; } }
+  @media (max-height: 760px) { .rdesc { display: none; } .tile b { font-size: 16px; } }
+  @media (max-width: 1100px) {
+    .agp { height: auto; overflow: visible; }
+    .top { grid-template-columns: 1fr auto; } .tiles { grid-column: 1 / -1; grid-row: 2; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .body { grid-template-columns: 1fr; } .card { max-height: 75vh; } .filters { flex-wrap: wrap; }
+    .detail-grid { grid-template-columns: 1fr 1fr; }
   }
 
-  /* ── Header ──────────────────────────────────── */
-  .ag-header {
-    display: flex; align-items: center; justify-content: space-between;
-    flex-shrink: 0; padding: 12px 0 8px;
-  }
-  .ag-header-left { display: flex; align-items: center; gap: 8px; }
-  .ag-title { font-family: var(--font-display); font-size: 18px; font-weight: 700; margin: 0; }
-  .ag-count {
-    font-size: 10px; font-family: var(--font-mono);
-    background: var(--surface-3); padding: 2px 7px; border-radius: 8px; color: var(--text-3);
-  }
-  .ag-header-right { display: flex; gap: 6px; }
+
   .ag-btn {
     padding: 5px 12px; border-radius: 8px; font-size: 11px; font-weight: 600;
     font-family: var(--font-body); cursor: pointer; transition: all 0.15s;
@@ -1141,21 +1243,6 @@
   .ag-btn-primary { background: var(--teal); border-color: var(--teal); color: var(--bg); }
   .ag-btn-primary:hover { opacity: 0.85; }
 
-  /* ── KPIs ────────────────────────────────────── */
-  .ag-kpis { display: flex; gap: 8px; flex-shrink: 0; margin-bottom: 10px; }
-  .ag-kpi {
-    flex: 1; background: var(--surface-1); border: 1px solid var(--border);
-    border-radius: 10px; padding: 8px 10px; text-align: center;
-  }
-  .ag-kpi-val { font-family: var(--font-display); font-size: 18px; font-weight: 700; line-height: 1; display: block; }
-  .ag-kpi-lbl { font-size: 8px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; display: block; }
-
-  /* ── Main Grid ───────────────────────────────── */
-  .ag-grid {
-    flex: 1; min-height: 0;
-    display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
-  }
-
   /* ── Panels ──────────────────────────────────── */
   .ag-panel {
     background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
@@ -1165,9 +1252,7 @@
     display: flex; align-items: center; gap: 8px;
     padding: 10px 14px 8px; flex-shrink: 0; border-bottom: 1px solid var(--border);
   }
-  .ag-panel-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
   .ag-panel-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-2); flex: 1; }
-  .ag-panel-count { font-size: 10px; font-family: var(--font-mono); color: var(--text-3); }
   .ag-panel-body {
     flex: 1; min-height: 0; overflow-y: auto; padding: 6px 10px;
     scrollbar-width: thin; scrollbar-color: var(--surface-3) transparent;
@@ -1187,92 +1272,7 @@
   /* The one block this page adds to the overview, spaced like the sections
      above it rather than butted against the last one. */
   .ip-extra { margin-top: 14px; }
-
-  /* ── Right column ────────────────────────────── */
-  .ag-right { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
-  .ag-panel-runs { flex: 1; min-height: 0; }
-  .ag-panel-top { flex: 1; min-height: 0; }
-  .ag-panel-stats { flex-shrink: 0; }
   .ag-panel-detail { flex: 1; min-height: 0; }
-
-  /* ── Filters ────────────────────────────────── */
-  .ag-filters {
-    padding: 6px 10px 4px; flex-shrink: 0; border-bottom: 1px solid var(--border);
-    display: flex; flex-direction: column; gap: 6px;
-  }
-  .ag-categories {
-    display: flex; gap: 4px; flex-wrap: wrap;
-  }
-  .ag-cat {
-    padding: 3px 8px; border-radius: 6px; font-size: 10px; font-weight: 600;
-    font-family: var(--font-body); cursor: pointer; transition: all 0.15s;
-    border: 1px solid var(--border); background: none; color: var(--text-3);
-    display: flex; align-items: center; gap: 4px;
-  }
-  .ag-cat:hover { background: var(--surface-2); color: var(--text-2); }
-  .ag-cat-active { background: var(--teal); border-color: var(--teal); color: var(--bg); }
-  .ag-cat-active:hover { background: var(--teal); color: var(--bg); }
-  .ag-cat-count {
-    font-size: 9px; font-family: var(--font-mono); opacity: 0.7;
-  }
-  .ag-cat-dot {
-    width: 7px; height: 7px; border-radius: 50%;
-    flex-shrink: 0; box-shadow: 0 0 0 1px rgba(0,0,0,0.3);
-  }
-  .ag-search {
-    padding: 4px 8px; border-radius: 6px; font-size: 11px;
-    font-family: var(--font-body); border: 1px solid var(--border);
-    background: var(--surface-2); color: var(--text-1); outline: none;
-  }
-  .ag-search:focus { border-color: var(--teal); }
-  .ag-search::placeholder { color: var(--text-3); }
-
-  /* ── Agent Card ──────────────────────────────── */
-  .ag-card {
-    display: block; width: 100%; text-align: left;
-    padding: 7px 10px; border-radius: 8px; transition: background 0.15s;
-    border: none; border-bottom: 1px solid var(--border);
-    background: none; cursor: pointer; font-family: inherit; color: inherit;
-  }
-  .ag-card:last-child { border-bottom: none; }
-  .ag-card:hover { background: var(--surface-2); }
-  .ag-card-running { background: rgba(61,214,200,0.04); }
-  .ag-card-disabled { opacity: 0.5; }
-  .ag-card-selected { background: var(--surface-2); border-left: 2px solid var(--teal); }
-  .ag-card-main { display: flex; align-items: center; gap: 8px; }
-  .ag-card-indicator {
-    width: 7px; height: 7px; border-radius: 50%; background: var(--surface-3);
-    flex-shrink: 0; transition: all 0.2s;
-  }
-  .ag-card-indicator.active { background: var(--green); }
-  .ag-card-indicator.running { background: var(--teal); box-shadow: 0 0 6px var(--teal); animation: pulse 1.5s ease infinite; }
-  .ag-card-body { flex: 1; min-width: 0; }
-  .ag-card-top { display: flex; align-items: center; gap: 6px; }
-  .ag-card-name { font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .ag-card-badges { display: flex; gap: 3px; flex-shrink: 0; }
-  .ag-card-cron {
-    font-size: 9px; font-family: var(--font-mono); color: var(--text-3);
-    background: var(--surface-2); padding: 1px 5px; border-radius: 4px;
-  }
-  .ag-card-desc { font-size: 10px; color: var(--text-3); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .ag-card-meta { font-size: 9px; color: var(--text-3); margin-top: 1px; display: flex; gap: 6px; }
-  .ag-card-actions { display: flex; gap: 3px; flex-shrink: 0; }
-  .ag-act {
-    width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 5px;
-    background: none; cursor: pointer; display: flex; align-items: center;
-    justify-content: center; font-size: 10px; transition: all 0.15s;
-  }
-  .ag-act-run { color: var(--teal); }
-  .ag-act-run:hover { border-color: var(--teal); background: rgba(61,214,200,0.1); }
-  .ag-act-stop { color: var(--red); }
-  .ag-act-stop:hover { border-color: var(--red); background: rgba(240,71,112,0.1); }
-  .ag-act-stop:disabled { opacity: 0.4; cursor: default; }
-  .ag-act-del { color: var(--text-3); }
-  .ag-act-del:hover { color: var(--red); border-color: var(--red); background: rgba(240,71,112,0.1); }
-  .ag-act-accept { color: var(--green); }
-  .ag-act-accept:hover { border-color: var(--green); background: rgba(108,255,176,0.1); }
-  .ag-act-reject { color: var(--orange); }
-  .ag-act-reject:hover { border-color: var(--orange); background: rgba(240,136,62,0.12); }
 
   /* ── Back button ─────────────────────────────── */
   .back-btn {
@@ -1374,39 +1374,7 @@
     line-height: 1.4;
   }
   .step-tokens { font-size: 9px; color: var(--text-3); flex-shrink: 0; }
-
-  /* ── Run Row (overview) ──────────────────────── */
-  .run-row {
-    display: flex; align-items: center; gap: 8px; width: 100%;
-    padding: 6px 4px; border: none; background: none;
-    border-bottom: 1px solid var(--border); font-size: 11px;
-    cursor: pointer; transition: background 0.15s; font-family: inherit;
-    color: inherit; text-align: left;
-  }
-  .run-row:last-child { border-bottom: none; }
-  .run-row:hover { background: var(--surface-2); border-radius: 4px; }
   .run-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-  .run-name { flex: 1; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-1); }
-  .run-status { font-size: 10px; font-weight: 600; flex-shrink: 0; }
-  .run-tokens { font-size: 10px; color: var(--text-3); flex-shrink: 0; min-width: 36px; text-align: right; }
-  .run-time { font-size: 9px; color: var(--text-3); flex-shrink: 0; min-width: 48px; text-align: right; }
-
-  /* ── Top Agents Row ──────────────────────────── */
-  .top-row {
-    display: flex; align-items: center; gap: 8px;
-    padding: 5px 4px; border-bottom: 1px solid var(--border); font-size: 11px;
-  }
-  .top-row:last-child { border-bottom: none; }
-  .top-name { flex: 1; font-weight: 600; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .top-runs { font-size: 10px; color: var(--text-3); flex-shrink: 0; }
-  .top-tokens { font-size: 10px; color: var(--teal); flex-shrink: 0; min-width: 44px; text-align: right; }
-
-  /* ── Stats ───────────────────────────────────── */
-  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .stat-group-title { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-3); margin-bottom: 6px; }
-  .stat-row { display: flex; justify-content: space-between; align-items: center; padding: 2px 0; font-size: 11px; }
-  .stat-label { color: var(--text-2); text-transform: capitalize; }
-  .stat-val { font-weight: 600; }
 
   /* ── Misc ────────────────────────────────────── */
   .mono { font-family: var(--font-mono); }
@@ -1418,13 +1386,6 @@
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.4; }
-  }
-
-  @media (max-width: 800px) {
-    .ag-grid { grid-template-columns: 1fr; }
-    .ag-kpis { flex-wrap: wrap; }
-    .ag-kpi { min-width: 60px; }
-    .detail-grid { grid-template-columns: 1fr 1fr; }
   }
 
   /* ── Preview Prompt modal ── */
