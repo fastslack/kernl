@@ -37,7 +37,7 @@ test('file tools reject workspace escapes and exact edits reject ambiguous text'
 });
 test('explicit host workspace mount sources are nonempty and volume paths fail visibly', async () => {
  const { nativeFallbackBindSource }=await import('../assets/extensions/agents/agent-advanced/_module/native-coding-tools.js');
- const cwd='/home/fastslack/mtwProjects/Acme/agents-office';
+ const cwd='/home/user/projects/acme/agents-office';
  expect(nativeFallbackBindSource(cwd,'')).toBe(cwd);
  expect(nativeFallbackBindSource('/app/data/workspaces/test','/srv/kernel/data/workspaces/test')).toBe('/srv/kernel/data/workspaces/test');
  expect(()=>nativeFallbackBindSource('/app/data/workspaces/test','')).toThrow('host mapping');

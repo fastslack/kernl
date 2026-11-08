@@ -17,9 +17,9 @@ const sync = (id: string, stored: number, fetch: SyncEntry["fetch"]): SyncEntry 
 
 const accounts = [
   acc("g", "me@gmail.com", { label: "Gmail", provider: "gmail", type: "personal", is_default: 1, provider_config: "{}" }),
-  acc("a", "admin@matware.nl"),
-  acc("b", "fastslack@matware.nl"),
-  acc("c", "contacto@telenode.online"),
+  acc("a", "admin@my-company.example"),
+  acc("b", "owner@my-company.example"),
+  acc("c", "contacto@nodes.example"),
 ];
 const syncs = [
   sync("g", 2492, null),
@@ -33,7 +33,7 @@ describe("buildAccountView", () => {
   const view = buildAccountView(accounts, syncs, unread);
 
   it("groups by domain, the default account's group first, then alphabetical", () => {
-    expect(view.groups.map((g) => g.domain)).toEqual(["gmail.com", "matware.nl", "telenode.online"]);
+    expect(view.groups.map((g) => g.domain)).toEqual(["gmail.com", "my-company.example", "nodes.example"]);
   });
 
   it("puts failing mailboxes first inside their group", () => {
@@ -60,7 +60,7 @@ describe("buildAccountView", () => {
 
   it("shows the IMAP/SMTP servers for the expanded row", () => {
     const a = view.groups[1].rows[0];
-    expect(a.servers).toEqual({ imap: "mail.x.com:993 · TLS", smtp: "mail.x.com:465 · TLS", user: "admin@matware.nl" });
+    expect(a.servers).toEqual({ imap: "mail.x.com:993 · TLS", smtp: "mail.x.com:465 · TLS", user: "admin@my-company.example" });
   });
 
   it("a mailbox never synced says so instead of pretending to be fine", () => {
@@ -71,9 +71,9 @@ describe("buildAccountView", () => {
 
 describe("displayName", () => {
   it("drops the 'VPS <email>' boilerplate and keeps the mailbox name", () => {
-    expect(displayName("VPS admin@matware.nl", "admin@matware.nl")).toBe("admin");
+    expect(displayName("VPS admin@my-company.example", "admin@my-company.example")).toBe("admin");
     expect(displayName("Gmail", "me@gmail.com")).toBe("Gmail");
-    expect(displayName("Ventas Matware", "ventas@matware.nl")).toBe("Ventas Matware");
+    expect(displayName("Ventas Acme", "ventas@my-company.example")).toBe("Ventas Acme");
   });
 });
 
@@ -82,13 +82,13 @@ describe("filterGroups", () => {
 
   it("'problems' keeps only failing mailboxes and drops empty groups", () => {
     const g = filterGroups(view.groups, "problems", "");
-    expect(g.map((x) => x.domain)).toEqual(["matware.nl"]);
+    expect(g.map((x) => x.domain)).toEqual(["my-company.example"]);
     expect(g[0].rows.map((r) => r.id)).toEqual(["a"]);
   });
 
   it("filters by type and by free text over name, email and domain", () => {
     expect(filterGroups(view.groups, "personal", "").flatMap((g) => g.rows).map((r) => r.id)).toEqual(["g"]);
-    expect(filterGroups(view.groups, "all", "telenode").flatMap((g) => g.rows).map((r) => r.id)).toEqual(["c"]);
-    expect(filterGroups(view.groups, "all", "FASTSLACK@").flatMap((g) => g.rows).map((r) => r.id)).toEqual(["b"]);
+    expect(filterGroups(view.groups, "all", "nodes").flatMap((g) => g.rows).map((r) => r.id)).toEqual(["c"]);
+    expect(filterGroups(view.groups, "all", "OWNER@").flatMap((g) => g.rows).map((r) => r.id)).toEqual(["b"]);
   });
 });
