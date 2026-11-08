@@ -21,6 +21,12 @@ export interface LlmLoopBudgets {
    * every result whole, the old behaviour.
    */
   keepFullToolTurns?: number;
+  /**
+   * Output cap for each turn. Left unset, the provider's own default applies
+   * (4096 on the OpenAI-compatible adapter), which a reasoning model can
+   * spend entirely on its hidden thinking and answer with nothing.
+   */
+  maxOutputTokens?: number;
 }
 
 /** A result longer than this is cut once it ages out; shorter ones stay. */
@@ -314,6 +320,7 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
           ? (waitMs, attempt) => hooks.onRateLimitWait!({ waitMs, attempt })
           : undefined,
         caller,
+        ...(budgets.maxOutputTokens ? { max_tokens: budgets.maxOutputTokens } : {}),
       };
 
       for (const id of compactOldToolResults(messages, keepFullToolTurns)) {

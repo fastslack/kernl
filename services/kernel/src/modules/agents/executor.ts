@@ -192,6 +192,7 @@ export function chainOnly(agent: Agent, forced: boolean | undefined): boolean {
 const CLAUDE_HANDOFF_ERRORS = new Set(["ClaudeUsageLimitError", "ClaudeAccessError"]);
 const CLAUDE_CODE_PROVIDERS = new Set(["claude-code", "claude_code"]);
 const CODING_TOOLS = ["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"];
+const AGENT_TURN_OUTPUT_TOKENS = 16_384;
 
 /** Can this agent change files or run commands? An empty tool list is the CLI's full toolset. */
 function isCodingAgent(agent: Agent): boolean {
@@ -821,6 +822,10 @@ export class AgentExecutor {
       // Clamp: a negative or absurd value from a hand-edited row must not
       // disable the loop's safety or trim the current turn.
       keepFullToolTurns: Math.min(Math.max(Math.trunc(agent.keep_full_tool_turns ?? 3), 0), 50),
+      // Reasoning models (MiniMax, DeepSeek…) think before they answer; at the
+      // adapter's 4096 default a long tool result can use it all up and the
+      // turn comes back empty.
+      maxOutputTokens: AGENT_TURN_OUTPUT_TOKENS,
     };
   }
 

@@ -163,3 +163,25 @@ describe("runToolLoop and an empty reply after a tool result", () => {
     expect(seen.length).toBe(3);
   });
 });
+
+describe("runToolLoop output cap", () => {
+  it("passes maxOutputTokens to the provider as max_tokens", async () => {
+    const seenOpts: Array<{ max_tokens?: number }> = [];
+    await runToolLoop({
+      provider: {
+        name: "fake",
+        available: () => true,
+        async chatCompletion(_m: ChatMessage[], opts: { max_tokens?: number }) {
+          seenOpts.push(opts);
+          return { content: "done", model: "fake", tokens_used: 1 } as ChatCompletionResult;
+        },
+      },
+      systemText: "S",
+      messages: [{ role: "user", content: "goal" }],
+      tools: [],
+      executeTool: async () => ({ text: "", isError: false }),
+      budgets: { ...budgets, maxOutputTokens: 16_384 },
+    });
+    expect(seenOpts[0].max_tokens).toBe(16_384);
+  });
+});
