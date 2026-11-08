@@ -4,6 +4,9 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The suite takes ~1-2 min. A hang (bun 1.4.2 coverage, 02/11-08/11) used to sit for GitHub's 6 h default and
+    # no run went green for a week; fail it fast instead.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: services/kernel

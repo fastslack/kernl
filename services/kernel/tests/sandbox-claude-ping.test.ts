@@ -9,10 +9,15 @@ const adapters: Array<string | undefined> = [];
 
 const realClient = await import("../src/core/llm/client.js");
 const realFactory = await import("../src/core/llm/chat-factory.js");
+// The real functions, taken before mocking: bun 1.4 patches the module namespace in place, so after mock.module
+// `realFactory.buildChatAdapter` IS the mock — delegating through it recursed forever, and since the mock lives for
+// the whole run, the next file to build an adapter (minimax-provider) hung CI until the 6 h cut (02/11–08/11).
+const realCreatePinned = realClient.createPinnedLlmClient;
+const realBuildAdapter = realFactory.buildChatAdapter;
 mock.module("../src/core/llm/client.js", () => ({
   ...realClient,
   createPinnedLlmClient: (...args: Parameters<typeof realClient.createPinnedLlmClient>) => {
-    if (!active) return realClient.createPinnedLlmClient(...args);
+    if (!active) return realCreatePinned(...args);
     pinned.push(String(args[0]));
     return { chat: async () => ({}) } as never;
   },
@@ -20,7 +25,7 @@ mock.module("../src/core/llm/client.js", () => ({
 mock.module("../src/core/llm/chat-factory.js", () => ({
   ...realFactory,
   buildChatAdapter: (...args: Parameters<typeof realFactory.buildChatAdapter>) => {
-    if (!active) return realFactory.buildChatAdapter(...args);
+    if (!active) return realBuildAdapter(...args);
     adapters.push((args[2] as { claudeCode?: { accountId?: string } } | undefined)?.claudeCode?.accountId);
     return { chatCompletion: async () => ({}) } as never;
   },
