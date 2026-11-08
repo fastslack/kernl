@@ -6,7 +6,7 @@
 
 ### Agent teams that do your work — on your own machine.
 
-**Kernl is a self-hosted server that hands any LLM your real data — tasks, mail, calendar, finance, contacts — and runs teams of agents that act on it. No account, no cloud, nothing leaves the box.**
+**Kernl is a self-hosted server that hands any LLM your real data — tasks, mail, calendar, finance, contacts — and runs teams of agents that act on it. No account. With a local model, nothing leaves the box.**
 
 <p>
   <a href="https://github.com/fastslack/kernl/stargazers"><img src="https://img.shields.io/github/stars/fastslack/kernl?style=for-the-badge&logo=github&color=ffd700" alt="GitHub stars"></a>
@@ -121,7 +121,7 @@ Kernl is a **self-hosted** server that plugs your real life into **any** LLM thr
 
 Then it goes past a data bridge: Kernl runs **agents** — autonomous teams (it calls them *offices*) that work in loops, call your tools, and finish jobs while you're away.
 
-Everything runs on **your machine**. Your data never leaves the box.
+Kernl and your data live on **your machine**. The only thing that goes out is what the agents send to the LLM you pick, and with a local model (Ollama, LM Studio) nothing does.
 
 <sub>For the depth, once you want a number: **103 tools** live on a fresh install, rising past **290** as you enable more of the **71 bundled modules**.</sub>
 
