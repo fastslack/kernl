@@ -128,3 +128,38 @@ describe("runToolLoop trims what it re-sends", () => {
     expect(results(seen[seen.length - 1]).every((r) => r.text === BIG)).toBe(true);
   });
 });
+
+describe("runToolLoop and an empty reply after a tool result", () => {
+  it("asks once to carry on instead of closing the run", async () => {
+    const { provider, seen } = scripted([call("1", "state"), { content: "" }, call("2", "next"), { content: "done" }]);
+    let runs = 0;
+    const out = await runToolLoop({
+      provider,
+      systemText: "S",
+      messages: [{ role: "user", content: "goal" }],
+      tools: [{ name: "read", description: "", input_schema: {} }],
+      executeTool: async () => {
+        runs++;
+        return { text: "ok", isError: false };
+      },
+      budgets,
+    });
+    expect(runs).toBe(2);
+    expect(out.finalContent).toBe("done");
+    expect(JSON.stringify(seen[2])).toContain("Your last reply was empty");
+  });
+
+  it("takes a second empty reply as the end", async () => {
+    const { provider, seen } = scripted([call("1", "state"), { content: "" }, { content: "" }, { content: "never" }]);
+    const out = await runToolLoop({
+      provider,
+      systemText: "S",
+      messages: [{ role: "user", content: "goal" }],
+      tools: [{ name: "read", description: "", input_schema: {} }],
+      executeTool: async () => ({ text: "ok", isError: false }),
+      budgets,
+    });
+    expect(out.status).toBe("completed");
+    expect(seen.length).toBe(3);
+  });
+});

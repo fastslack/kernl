@@ -176,6 +176,11 @@ function stableArgsKey(input: unknown): string {
   return parts.join("|");
 }
 
+const MAX_EMPTY_NUDGES = 1;
+const EMPTY_TURN_NUDGE =
+  "[Your last reply was empty. Continue the task from the tool results above: " +
+  "call the next tool you need, or write your final answer.]";
+
 const UNKNOWN_OUTCOME =
   "[INTERRUPTED — the kernel restarted while this tool was running, so its outcome is unknown. " +
   "It may or may not have taken effect. Check the current state before calling it again.]";
@@ -252,6 +257,7 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
   const toolsUsed = new Set<string>();
   let consecutiveErrors = 0;
   let abortReason = "";
+  let emptyNudges = 0;
 
   const toolCallCounts = new Map<string, number>();
   const toolResultCache = new Map<string, string>();
@@ -323,6 +329,21 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
 
       // No tool calls → final text response
       if (!completion.tool_calls || completion.tool_calls.length === 0) {
+        // Some models end the turn with nothing at all right after reading a
+        // tool result: the run would close as "completed" having done
+        // nothing. Ask once to carry on before taking silence as the answer.
+        const last = messages[messages.length - 1];
+        if (
+          !completion.content?.trim() &&
+          emptyNudges < MAX_EMPTY_NUDGES &&
+          last?.role === "user" &&
+          Array.isArray(last.content) &&
+          (last.content as ContentBlock[]).some((b) => b.type === "tool_result")
+        ) {
+          emptyNudges++;
+          (last.content as ContentBlock[]).push({ type: "text", text: EMPTY_TURN_NUDGE });
+          continue;
+        }
         finalContent += completion.content;
         hooks?.onFinal?.({ content: completion.content, tokens: completion.tokens_used });
         break;
