@@ -333,8 +333,8 @@ export function createAgentsModule(): AgentsModule {
     getDashboardDescriptor(): DashboardDescriptor {
       return {
         nav: [
-          { id: "agents", label: "Agents", icon: "🤖", group: "ai", order: 20 },
-          { id: "autogenesis", label: "Autogenesis", icon: "🧬", group: "ai", order: 21 },
+          { id: "agents", label: "Agents", icon: "🤖", group: "ai", order: 3 },
+          { id: "autogenesis", label: "Autogenesis", icon: "🧬", group: "ai", order: 4 },
         ],
         channels: [
           {

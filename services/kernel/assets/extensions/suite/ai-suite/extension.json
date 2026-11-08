@@ -26,14 +26,14 @@
         "group": "ai",
         "label": "Overview",
         "icon": "🤖",
-        "order": 10
+        "order": 2
       },
       {
         "id": "agents",
         "group": "ai",
         "label": "Agents",
         "icon": "🧠",
-        "order": 20
+        "order": 3
       },
       {
         "id": "offices",
@@ -48,28 +48,28 @@
         "group": "ai",
         "label": "3D",
         "icon": "🧊",
-        "order": 4
+        "order": 1
       },
       {
         "id": "autogenesis",
         "group": "ai",
         "label": "Evolutions",
         "icon": "🧬",
-        "order": 40
+        "order": 4
       },
       {
         "id": "ranks",
         "group": "ai",
         "label": "Ranks",
         "icon": "🎖️",
-        "order": 50
+        "order": 6
       },
       {
         "id": "workspace",
         "group": "ai",
         "label": "Workspace",
         "icon": "📂",
-        "order": 70
+        "order": 8
       }
     ]
   }
