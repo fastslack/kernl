@@ -17,7 +17,8 @@
 
 export interface WorldVec3 { x: number; y: number; z: number }
 export interface WorldAabb { minX: number; maxX: number; minZ: number; maxZ: number }
-export interface WorldRect { cx: number; cz: number; w: number; d: number }
+/** `y`: height the camera aims at (e.g. a floor of a tower); ground level when absent. */
+export interface WorldRect { cx: number; cz: number; w: number; d: number; y?: number }
 export interface WorldSegment { x1: number; z1: number; x2: number; z2: number; width: number; outdoor?: boolean }
 
 /** An office room the walker router treats like any grid office. */

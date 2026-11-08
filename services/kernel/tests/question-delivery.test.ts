@@ -121,6 +121,19 @@ describe("answers that arrive while the asker is busy", () => {
     return busy.id;
   }
 
+  it("the relaunch works for the project of the run that asked (03/11: Growth runs with no project showed in every project)", () => {
+    service.setProjectGate({ check: () => ({ ok: true }) } as never);
+    const w = service.createAgent({ name: "SEO Factory" });
+    const asking = service.createRun({ agent_id: w.id, goal: "audit", project_id: "P1" });
+    service.updateRun(asking.id, { status: "running" });
+    const q = service.createQuestion({ from_agent_id: w.id, run_id: asking.id, question: "Which site?", options: OPTS } as never);
+    answerAndDeliver(service, executor, events, q.id, { selected_index: 0, selected_option: OPTS[0].label, answered_by: "human" });
+    service.updateRun(asking.id, { status: "completed" });
+    const relaunched = deliverPendingAnswers(service, executor, events, w.id)!;
+    expect(relaunched).toBeTruthy();
+    expect(service.getRun(relaunched)?.project_id).toBe("P1");
+  });
+
   it("relaunches the asker once with every waiting answer when it is free", () => {
     const w = service.createAgent({ name: "Career Lead" });
     const busy = answerWhileBusy(w.id, ["IC or management?", "Salary floor?"]);

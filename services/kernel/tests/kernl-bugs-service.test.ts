@@ -17,7 +17,7 @@ describe("KernlBugService.report", () => {
   it("stores a redacted report", () => {
     const { bug, repeat } = bugs.report({
       title: "Results labelled with the wrong tool", area: "executor/claude-code",
-      diagnosis: "token ghp_ABCDEFGHIJKLMNOPQRSTUVWX12 leaked", error: "x", source: "chief", run_id: "r1",
+      diagnosis: `token ${"ghp" + "_ABCDEFGHIJKLMNOPQRSTUVWX12"} leaked`, error: "x", source: "chief", run_id: "r1",
       context: { last: "mail maguirre@matware.nl" },
     });
     expect(repeat).toBe(false);

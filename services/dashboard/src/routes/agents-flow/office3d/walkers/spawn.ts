@@ -6,6 +6,7 @@ import type { Vec3, Walker, RoomInfo, Aabb2D } from '../types.js';
 import type { CorridorGrid } from '../floor-plan.js';
 import { nearestCorridorNode } from '../floor-plan.js';
 import { resolveSkin } from '../skins/index.js';
+import { agentSkinId } from '../types.js';
 import { buildCumDist, pathLength } from '../anim/path.js';
 import type { SittingWorkers, CommuteWalkerOpts } from './types.js';
 import {
@@ -53,9 +54,9 @@ function walkerBubble(group: any, agentId: string, message: string | undefined, 
 
 // Local helper — resolve the agent's skin from the shared registry, then
 // build the per-mesh humanoid in the right outfit.
-function buildWalkerHumanoid(srcId: string, agents: Array<{ id: string; skin_id?: string }>, color: string) {
+function buildWalkerHumanoid(srcId: string, agents: Array<{ id: string; skin_id?: string; builtin_handler?: string }>, color: string) {
   const agent = agents.find(a => a.id === srcId);
-  const skin = resolveSkin(agent?.skin_id);
+  const skin = resolveSkin(agentSkinId(agent));
   const palette = skin.pickPalette(srcId);
   return skin.createHumanoid({ flowColor: color, palette, scale: WALKER_SCALE, walker: true });
 }
@@ -81,7 +82,7 @@ export function sendWalker(
   deskPos: Map<string, Vec3>,
   rooms: Map<string, RoomInfo>,
   corridorGrid: CorridorGrid,
-  agents: Array<{ id: string; flow_id: string; skin_id?: string }>,
+  agents: Array<{ id: string; flow_id: string; skin_id?: string; builtin_handler?: string }>,
   color: string,
   message?: string,
   sittingWorkers?: SittingWorkers,
@@ -227,7 +228,7 @@ export function sendWalkerToPoint(
   deskPos: Map<string, Vec3>,
   rooms: Map<string, RoomInfo>,
   corridorGrid: CorridorGrid,
-  agents: Array<{ id: string; flow_id: string; skin_id?: string }>,
+  agents: Array<{ id: string; flow_id: string; skin_id?: string; builtin_handler?: string }>,
   color: string,
   message?: string,
   deskAabbs?: Map<string, Aabb2D>,

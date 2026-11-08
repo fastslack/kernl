@@ -13,7 +13,7 @@
   import ViewHeader from '$shared/components/ViewHeader.svelte';
   import Panel from '$shared/components/Panel.svelte';
   import Skeleton from '$shared/components/Skeleton.svelte';
-  import Toggle from '$lib/components/settings/Toggle.svelte';
+  import TorCard from './TorCard.svelte';
 
   interface Friend {
     npub: string;
@@ -319,48 +319,15 @@
   </div>
 
   {#if tor}
-    <div class="tor">
-      <Toggle checked={tor.enabled} disabled={torBusy} on:click={() => tor && setTor(!tor.enabled)} />
-      <div class="tor-body">
-        <span class="tor-title">Reachable from anywhere <span class="tor-sub">· Tor</span></span>
-        {#if tor.state === 'up'}
-          <span class="tor-line">
-            Friends reach you from any network, no ports to open.
-            <button class="link" on:click={copyOnion} title={tor.onion}>{torCopied ? 'copied' : 'copy onion address'}</button>
-          </span>
-          {#if tor.external}
-            <span class="tor-line warn">This Tor was not started by Kernl, so what its onion serves is not controlled from here.</span>
-          {/if}
-        {:else if tor.state === 'starting'}
-          <span class="tor-line">Connecting to the Tor network… {tor.progress}%</span>
-          <span class="tor-bar"><span style="width: {Math.max(4, tor.progress)}%"></span></span>
-          {#if tor.error}<span class="tor-line warn">{tor.error}</span>{/if}
-        {:else if tor.state === 'missing' || tor.state === 'error'}
-          <span class="tor-line warn">{tor.error}</span>
-        {:else}
-          <span class="tor-line">Off — friends reach you only on this network. Turn it on to be reachable from home, the office or a phone's hotspot alike.</span>
-        {/if}
-
-        {#if tor.enabled && tor.services?.length}
-          <div class="svc">
-            <span class="svc-head">What the onion shows <span class="svc-sub">· the address is public; everything not listed answers "not found"</span></span>
-            {#each tor.services as svc (svc.id)}
-              <div class="svc-row" class:off={!svc.enabled}>
-                <Toggle
-                  checked={svc.enabled}
-                  disabled={svc.locked || svcBusy[svc.id]}
-                  on:click={() => !svc.locked && setService(svc)}
-                />
-                <span class="svc-text">
-                  <span class="svc-label">{svc.label}{#if svc.locked}<span class="svc-lock"> · always</span>{/if}</span>
-                  <span class="svc-desc">{svc.description}</span>
-                </span>
-              </div>
-            {/each}
-          </div>
-        {/if}
-      </div>
-    </div>
+    <TorCard
+      {tor}
+      busy={torBusy}
+      copied={torCopied}
+      {svcBusy}
+      onToggle={setTor}
+      onCopy={copyOnion}
+      onService={setService}
+    />
   {/if}
 </section>
 
@@ -493,35 +460,6 @@
   .id-foot { display: flex; align-items: flex-start; gap: 16px; margin-top: 14px; flex-wrap: wrap; }
   .id-foot .hint { flex: 1; min-width: 260px; margin: 0; }
   .reach { display: flex; gap: 6px; flex-wrap: wrap; }
-
-  /* ── Tor switch ───────────────────────────────────────────── */
-  .tor {
-    display: flex; align-items: flex-start; gap: 12px;
-    margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border, #22263a);
-  }
-  .tor :global(.tg) { margin-top: 2px; }
-  .tor-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
-  .tor-title { font-size: 13px; color: var(--text-1); }
-  .tor-sub { color: var(--purple, #8B7CF6); font-family: var(--font-mono); font-size: 11px; }
-  .tor-line { font-size: 12.5px; line-height: 1.5; color: var(--text-2); }
-  .tor-line.warn { color: var(--orange, #F0883E); }
-  .tor-note { color: var(--text-3); margin-left: 4px; }
-  .tor-bar {
-    display: block; height: 3px; max-width: 320px; border-radius: 2px;
-    background: var(--border, #22263a); overflow: hidden;
-  }
-  .tor-bar span { display: block; height: 100%; background: var(--purple, #8B7CF6); transition: width 0.4s ease; }
-
-  .svc { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
-  .svc-head { font-size: 12px; color: var(--text-1); }
-  .svc-sub { color: var(--text-3); }
-  .svc-row { display: flex; align-items: flex-start; gap: 10px; }
-  .svc-row :global(.tg) { margin-top: 1px; }
-  .svc-row.off .svc-label { color: var(--text-2); }
-  .svc-text { display: flex; flex-direction: column; min-width: 0; }
-  .svc-label { font-size: 12.5px; color: var(--text-1); }
-  .svc-lock { color: var(--text-3); font-size: 11px; }
-  .svc-desc { font-size: 11.5px; line-height: 1.45; color: var(--text-3); }
 
   /* ── Chips & pills ────────────────────────────────────────── */
   .chip {

@@ -1,4 +1,5 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
+import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { SqliteDb } from "./db/sqlite.js";
 import type { Neo4jClient } from "./db/neo4j.js";
@@ -27,6 +28,8 @@ export interface ExtensionServiceLike {
     slug: string;
     status: string;
     manifest_json: string;
+    /** Where the extension is installed; its bundle's mtime goes into the page version. */
+    install_path?: string;
   }>;
 }
 
@@ -317,6 +320,15 @@ export class DashboardRegistry {
 
             const frontend = manifest.frontend;
             if (!frontend) continue;
+            // The bundle URL is cached for a year (?v=…, immutable), so the version also carries the file's
+            // mtime: a bundle replaced in place (a hotfix, a rebuild without a version bump) reaches the browser.
+            const stamp = (entry: string): string => {
+              const base = manifest.version ?? "0.0.0";
+              try {
+                const dir = row.install_path;
+                return dir ? `${base}+${Math.floor(statSync(join(dir, "frontend", entry)).mtimeMs).toString(36)}` : base;
+              } catch { return base; }
+            };
 
             // Frontend page bundles — one entry per view; first writer wins.
             // `entry` is normalized to be relative to the extension's
@@ -329,7 +341,7 @@ export class DashboardRegistry {
                 view: p.view,
                 slug: row.slug,
                 entry: p.entry.replace(/^frontend\//, ""),
-                version: manifest.version ?? "0.0.0",
+                version: stamp(p.entry.replace(/^frontend\//, "")),
                 title: p.title,
                 channels: Array.isArray(p.channels)
                   ? p.channels.filter((c): c is string => typeof c === "string")
@@ -344,7 +356,7 @@ export class DashboardRegistry {
               extWorlds.push({
                 slug: row.slug,
                 entry: w.entry.replace(/^frontend\//, ""),
-                version: manifest.version ?? "0.0.0",
+                version: stamp(w.entry.replace(/^frontend\//, "")),
                 kinds: w.kinds.filter((k: { id: string }) => typeof k?.id === "string"),
               });
             }

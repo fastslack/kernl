@@ -173,3 +173,18 @@ describe("ToolMemoryService", () => {
     expect(results).toHaveLength(0);
   });
 });
+
+describe("stored outputs", () => {
+  test("a long output is kept as a preview with its original length", async () => {
+    await svc.record({ tool: "kernel_agents_directory", input: {}, output: { text: "x".repeat(60_000) } });
+    const row = db.prepare("SELECT output_json FROM tool_memory").get() as { output_json: string };
+    expect(row.output_json.length).toBeLessThan(2_200);
+    expect(row.output_json).toMatch(/… \[truncated: 60011 chars\]$/);
+  });
+
+  test("a short output is stored whole", async () => {
+    await svc.record({ tool: "kernel_tasks_create", input: {}, output: { id: "t1" } });
+    const row = db.prepare("SELECT output_json FROM tool_memory").get() as { output_json: string };
+    expect(row.output_json).toBe('{"id":"t1"}');
+  });
+});

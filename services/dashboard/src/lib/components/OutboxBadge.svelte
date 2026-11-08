@@ -5,6 +5,7 @@
   */
   import { onMount, onDestroy } from 'svelte';
   import { apiFetchRaw } from '$lib/api.js';
+  import HeaderIcon, { badgeText } from './HeaderIcon.svelte';
 
   export let onOpen: () => void;
 
@@ -30,8 +31,8 @@
 </script>
 
 <button class="header-icon-btn" on:click={onOpen} title="Aprobaciones{pending > 0 ? ` — ${pending} pendiente${pending === 1 ? '' : 's'}` : ''}" aria-label="Aprobaciones pendientes: {pending}">
-  📤
+  <HeaderIcon name="outbox" />
   {#if pending > 0}
-    <span class="header-icon-badge hb-visible hb-gold">{pending}</span>
+    <span class="header-icon-badge hb-visible hb-gold">{badgeText(pending)}</span>
   {/if}
 </button>

@@ -205,6 +205,9 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - kernel-data:/app/data
+      # Neo4j's data, read-only: System › Storage measures the graph on disk to
+      # enforce its size ceiling (modules/storage/graph.ts, NEO4J_DATA_DIR).
+      - neo4j-data:/neo4j-data:ro
       # The Unix socket mtw-request listens on. Harmless when the engine is
       # not running: the bridge just finds nothing there and stays disabled.
       - bridge-sock:/run/mtw

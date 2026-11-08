@@ -18,7 +18,7 @@ describe("llm() chain from the catalog", () => {
     const c = buildLlmConfig(cfg());
     expect(c.slug).toBe("nvidia");
     expect(c.baseUrl).toBe("https://integrate.api.nvidia.com/v1/chat/completions");
-    expect(c.defaultModel).toBe("nvidia/nemotron-3-super-120b-a12b");
+    expect(c.defaultModel).toBe("nvidia/nemotron-3-ultra-550b-a55b");
     expect(c.fallbackChain?.map((l) => l.slug)).toEqual(["groq"]);
   });
 
@@ -39,7 +39,7 @@ describe("llm() chain from the catalog", () => {
   });
 
   it("applies model quirks and strips reasoning on the chat path", async () => {
-    install({ nvidia: { apiKey: "nvapi-1", connectedAt: "t" } });
+    install({ nvidia: { apiKey: "nvapi-1", connectedAt: "t", defaultModel: "nvidia/nemotron-3-super-120b-a12b" } });
     let body: Record<string, any> = {};
     globalThis.fetch = (async (_u: unknown, init: any) => {
       body = JSON.parse(init.body);

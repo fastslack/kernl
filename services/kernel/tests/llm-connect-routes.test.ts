@@ -52,7 +52,7 @@ describe("connect routes", () => {
     const body = await (await fetch(`${base}/api/llm/catalog`)).json() as any;
     expect(body.providers).toHaveLength(21);
     const nv = body.providers.find((p: any) => p.slug === "nvidia");
-    expect(nv).toMatchObject({ recommended: true, connected: true, model: "nvidia/nemotron-3-super-120b-a12b" });
+    expect(nv).toMatchObject({ recommended: true, connected: true, model: "nvidia/nemotron-3-ultra-550b-a55b" });
     expect(nv.keyMasked).not.toContain("1234567890");
     expect(body.chain).toEqual([{ provider: "nvidia", model: "" }]);
     expect(JSON.stringify(body)).not.toContain("nvapi-1234567890abcd");

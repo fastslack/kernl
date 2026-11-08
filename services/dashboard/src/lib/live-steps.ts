@@ -31,7 +31,10 @@ export function liveStepIcon(type: string): string {
     case 'thought': return '💭';
     case 'final': return '✨';
     case 'rate_limit_wait': return '⏳';
+    case 'fallback_used': case 'provider_fallback': case 'model_fallback': return '⚠️';
     case 'error': return '⚠️';
+    case 'claude_account': return '👤';
+    case 'claude_account_down': return '⚠️';
     case 'auto_eval_started': return '📝';
     case 'auto_eval': return '📝';
     case 'learning_created': return '💡';
@@ -50,7 +53,10 @@ export function liveStepLabel(type: string): string {
     case 'thought': return 'thinking';
     case 'final': return 'finalizing';
     case 'rate_limit_wait': return 'rate limited';
+    case 'fallback_used': case 'provider_fallback': case 'model_fallback': return 'LLM fallback';
     case 'error': return 'error';
+    case 'claude_account': return 'Claude account';
+    case 'claude_account_down': return 'account down';
     case 'auto_eval_started': return 'self-grading';
     case 'auto_eval': return 'self-eval';
     case 'learning_created': return 'lesson learned';
@@ -60,6 +66,28 @@ export function liveStepLabel(type: string): string {
     case 'run_completed': return 'run completed';
     default: return type || 'step';
   }
+}
+
+/**
+ * Both ends of a model/provider fallback as display text, accounts included
+ * (Claude Code runs on several subscriptions, and the switch may be only of
+ * account). `accountOnly` is a switch where the model did not change.
+ */
+export function fallbackEnds(d: Record<string, unknown>): { from: string; to: string; accountOnly: boolean } {
+  const fromModel = String(d.from_model ?? d.from ?? d.from_provider ?? 'LLM');
+  const toModel = String(d.to_model || d.to || d.to_provider || 'LLM');
+  const fromAcct = d.from_account ? String(d.from_account) : '';
+  const toAcct = d.to_account ? String(d.to_account) : '';
+  if (!fromAcct && !toAcct) return { from: fromModel, to: toModel, accountOnly: false };
+  const accountOnly = !!fromAcct && !!toAcct && fromAcct !== toAcct && (fromModel === toModel || !d.from_model || !d.to_model);
+  if (accountOnly) {
+    const model = String(d.to_model || d.from_model || '');
+    return { from: `cuenta «${fromAcct}»`, to: model ? `«${toAcct}» (${model})` : `«${toAcct}»`, accountOnly };
+  }
+  // The account is only worth naming when it is what differs between the two sides.
+  const showAcct = fromAcct !== toAcct;
+  const join = (acct: string, model: string) => (showAcct && acct ? `${acct} · ${model}` : model);
+  return { from: join(fromAcct, fromModel), to: join(toAcct, toModel), accountOnly };
 }
 
 export function liveEventType(e: AgentFlowEvent): string {
@@ -86,6 +114,10 @@ export function liveEventSummary(e: AgentFlowEvent): string {
     const st = String(e.data.status ?? 'completed');
     return st === 'completed' ? 'Run completed successfully' : `Run ${st}`;
   }
+  if (['fallback_used', 'provider_fallback', 'model_fallback'].includes(t)) {
+    const { from, to } = fallbackEnds(e.data);
+    return `${from} → ${to}`;
+  }
   if (t === 'chain_triggered') return `Handoff → ${String(e.data.target_agent_name ?? 'next agent')}`;
   if (t === 'auto_eval_started') return 'Self-grading…';
   if (t === 'auto_eval') {
@@ -101,9 +133,14 @@ export function liveEventSummary(e: AgentFlowEvent): string {
       ? `Retired ${n} ${noun}: ${retired.map((l) => String(l.content ?? '')).filter(Boolean).join(' · ')}`
       : `Retired ${n} ${noun} below the confidence floor`;
   }
+  // History rows arrive as `agent:flow:<subtype>` with the fields at the top level.
+  if (t === 'claude_account') return `Cuenta: «${String(e.data.account ?? '')}»`;
+  if (t === 'claude_account_down') return `Sesión de «${String(e.data.account ?? '')}» caída — se saltea por un rato`;
   if (t === 'step') {
     const st = String(e.data.type ?? '');
     const preview = String(e.data.content_preview ?? '');
+    if (st === 'claude_account') return `Cuenta: «${String(e.data.account ?? preview)}»`;
+    if (st === 'claude_account_down') return `Sesión de «${String(e.data.account ?? preview)}» caída — se saltea por un rato`;
     // Server already truncates previews (tool_result=2000, tool_call input=800,
     // thought/final=200). Show the full preview — truncating again here only
     // hides useful context in the LIVE tab. Full text is in HISTORY.

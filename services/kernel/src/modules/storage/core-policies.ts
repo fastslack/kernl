@@ -48,6 +48,20 @@ export function corePolicies(): RetentionPolicy[] {
       defaultDays: 180,
       defaultEnabled: false,
     }),
+    // The run row and its result stay (agent memory reads those); only the
+    // step-by-step trace goes. Offices that run all day made this the largest
+    // table — 1.4 GB, most of it shell output nobody reopens after a month.
+    agePolicy({
+      id: "agents.llm-run-steps",
+      label: "Step traces of LLM runs",
+      description: "The step-by-step trace (tool calls and their output) of completed runs of agents that use a model. The run and its result are kept.",
+      kind: "operational",
+      table: "agent_run_steps",
+      dateColumn: "created_at",
+      where: `run_id IN (SELECT id FROM agent_runs WHERE status = 'completed' AND NOT ${BUILTIN_AGENT})`,
+      defaultDays: 30,
+      defaultEnabled: true,
+    }),
     agePolicy({
       id: "agents.event-log",
       label: "Agent event log",

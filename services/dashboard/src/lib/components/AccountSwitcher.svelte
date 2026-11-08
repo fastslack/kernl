@@ -16,7 +16,8 @@
     is_default: number;
   }
 
-  let accounts: EmailAccount[] = [];
+  /** The loaded accounts, bindable so the page can say which mailbox each message is in. */
+  export let accounts: EmailAccount[] = [];
   let loading = true;
   let open = false;
 

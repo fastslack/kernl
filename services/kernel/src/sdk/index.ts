@@ -14,7 +14,7 @@
  * kernel with it. `tests/sdk-boundary.test.ts` enforces that.
  *
  * Heavy npm dependencies stay off this entry: `@kernl/extension-sdk/html`
- * (sanitize-html), `@kernl/extension-sdk/nostr` (nostr-tools) and
+ * (sanitize-html), `@kernl/extension-sdk/pdf` (pdf.js), `@kernl/extension-sdk/nostr` (nostr-tools) and
  * `@kernl/extension-sdk/social` (share envelope, @noble/curves). When an
  * extension loads part of itself with `import()`, bun initialises this whole
  * barrel for that part — unused exports and their dependencies included.
@@ -28,6 +28,7 @@ export * from "./types.js";
 export * from "./helpers.js";
 export * from "./http-error.js";
 export * from "./args.js";
+export { focusSkillFile, runFocusQuery } from "./skill-file-focus.js";
 export * from "./module.js";
 export * from "./channels.js";
 export * from "./query-helpers.js";
@@ -43,6 +44,10 @@ export * from "./llm-usage.js";
 export * from "./fs-paths.js";
 export { hostPathReachable, type HostPathCheck } from "./host-paths.js";
 export * from "./claude-cli.js";
+export * from "./claude-accounts.js";
+export * from "./claude-limits.js";
+export * from "./llm-inflight.js";
+export * from "./claude-access.js";
 export * from "./mcp-transport.js";
 export * from "./url-guard.js";
 export * from "./crypto.js";

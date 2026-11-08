@@ -203,6 +203,8 @@
   /** The kernel serving this dashboard predates the route. */
   let sugUnsupported = false;
   let sugFor = '';
+  /** How the kernel ranked: by meaning (embeddings), still embedding the catalogue, or keywords only. */
+  let sugMode: 'on' | 'warming' | 'off' = 'off';
 
   async function loadSuggestions(id: string): Promise<void> {
     sugLoading = true;
@@ -215,6 +217,7 @@
       );
       const body = (await r.json().catch(() => ({}))) as {
         error?: string;
+        semantic?: 'on' | 'warming' | 'off';
         suggestions?: Suggestion[];
       };
       if (!r.ok) {
@@ -229,6 +232,11 @@
         throw new Error(String(body.error ?? `HTTP ${r.status}`));
       }
       suggestions = (body.suggestions ?? []) as Suggestion[];
+      sugMode = body.semantic ?? 'off';
+      // The first ranking after install embeds the whole catalogue in the
+      // background; ask again shortly so the meaning-based list replaces
+      // the keyword one without the operator reopening the tab.
+      if (sugMode === 'warming') setTimeout(() => { if (sugFor === id) loadSuggestions(id); }, 15000);
     } catch (e) {
       sugError = (e as Error).message;
       suggestions = [];
@@ -696,10 +704,13 @@
         <h3 class="sk-h">{$t('agent.skills.recommended')}</h3>
         <span
           class="sk-hint"
-          title={$t('agent.skills.ranked_hint_title')}
+          title={$t(`agent.skills.mode_${sugMode}_title`)}
         >
-          {$t('agent.skills.ranked_hint')}
+          {$t(`agent.skills.mode_${sugMode}`)}
         </span>
+        {#if sugMode === 'off' && !sugLoading && !sugUnsupported}
+          <a class="sk-hint sk-hint-link" href="/settings?section=ai&card=providers">{$t('agent.skills.mode_off_link')} →</a>
+        {/if}
       </header>
 
       {#if sugUnsupported}
@@ -1061,6 +1072,8 @@
     color: #fbbf24;
   }
 
+  .sk-hint-link { color: var(--accent, #38bdf8); text-decoration: none; margin-left: 6px; }
+  .sk-hint-link:hover { text-decoration: underline; }
   .sk-score {
     flex: none;
     min-width: 34px;

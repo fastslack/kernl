@@ -96,7 +96,11 @@ describe("ConnectorService", () => {
 
   it("pullAllDue skips projects pulled in the last 6 hours", async () => {
     let calls = 0;
-    conn = new ConnectorService(db, events, projects, (async () => { calls++; return new Response(JSON.stringify(SNAP)); }) as unknown as typeof fetch);
+    // Events are pulled on every check; only the snapshot waits 6 hours.
+    conn = new ConnectorService(db, events, projects, (async (url: string) => {
+      if (!String(url).includes("/snapshot")) return new Response("not found", { status: 404 });
+      calls++; return new Response(JSON.stringify(SNAP));
+    }) as unknown as typeof fetch);
     await conn.pullAllDue(new Date());
     await conn.pullAllDue(new Date());
     expect(calls).toBe(1);

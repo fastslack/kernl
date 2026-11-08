@@ -238,4 +238,19 @@ export const commsMigrations: Migration[] = [
       ALTER TABLE comm_attachments ADD COLUMN content_id TEXT NOT NULL DEFAULT '';
     `,
   },
+  {
+    // Who sent the mail an agenda item came from (lowercased address): a sender's auto-reply arrives in a thread of
+    // its own, and is still the same item (agenda-writer.ts findSame). backfillAgendaSenders() fills the Gmail rows.
+    version: 6,
+    sql: `
+      ALTER TABLE mail_agenda_links ADD COLUMN sender TEXT NOT NULL DEFAULT '';
+    `,
+  },
+  {
+    // 1 once the item's title was checked to be in the agenda language (agenda-translate.ts).
+    version: 7,
+    sql: `
+      ALTER TABLE mail_agenda_links ADD COLUMN title_checked INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];

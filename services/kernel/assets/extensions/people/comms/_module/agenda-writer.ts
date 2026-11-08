@@ -34,6 +34,47 @@ export interface AgendaWriteResult { created: number; updated: number; skipped: 
 
 const PREFIX_RE = /^((re|fw|fwd|rv|reenv)\s*:\s*)+/i;
 
+/** The address inside "Name <addr>", lowercased. */
+export function senderOf(from: string): string {
+  const m = /<([^>]+)>/.exec(from);
+  return (m ? m[1] : from).trim().toLowerCase();
+}
+
+const STOP = new Set(["el", "la", "los", "las", "de", "del", "por", "para", "con", "en", "y", "a", "al", "un", "una", "the", "of", "for", "and", "to", "on", "de", "het", "een", "van", "voor"]);
+// A trailing "s" off longer words: «feriados» and «feriado» are one word here.
+const words = (t: string) => new Set(t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").split(/[^a-z0-9]+/)
+  .filter((w) => w.length > 2 && !STOP.has(w)).map((w) => (w.length > 4 && w.endsWith("s") ? w.slice(0, -1) : w)));
+
+/** Share of the words two titles have in common (Jaccard over the meaningful words). */
+export function titleSimilarity(a: string, b: string): number {
+  const A = words(a), B = words(b);
+  if (!A.size || !B.size) return 0;
+  let both = 0;
+  for (const w of A) if (B.has(w)) both++;
+  return both / (A.size + B.size - both);
+}
+
+/** Senders of the links written before the column existed, from the Gmail mirror (absent without google-sync). */
+export function backfillAgendaSenders(db: SqliteDb): void {
+  try {
+    db.prepare(
+      `UPDATE mail_agenda_links SET sender = COALESCE((SELECT lower(g.from_email) FROM google_emails g WHERE g.gmail_id = mail_agenda_links.source_id), '')
+       WHERE source_table = 'google_emails' AND sender = ''`,
+    ).run();
+  } catch { /* no Gmail mirror here */ }
+}
+
+/** Code-like tokens (a lot, an order, a flight): letters and digits together, three characters or more. */
+const codes = (t: string) => new Set((t.toLowerCase().match(/[a-z0-9-]*\d[a-z0-9-]*/g) ?? []).filter((c) => c.length >= 3 && /[a-z]/.test(c)));
+
+/** Both titles name a code and none is shared: two different things (two lots, two orders), however alike. */
+export function conflictingCodes(a: string, b: string): boolean {
+  const A = codes(a), B = codes(b);
+  if (!A.size || !B.size) return false;
+  for (const c of A) if (B.has(c)) return false;
+  return true;
+}
+
 export function fingerprint(item: AgendaItem): string {
   const t = item.title.replace(PREFIX_RE, "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
   return `${item.kind}|${t}`;
@@ -87,18 +128,46 @@ export class AgendaWriter {
         return "updated";
       }
 
+      // The same thing told again — reworded in a later mail, or in a sender's auto-reply thread: already there.
+      if (this.findSame(src, item, target)) return "skipped";
       if (this.alreadyFromGoogle(item)) return "skipped";
 
       const localId = this.create(target, src, item);
       if (!localId) return "skipped";
       const now = isoNow();
       this.db.prepare(
-        `INSERT INTO mail_agenda_links (id, source_table, source_id, thread_key, kind, fingerprint, local_table, local_id, start_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(newId(), src.source_table, src.source_id, src.thread_key, item.kind, fp, target, localId, item.start_at, now, now);
+        `INSERT INTO mail_agenda_links (id, source_table, source_id, thread_key, kind, fingerprint, local_table, local_id, start_at, created_at, updated_at, sender)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(newId(), src.source_table, src.source_id, src.thread_key, item.kind, fp, target, localId, item.start_at, now, now, senderOf(src.from));
       return "created";
     });
     return run();
+  }
+
+  /**
+   * An item of the same kind already on the calendar for the same day — and the same minute when both carry a time —
+   * that is plainly the same thing: from the same thread, from the same sender with a related title, or with nearly
+   * the same title.
+   * Two appointments of one sender at different hours stay two.
+   */
+  private findSame(src: AgendaSource, item: AgendaItem, target: Target): boolean {
+    const day = item.start_at.slice(0, 10);
+    const rows = this.db.prepare(
+      "SELECT thread_key, sender, fingerprint, start_at FROM mail_agenda_links WHERE local_table = ? AND substr(start_at, 1, 10) = ?",
+    ).all(target, day) as Array<{ thread_key: string; sender: string; fingerprint: string; start_at: string }>;
+    const sender = senderOf(src.from);
+    const title = fingerprint(item).split("|").slice(1).join("|");
+    for (const r of rows) {
+      const timed = r.start_at.length > 10 && !item.all_day;
+      if (timed && r.start_at.slice(0, 16) !== item.start_at.slice(0, 16)) continue;
+      const otherTitle = r.fingerprint.split("|").slice(1).join("|");
+      if (conflictingCodes(item.title, otherTitle)) continue;
+      const sim = titleSimilarity(title, otherTitle);
+      // Same thread or same sender: only when the titles share something — a reworded mention or an auto-reply does,
+      // two different stock lots of one sender do not. The thread is the stronger hint, so it needs less.
+      if ((r.thread_key === src.thread_key && sim >= 0.1) || (sender && r.sender === sender && sim >= 0.2) || sim >= 0.5) return true;
+    }
+    return false;
   }
 
   private create(target: Target, src: AgendaSource, item: AgendaItem): string | null {

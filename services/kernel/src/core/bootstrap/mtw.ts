@@ -349,6 +349,8 @@ export async function initMtw(args: {
   for (const evtName of [
     "agent:flow:run_started",
     "agent:flow:step",
+    "agent:flow:fallback_used",
+    "agent:flow:model_fallback",
     "agent:flow:chain_triggered",
     "agent:flow:run_completed",
     "agent:flow:auto_eval_started",

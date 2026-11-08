@@ -1,5 +1,7 @@
 export type ProjectStatus = "active" | "paused" | "archived";
-export type ProjectLinkKind = "repo" | "social_account" | "email_account" | "task_project" | "workspace";
+export type ProjectLinkKind = "repo" | "social_account" | "email_account" | "task_project" | "workspace" | "github_connection" | "gitlab_connection" | "website";
+/** Every kind, in the order the API and the tools list them. */
+export const PROJECT_LINK_KINDS = ["repo", "social_account", "email_account", "task_project", "workspace", "github_connection", "gitlab_connection", "website"] as const satisfies readonly ProjectLinkKind[];
 
 export interface ProjectBrief {
   value_prop: string;
@@ -73,6 +75,19 @@ export interface OutboxPreview {
   title: string;
   body: string;
   meta?: Record<string, string>;
+  /**
+   * A decision the operator makes on the draft before approving it — where a request goes, which list a
+   * campaign uses. Approvals shows the options and writes the pick to `payload[field]` (the channel validates
+   * it like any edit); `value` is the current one.
+   */
+  choice?: OutboxChoice;
+}
+
+export interface OutboxChoice {
+  field: string;
+  label: string;
+  value: string;
+  options: Array<{ value: string; label: string; hint?: string }>;
 }
 
 /** What an extension registers per channel (x_post, email, whatsapp…). */

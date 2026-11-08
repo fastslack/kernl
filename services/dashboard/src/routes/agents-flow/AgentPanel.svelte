@@ -39,7 +39,7 @@
   import { attachmentMarkers } from '$lib/chat-view.js';
   import { chatProjectChoices, defaultChatProject, chatProjectKey, type ChatProject } from '$lib/chat-project.js';
   import type { AttachmentMeta } from '$lib/attachments/types.js';
-  import { eventLogToFlowEvents, type HistoryStep } from '$lib/history-steps.js';
+  import { eventLogToFlowEvents, isHistoryEventRow, type HistoryStep } from '$lib/history-steps.js';
   import { liveEventType } from '$lib/live-steps.js';
   import { pendingChatReply } from '$lib/chat-handoff.js';
   import type { WorldAgent, WorldChain, WorldFlow, WorldStats } from './world-types.js';
@@ -591,9 +591,10 @@
       // Merge the event log (run started/completed, self-grading and the
       // lessons it drew or retired) into the timeline as the same flow events
       // LIVE shows, so HISTORY opens them into the same detail. "step" rows
-      // are duplicates of agent_run_steps and are skipped.
+      // are duplicates of agent_run_steps and are skipped, except the Claude
+      // account ones, which are not stored as run steps.
       const eventSteps = events
-        .filter((ev: any) => ev.event_subtype && ev.event_subtype !== 'step' && ev.event_type !== 'step')
+        .filter((ev: any) => isHistoryEventRow(ev))
         .flatMap((ev: any) => eventLogToFlowEvents(ev, runId))
         .map((fe) => ({
           step_number: 0, type: liveEventType(fe), content: '', tool_name: '',

@@ -22,6 +22,7 @@
   import Drawer from '$lib/components/ui/Drawer.svelte';
   import Modal from '$lib/components/ui/Modal.svelte';
   import Toast from '$lib/components/ui/Toast.svelte';
+  import GraphLimits from './GraphLimits.svelte';
   import {
     fmtBytes, fmtCount, fmtCap, capPct, capChoices, sparkPoints, kindShares, KIND_COLOR, type StorageKind,
   } from '$lib/storage-view';
@@ -420,6 +421,8 @@
           </ul>
         </Panel>
       {/if}
+
+      <GraphLimits {say} />
 
       <Panel title={$t('storage.kind.title')} dotColor="var(--teal)" cls="st-panel">
         {#if shares.length}

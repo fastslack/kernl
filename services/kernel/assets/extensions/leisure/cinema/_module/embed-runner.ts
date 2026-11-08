@@ -22,6 +22,7 @@
 import { log, type GraphDriver, type EmbeddingsClient } from "@kernl/extension-sdk";
 import type { CinemaService } from "./service.js";
 import { embedPending } from "./embeddings.js";
+import { GRAPH_FROZEN_MESSAGE } from "./graph-state.js";
 
 export type EmbedRunnerStatus =
   | "idle"
@@ -126,6 +127,7 @@ export class EmbedRunner {
     const graph = this.getGraph();
     if (!embedder) throw new Error("embeddings client not initialised");
     if (!graph?.capabilities.cypher) throw new Error("graph driver unavailable — neo4j down");
+    if (this.service.graphFrozen()) throw new Error(GRAPH_FROZEN_MESSAGE);
 
     this.batchSize = Math.max(1, Math.min(opts.batchSize ?? DEFAULT_BATCH_SIZE, 256));
     this.status = "running";

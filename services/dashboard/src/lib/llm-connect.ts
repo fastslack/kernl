@@ -6,6 +6,7 @@
  */
 
 import { modelIds } from "./llm-models.js";
+import type { ClaudeAccount } from "./claude-accounts.js";
 
 export type ErrorCode = "auth" | "quota" | "model" | "timeout" | "no_tools" | "unreachable" | "no_session" | "network" | "unknown";
 export type Group = "free" | "local" | "paid" | "subscription";
@@ -180,8 +181,13 @@ export interface ClaudeLoginStatus {
   /** Answer to a pasted address. */
   delivered?: boolean;
   deliverError?: "not_waiting" | "bad_paste" | "wrong_login" | "unreachable";
+  /** The account this sign-in is for. */
+  accountId?: string;
+  /** Set when the session just obtained belongs to a subscription another account already has. */
+  duplicateOf?: { id: string; label: string; email: string };
 }
-export const startClaudeLogin = () => call<ClaudeLoginStatus>("/api/llm/claude-code/login", send("POST", {}));
+/** accountId absent = the primary account. */
+export const startClaudeLogin = (accountId?: string) => call<ClaudeLoginStatus>("/api/llm/claude-code/login", send("POST", accountId ? { accountId } : {}));
 export const claudeLoginStatus = () => call<ClaudeLoginStatus>("/api/llm/claude-code/login");
 export const deliverClaudeLogin = (url: string) => call<ClaudeLoginStatus>("/api/llm/claude-code/login/callback", send("POST", { url }));
 export const cancelClaudeLogin = () => call<ClaudeLoginStatus>("/api/llm/claude-code/login", { method: "DELETE" });
@@ -201,6 +207,24 @@ export async function claudeCodeReady(): Promise<boolean | null> {
     return null;
   }
 }
+
+// Every account mutation answers with the fresh list.
+const accountUrl = (id: string) => `/api/llm/claude-code/accounts/${encodeURIComponent(id)}`;
+/**
+ * The accounts list. A kernel that predates the routes answers 404: that is
+ * "multi-account not available" (supported: false), not an error to show.
+ */
+export async function fetchClaudeAccounts(): Promise<{ accounts: ClaudeAccount[]; supported: boolean }> {
+  const r = await fetch("/api/llm/claude-code/accounts");
+  if (r.status === 404) return { accounts: [], supported: false };
+  const body = (await r.json().catch(() => ({}))) as { error?: string; accounts?: ClaudeAccount[] };
+  if (!r.ok) throw new Error(body?.error || `HTTP ${r.status}`);
+  return { accounts: body.accounts ?? [], supported: true };
+}
+export const addClaudeAccount = (label = "") => call<{ accounts: ClaudeAccount[] }>("/api/llm/claude-code/accounts", send("POST", label ? { label } : {}));
+export const updateClaudeAccount = (id: string, patch: { label?: string; move?: "up" | "down" }) =>
+  call<{ accounts: ClaudeAccount[] }>(accountUrl(id), send("PUT", patch));
+export const removeClaudeAccount = (id: string) => call<{ accounts: ClaudeAccount[] }>(accountUrl(id), { method: "DELETE" });
 export const saveChain = (links: ChainLink[]) => call<{ chain: ChainLink[] }>("/api/llm/chain", send("PUT", { links }));
 
 /**

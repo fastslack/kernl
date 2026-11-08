@@ -77,11 +77,18 @@ export function deliverPendingAnswers(
   const ids = letters.map((l) => l.id);
   service.markInboxRead(ids);
   const goal = answersGoal(letters, ids.some((id) => redelivered.has(id)));
+  // The relaunch works for the project the questions were asked in, when they all share one and the office still
+  // serves it (03/11: relaunched Growth runs had none and showed up in every project's panel).
+  const projects = [...new Set(letters.map((l) => l.project_id || null))];
+  const project = projects.length === 1 ? projects[0] : null;
+  const gate = service.getProjectGate();
+  const projectOk = !!project && !!gate && gate.check(agent.flow_id ?? "", project).ok;
   const run = service.createRun({
     agent_id: agentId,
     trigger_type: "manual",
     goal,
     trigger_payload: { resume_answer_letters: letters.map((l) => l.id) },
+    ...(projectOk ? { project_id: project } : {}),
   });
   service.updateRun(run.id, { status: "running", started_at: new Date().toISOString() });
   executor
@@ -210,7 +217,7 @@ export function answerAndDeliver(
   });
 
   const asker = service.getAgent(result.from_agent_id);
-  // Its answers are read by something else (Acme's orchestrator reads agent_questions itself): relaunching
+  // Its answers are read by something else (an office's own orchestrator that reads agent_questions itself): relaunching
   // the asker too ran it twice on every answer — 39 runs of the Integrador in two days, each able to act.
   if (asker && answerResumeDisabled(asker)) return { ...result, resume_run_id: null };
   if (!asker || !asker.active || service.hasRunningRun(asker.id)) {

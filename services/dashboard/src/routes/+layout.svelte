@@ -17,6 +17,8 @@
   import ExtensionGate from '$lib/components/ExtensionGate.svelte';
   import NotificationDropdown from '$lib/components/NotificationDropdown.svelte';
   import OutboxBadge from '$lib/components/OutboxBadge.svelte';
+  import MailBadge from '$lib/components/MailBadge.svelte';
+  import HeaderIcon, { badgeText } from '$lib/components/HeaderIcon.svelte';
   import ThemeSwitcher from '$lib/components/ThemeSwitcher.svelte';
   import MusicPlayer from '$lib/components/MusicPlayer.svelte';
   import MusicNavIndicator from '$lib/components/MusicNavIndicator.svelte';
@@ -94,7 +96,7 @@
 
   // Full-bleed pages that need special layout handling. Extension page
   // bundles can also request it via `frontend.pages[].fullBleed`.
-  const FULL_BLEED_VIEWS = ['news', 'chat', 'agents-flow', 'architecture', 'mail', 'rss-reader', 'cinema', 'books', 'music', 'commander', 'notifications', 'share', 'bench', 'control'];
+  const FULL_BLEED_VIEWS = ['news', 'chat', 'agents-flow', 'architecture', 'mail', 'rss-reader', 'cinema', 'books', 'music', 'commander', 'notifications', 'share', 'bench', 'control', 'projects', 'ranks', 'ai-overview', 'autogenesis', 'agents'];
   $: isFullBleed =
     FULL_BLEED_VIEWS.includes(currentView) ||
     $extPagesStore.some((p) => p.view === currentView && p.fullBleed);
@@ -342,6 +344,10 @@
     'commander', 'agents', 'agents-flow', 'workspace', 'files', 'models',
     'providers', 'memory', 'skills',
     'autogenesis',
+    // The Bandeja: everything that waits on the operator (approvals, questions, tasks, reminders). Core.
+    'inbox',
+    // Out of the nav since the Bandeja, still linked from it: the full approvals editor, and /work → /inbox.
+    'outbox', 'work',
     // Instance peering. Core, not an extension: it is how this kernel knows
     // who it is and which other instances it trusts.
     'friends',
@@ -677,19 +683,16 @@
     <div class="header-right">
       <!-- Status cluster: live state of the kernel (tasks pending, mail drafts) -->
       <div class="hdr-cluster hdr-status">
-        <button class="header-icon-btn" on:click={() => navigate('tasks')} title="Tasks {taskOverdue > 0 ? '— ' + taskOverdue + ' overdue' : ''}">
-          ☑
+        <button class="header-icon-btn" on:click={() => goto('/inbox?kind=task')}
+          title={taskOverdue > 0 ? `Tareas — ${taskOverdue} vencida${taskOverdue === 1 ? '' : 's'}` : 'Tareas'}
+          aria-label={taskOverdue > 0 ? `Tareas: ${taskOverdue} vencidas` : 'Tareas'}>
+          <HeaderIcon name="tasks" />
           {#if taskOverdue > 0}
-            <span class="header-icon-badge hb-visible">{taskOverdue}</span>
+            <span class="header-icon-badge hb-visible">{badgeText(taskOverdue)}</span>
           {/if}
         </button>
-        <button class="header-icon-btn" on:click={() => navigate('comms')} title="Comms {commDrafts > 0 ? '— ' + commDrafts + ' drafts' : ''}">
-          ✉
-          {#if commDrafts > 0}
-            <span class="header-icon-badge hb-visible hb-gold">{commDrafts}</span>
-          {/if}
-        </button>
-        <OutboxBadge onOpen={() => navigate('outbox')} />
+        <MailBadge />
+        <OutboxBadge onOpen={() => goto('/inbox?kind=approve')} />
         <NotificationDropdown
           open={notifOpen}
           notifications={$notifications}

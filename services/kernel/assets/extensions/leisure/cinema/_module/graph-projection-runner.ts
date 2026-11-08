@@ -11,6 +11,7 @@
  */
 
 import { log, type SqliteDb, type GraphDriver } from "@kernl/extension-sdk";
+import { isGraphFrozen, GRAPH_FROZEN_MESSAGE } from "./graph-state.js";
 import {
   DEFAULT_BATCH_SIZE,
   ensureProjectionSchema,
@@ -102,6 +103,7 @@ export class GraphProjectionRunner {
     if (!graph?.capabilities.cypher) {
       throw new Error("graph driver unavailable — activate Neo4j in /extensions");
     }
+    if (isGraphFrozen(this.db)) throw new Error(GRAPH_FROZEN_MESSAGE);
     if (opts.reset) resetCursors(this.db);
 
     this.batchSize = Math.max(100, Math.min(opts.batchSize ?? DEFAULT_BATCH_SIZE, 10_000));

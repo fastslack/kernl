@@ -27,7 +27,7 @@ import { registerEmailRoutes } from "./email-routes.js";
 import { registerEmailSuggestionsRoutes } from "./email-suggestions-routes.js";
 import { commsDashboardRpcActions } from "./dashboard-rpc-actions.js";
 import { commsAgentDrivers } from "./agent-drivers.js";
-import { AgendaWriter, type EventsLike, type TasksLike, type RemindersLike } from "./agenda-writer.js";
+import { AgendaWriter, backfillAgendaSenders, type EventsLike, type TasksLike, type RemindersLike } from "./agenda-writer.js";
 import { MailOfficeDispatch, type AgentsLike } from "./mail-office-dispatch.js";
 import { GoogleAuth } from "../../../integration/google-sync/_module/auth.js";
 import { GoogleClient } from "../../../integration/google-sync/_module/google-client.js";
@@ -132,6 +132,7 @@ export function createCommsModule(): CommsModule {
       notifierRef = ctx.notifier;
       getModuleRef = ctx.getModule ?? null;
       runMigrations(ctx.sqlite, "comms", commsMigrations);
+      backfillAgendaSenders(ctx.sqlite);
       ensureEmailAccountsSchema(ctx.sqlite);
 
       const service = new CommsService(ctx.sqlite, ctx.events);

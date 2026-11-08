@@ -19,6 +19,7 @@ import { existsSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { claudeAccountDir, primaryClaudeAccountId } from "./claude-accounts.js";
 import { findOnPath } from "./fs-paths.js";
 
 /**
@@ -161,10 +162,8 @@ export function findClaudeCli(
  * native install it is the user's own config directory, so it outlives an
  * upgrade. No per-platform branch is needed for either.
  */
-export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
-  const xdg = env.XDG_CONFIG_HOME;
-  const base = xdg && xdg.length > 0 ? xdg : resolve(homedir(), ".config");
-  return resolve(base, "kernl", "claude");
+export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env, accountId?: string): string {
+  return claudeAccountDir(accountId ?? primaryClaudeAccountId(env), env);
 }
 
 /**
@@ -176,10 +175,20 @@ export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
  * is injected here instead. Verified against the CLI: with the variable set,
  * `auth status` reports authMethod "oauth_token".
  */
-export function claudeAuthEnv(opts: { oauthToken?: string; env?: NodeJS.ProcessEnv } = {}): Record<string, string> {
+export function claudeAuthEnv(
+  opts: { oauthToken?: string; env?: NodeJS.ProcessEnv; accountId?: string } = {},
+): Record<string, string> {
+  const env = opts.env ?? process.env;
+  // An explicit token is the first account's pasted token, even when only the
+  // provider config holds it and neither the probe nor the env can see it.
+  const primary = primaryClaudeAccountId(env, (opts.oauthToken ?? "").trim().length > 0);
+  const accountId = opts.accountId ?? primary;
   const out: Record<string, string> = {
-    CLAUDE_CONFIG_DIR: claudeConfigDir(opts.env ?? process.env),
+    CLAUDE_CONFIG_DIR: claudeConfigDir(env, accountId),
   };
+  // A pasted token is one subscription's; sending it with another account's
+  // config dir would make every "rotated" call run on the first account anyway.
+  if (accountId !== primary) return out;
   // Fall back to the environment. The adapter that makes real calls is built
   // with no config (client.ts constructs it zero-arg), so a token that lived
   // only in the provider registry never reached it: the dialog verified fine

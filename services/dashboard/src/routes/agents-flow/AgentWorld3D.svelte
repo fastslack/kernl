@@ -13,7 +13,7 @@
   import {
     computeFloorPlan, initHumanoid, initOffice, initFurniture, initWalkers, initAmbiance,
     initHumanoidPool, createSittingHumanoidPool, type SittingHumanoidPool,
-    initAllSkins, resolveSkin, listSkins, type SkinDefinition,
+    initAllSkins, resolveSkin, listSkins, agentSkinId, type SkinDefinition,
     buildFloor, buildStreets, buildCorridorGrid, buildRooms, paintOfficePower, buildMeetingRooms, buildMyOffice, buildCentralHall, buildHallExtension, buildReception, buildCommunicationsOffice, buildDataCenterOffice, updateDataCenter, buildDesks, buildHallways,
     setupLighting,
     buildAmbiance, buildWallClock, buildActivityBoard, buildDoorLeds, updateDoorLeds, buildElevator, updateAmbiance,
@@ -1715,7 +1715,7 @@
     // Seated humanoid — we use the default skin's createHumanoid (not the
     // shared InstancedMesh pool) so this one figure can carry per-instance
     // gold trim without forcing a pool-level change.
-    const skin = resolveSkin((holder as { skin_id?: string }).skin_id);
+    const skin = resolveSkin(agentSkinId(holder as Parameters<typeof agentSkinId>[0]));
     const palette = skin.pickPalette(holder.id);
     const human = skin.createHumanoid({
       flowColor: topRank?.color ?? '#7c3aed',
@@ -3373,10 +3373,11 @@
    * title (the 'office:focus' event from office.ts). Keeps the camera's
    * current angle but pulls the distance in to the size of the room.
    */
-  function focusOffice(bounds: { cx: number; cz: number; w: number; d: number }) {
+  function focusOffice(bounds: { cx: number; cz: number; w: number; d: number; y?: number }) {
     if (!camera || !controls) return;
     const { cx, cz, w, d } = bounds;
-    const targetY = 1.0;
+    // A plugin can aim at a height (a tower's floor); offices sit on the ground.
+    const targetY = bounds.y ?? 1.0;
     const size = Math.max(w, d);
     const minDist = (controls as any).minDistance ?? 15;
     const desiredDist = Math.max(size * 1.3, minDist + 1);
@@ -3389,7 +3390,7 @@
     const ux = dx / len, uy = dy / len, uz = dz / len;
 
     const camX = cx + ux * desiredDist;
-    const camY = Math.max(targetY + uy * desiredDist, size * 0.7);
+    const camY = Math.max(targetY + uy * desiredDist, bounds.y === undefined ? size * 0.7 : targetY + size * 0.4);
     const camZ = cz + uz * desiredDist;
 
     tweenCameraTo(cx, targetY, cz, camX, camY, camZ);

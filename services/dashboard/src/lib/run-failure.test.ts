@@ -23,6 +23,21 @@ const NO_PROVIDER =
   "No available LLM provider for chain: claude/opus, grok/(default)";
 
 describe("analyzeRunFailure", () => {
+  it("says a coding agent is waiting for Claude's usage limit to reset", () => {
+    const f = analyzeRunFailure("Claude usage limit — waiting for the reset: claude_code: 429 usage limit reached on claude-sonnet-5-5 (five_hour, resets 2026-10-20T00:50:00.000Z)");
+    expect(f.titleKey).toBe("agent.failure.claude_limit");
+    expect(f.remedies.map((r) => r.kind)).toEqual(["configure-provider", "retry"]);
+  });
+
+  it("offers the Claude reconnection when the subscription is gone", () => {
+    const f = analyzeRunFailure(
+      "Claude access lost — waiting for reconnection: claude_code: subscription access lost on claude-sonnet-5-5. " +
+        "Claude Code returned an error result: Your organization has disabled Claude subscription access for Claude Code",
+    );
+    expect(f.titleKey).toBe("agent.failure.claude_access");
+    expect(f.remedies.map((r) => r.kind)).toEqual(["reconnect-claude", "configure-provider", "retry"]);
+  });
+
   it("offers both remedies the executor names for a tool-blocked chain", () => {
     const f = analyzeRunFailure(TOOL_BLOCKED);
     const kinds = f.remedies.map((r) => r.kind);
@@ -102,6 +117,6 @@ describe("analyzeRunFailure", () => {
     const f = analyzeRunFailure('LLM Claude-Code-SDK 401 not authenticated: invalid credentials (run `claude` and /login)');
     const kinds = f.remedies.map((r) => r.kind);
     expect(kinds).not.toContain("reauth-google");
-    expect(kinds).toEqual(["retry"]);
+    expect(kinds).toEqual(["reconnect-claude", "configure-provider", "retry"]);
   });
 });

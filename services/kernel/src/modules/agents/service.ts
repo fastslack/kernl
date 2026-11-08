@@ -1,7 +1,8 @@
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { EventBus } from "../../core/event-bus.js";
 import type { KernelConfig } from "../../core/config.js";
-import type { ProjectGateLike } from "./advanced-types.js";
+import type { ProjectGateLike, SchedulePrecheck } from "./advanced-types.js";
+import { findDuplicateQuestion, DUPLICATE_WINDOW_DAYS, type QuestionJudge } from "./question-dedupe.js";
 import { newId, isoNow } from "../../core/helpers.js";
 import { buildPatch, type PatchColumn } from "../../sdk/query-helpers.js";
 import { agentModelChain } from "./agent-fields.js";
@@ -37,6 +38,7 @@ import { AgentRunsService } from "./services/runs-service.js";
 import { AgentFeedbackService } from "./services/feedback-service.js";
 import { OfficeTeamError, DISTRIBUTE_CHAIN_LABEL, TOP_RANK_IDS_SQL } from "./office-team.js";
 import { protectedReason, ProtectedAgentError } from "./protected-agents.js";
+import { CLAUDE_ACCESS_WAITING, CLAUDE_LIMIT_WAITING } from "../../sdk/claude-access.js";
 
 export type QuestionStatus = "triage" | "pending" | "owed" | "answered" | "dismissed";
 /** task: picking it leaves the operator a task — the question goes to 'owed', not 'answered'. */
@@ -79,6 +81,7 @@ const AGENT_PATCH: Record<string, PatchColumn> = {
   active: "bool",
   max_tokens: "text",
   max_errors: "text",
+  keep_full_tool_turns: "text",
   variables: "json",
   show_on_dashboard: "bool",
   builtin_handler: "text",
@@ -157,6 +160,53 @@ export class AgentService {
 
   setProjectGate(gate: ProjectGateLike | null): void { this.projectGate = gate; }
   getProjectGate(): ProjectGateLike | null { return this.projectGate; }
+
+  /** Per-flow say on scheduled slots (SchedulePrecheck). Extensions register theirs on init. */
+  private schedulePrechecks = new Map<string, SchedulePrecheck>();
+
+  /** Register `flowId`'s precheck, replacing any previous one; the returned function removes it. */
+  registerSchedulePrecheck(flowId: string, check: SchedulePrecheck): () => void {
+    this.schedulePrechecks.set(flowId, check);
+    return () => { if (this.schedulePrechecks.get(flowId) === check) this.schedulePrechecks.delete(flowId); };
+  }
+
+  /** Why this scheduled slot should not run, or null to run it. A precheck that throws lets the slot run. */
+  checkScheduledSlot(agent: Agent, projectId: string | null): { skip: true; reason: string } | null {
+    const check = this.schedulePrechecks.get(agent.flow_id ?? "");
+    if (!check) return null;
+    try {
+      return check({ agent_id: agent.id, agent_slug: (agent as Agent & { slug?: string }).slug ?? "", flow_id: agent.flow_id ?? "", project_id: projectId });
+    } catch (err) {
+      log.warn(`Schedule precheck of flow ${agent.flow_id} threw — running the slot: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+  }
+
+  /** Judge for kernel_agents_ask_supervisor: is a new question one already open or recently answered? */
+  private questionJudge: QuestionJudge | null = null;
+  setQuestionJudge(judge: QuestionJudge | null): void { this.questionJudge = judge; }
+
+  /**
+   * The question the office already has for the same decision — open (triage,
+   * pending, owed) or answered in the last DUPLICATE_WINDOW_DAYS — or null.
+   * Looks across the whole office: the same blocker gets asked by every agent
+   * it stops, not only by one.
+   */
+  async findDuplicateQuestion(input: { from_agent_id: string; flow_id: string; question: string; context?: string }): Promise<AgentQuestion | null> {
+    const candidates = this.duplicateCandidates(input.from_agent_id, input.flow_id);
+    return findDuplicateQuestion({ question: input.question, context: input.context ?? "" }, candidates, this.questionJudge);
+  }
+
+  private duplicateCandidates(fromAgentId: string, flowId: string): AgentQuestion[] {
+    const since = new Date(Date.now() - DUPLICATE_WINDOW_DAYS * 86_400_000).toISOString();
+    const rows = this.db.prepare(
+      `SELECT * FROM agent_questions
+        WHERE (${flowId ? "flow_id = ?" : "from_agent_id = ?"})
+          AND (status IN ('triage','pending','owed') OR (status = 'answered' AND answered_at >= ?))
+        ORDER BY created_at DESC LIMIT 40`,
+    ).all(flowId || fromAgentId, since) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapQuestionRow(r));
+  }
 
   constructor(
     private db: SqliteDb,
@@ -428,16 +478,21 @@ export class AgentService {
   }
 
   /**
-   * Build a compact directory of every active agent in the fleet, grouped by
-   * office (flow). Injected into every run's system prompt so every agent
-   * knows who exists and how to reach them — no need to call directory first.
+   * The fleet directory injected into every native run's system prompt, so
+   * an agent knows who exists and how to reach them without a tool call.
    *
-   * Rendered fresh on each run; ~100 tokens per 30 agents. Callers can pass
-   * the current agent's id to exclude it from the listing.
+   * It is re-sent on every turn of every run, so its size is paid many times
+   * over: listing every agent with rank, UUID and description had grown to
+   * ~23 KB (~6k tokens a turn) at 120 agents. The agent's own office keeps
+   * the full detail it works with; every other office is one line of names.
+   * Names are enough to reach anyone — post_to_colleague and invoke resolve
+   * an exact name fleet-wide when it is unique — and kernel_agents_directory
+   * still returns the full listing on demand.
    */
   buildDirectoryBlock(currentAgentId: string): string {
     const agents = this.listAgents({ active: true }).filter(a => a.id !== currentAgentId);
     if (agents.length === 0) return "";
+    const myFlow = this.getAgent(currentAgentId)?.flow_id ?? null;
 
     const flows = this.listFlows();
     const flowById = new Map(flows.map(f => [f.id, f]));
@@ -453,38 +508,41 @@ export class AgentService {
       }
     }
 
-    const lines: string[] = [
-      "## Fleet directory — who else exists",
-      "Every agent below can be reached through the social tools. You do NOT need to call kernel_agents_directory first for names listed here — IDs are only required if you need the exact UUID.",
-      "",
-    ];
-    for (const flow of flows) {
-      const list = byFlow.get(flow.id);
-      if (!list || list.length === 0) continue;
-      lines.push(`### ${flow.name}`);
-      for (const a of list) {
-        const rank = this.getRank(a.rank_id);
-        const rankTag = rank ? ` ${rank.insignia || ""} ${rank.name}`.trim() : "";
-        const desc = a.description ? ` — ${a.description.slice(0, 120)}` : "";
-        lines.push(`- **${a.name}**${rankTag ? ` (${rankTag})` : ""} \`${a.id}\`${desc}`);
-      }
-      lines.push("");
+    const detailed = (a: Agent) => {
+      const rank = this.getRank(a.rank_id);
+      const rankTag = rank ? ` ${rank.insignia || ""} ${rank.name}`.trim() : "";
+      const desc = a.description ? ` — ${a.description.slice(0, 120)}` : "";
+      return `- **${a.name}**${rankTag ? ` (${rankTag})` : ""} \`${a.id}\`${desc}`;
+    };
+
+    // A name that repeats in the fleet (every office may have a "Lead") does
+    // not resolve on its own, so it keeps its UUID in the short listing.
+    const nameCount = new Map<string, number>();
+    for (const a of this.listAgents({ active: true })) {
+      const k = a.name.toLowerCase();
+      nameCount.set(k, (nameCount.get(k) ?? 0) + 1);
     }
-    if (unassigned.length > 0) {
-      lines.push("### Unassigned");
-      for (const a of unassigned) {
-        const desc = a.description ? ` — ${a.description.slice(0, 120)}` : "";
-        lines.push(`- **${a.name}** \`${a.id}\`${desc}`);
-      }
-      lines.push("");
+    const short = (a: Agent) => ((nameCount.get(a.name.toLowerCase()) ?? 0) > 1 ? `${a.name} \`${a.id}\`` : a.name);
+
+    const lines: string[] = ["## Fleet directory — who else exists"];
+    const mine = myFlow ? byFlow.get(myFlow) : undefined;
+    if (mine && mine.length > 0) {
+      lines.push("", `### Your office: ${flowById.get(myFlow!)!.name}`);
+      for (const a of mine) lines.push(detailed(a));
+    }
+    const others = flows.filter(f => f.id !== myFlow && (byFlow.get(f.id)?.length ?? 0) > 0);
+    if (others.length > 0 || unassigned.length > 0) {
+      lines.push("", "### Other offices (names; a repeated name carries its ID; `kernel_agents_directory` gives roles)");
+      for (const f of others) lines.push(`- ${f.name}: ${byFlow.get(f.id)!.map(short).join(" · ")}`);
+      if (unassigned.length > 0) lines.push(`- No office: ${unassigned.map(short).join(" · ")}`);
     }
 
-    lines.push("## How to reach anyone above");
-    lines.push("- `kernel_agents_ask_supervisor({ question, context, options })` — when you are in doubt (unclear requirements, priorities, or a decision you are not authorized to make), ask the chief instead of guessing. Exactly 4 concrete options, your preferred one first. Keep working on what doesn't depend on it; the answer comes back on its own. Never re-ask an answered question.");
-    lines.push("- `kernel_agents_post_to_colleague({ to_agent_id, subject, body })` — async, non-blocking. They read it on their next run and reply through their own outbox. Use for clarifications and back-and-forth threads between agents. Works ACROSS offices.");
-    lines.push("- `kernel_agents_invoke({ agent_id, goal })` — blocking. You wait for their result. Use for single pointed questions that must be resolved before you continue.");
-    lines.push("- `kernel_agents_call_meeting({ topic, attendee_ids })` — group deliberation. Use when 2+ other agents need to converge on an answer and you want their input recorded. You become moderator (or the highest-ranked attendee takes over).");
-    lines.push("- When replying to another agent, wrap your output like `<msg role=\"answer\" replies_to=\"<their-message-id>\">...</msg>`. Valid roles: `answer` (agreeing/informing), `counter` (disagreeing — triggers debate if 2+ of you disagree), `question`, `stmt`, `summary`, `vote`. If you skip the wrapper your reply defaults to `answer`.");
+    lines.push("", "## How to reach anyone above");
+    lines.push("- `kernel_agents_ask_supervisor({ question, context, options })` — in doubt (unclear requirements, priorities, a decision you may not make), ask the chief instead of guessing. Exactly 4 concrete options, preferred first. Keep working on what doesn't depend on it; the answer comes back on its own. Never re-ask an answered question.");
+    lines.push("- `kernel_agents_post_to_colleague({ to_agent_name, subject, body })` — async; they read it on their next run. Any agent's exact name works, in any office (or pass `to_agent_id`).");
+    lines.push("- `kernel_agents_invoke({ agent_id, goal })` — blocking; `agent_id` takes the UUID or the exact name. For single questions that must be resolved before you continue.");
+    lines.push("- `kernel_agents_call_meeting({ topic, attendee_ids })` — group deliberation when 2+ agents must converge; you moderate (or the highest-ranked attendee does).");
+    lines.push("- Replying to another agent: wrap it as `<msg role=\"answer\" replies_to=\"<their-message-id>\">...</msg>`. Roles: `answer`, `counter` (disagree; 2+ counters start a debate), `question`, `stmt`, `summary`, `vote`. Default `answer`.");
     return lines.join("\n");
   }
 
@@ -705,6 +763,7 @@ export class AgentService {
       active: boolean;
       max_tokens: number;
       max_errors: number;
+      keep_full_tool_turns: number;
       variables: Record<string, string>;
       show_on_dashboard: boolean;
       builtin_handler: string;
@@ -818,6 +877,13 @@ export class AgentService {
       const dirty = (agent.consecutive_failures ?? 0) > 0 || (agent.auto_paused_at ?? "") !== "";
       if (dirty) this.clearAutoPause(agentId);
       return { paused: false, consecutive_failures: 0 };
+    }
+
+    // Nothing is wrong with the agent while the Claude session is down or over its limit: it
+    // must not be switched off, or reconnecting would leave it paused.
+    if ([CLAUDE_ACCESS_WAITING, CLAUDE_LIMIT_WAITING].some((p) => (outcome.error ?? "").startsWith(p))) {
+      log.warn(`Agent "${agent.name}": ${outcome.error!.slice(0, 160)}`);
+      return { paused: false, consecutive_failures: agent.consecutive_failures ?? 0 };
     }
 
     const fails = (agent.consecutive_failures ?? 0) + 1;
@@ -1016,6 +1082,30 @@ export class AgentService {
     return (this.db.prepare("SELECT * FROM agent_office_inbox WHERE id = ?").get(id) as AgentOfficeInboxMessage | undefined) ?? null;
   }
 
+  /**
+   * A letter to an office, not to a named agent: it goes to the office's lead (Aprobaciones hands a draft over this
+   * way). Signed by `agent_id` when that agent still exists and is not the lead; otherwise by the chief or another
+   * agent of the office, since the inbox needs a sender.
+   */
+  postToOffice(flowId: string, input: { agent_id: string; subject: string; body: string; project_id: string | null }):
+    { ok: boolean; to_agent_id?: string; error?: string } {
+    const flow = this.getFlow(flowId);
+    if (!flow || flow.active !== 1) return { ok: false, error: `Office not found: ${flowId}` };
+    const lead = this.db.prepare(
+      `SELECT id FROM agents WHERE flow_id = ? AND role = 'manager' AND active = 1 AND COALESCE(rank_id, '') NOT IN (${TOP_RANK_IDS_SQL})
+       ORDER BY created_at LIMIT 1`,
+    ).get(flowId) as { id: string } | undefined;
+    if (!lead) return { ok: false, error: `La oficina ${flow.name} no tiene líder que reciba el pedido` };
+    const author = this.getAgent(input.agent_id);
+    const top = this.getTopAgent();
+    const peer = this.db.prepare("SELECT id FROM agents WHERE flow_id = ? AND active = 1 AND id <> ? ORDER BY created_at LIMIT 1")
+      .get(flowId, lead.id) as { id: string } | undefined;
+    const from = [author?.id, top?.id, peer?.id].find((id) => id && id !== lead.id);
+    if (!from) return { ok: false, error: `No hay quién firme la carta a ${flow.name}` };
+    const r = this.postToColleague({ from_agent_id: from, to_agent_id: lead.id, subject: input.subject, body: input.body, project_id: input.project_id });
+    return r.message ? { ok: true, to_agent_id: lead.id } : { ok: false, error: r.error ?? "La carta no salió" };
+  }
+
   postToColleague(input: {
     from_agent_id: string;
     to_agent_id: string;
@@ -1202,6 +1292,29 @@ export class AgentService {
          WHERE id IN (${ph}) AND status = 'unread'`,
       )
       .run(...messageIds);
+  }
+
+  /** Delivery failed before any work: return the original letters to the inbox. */
+  restoreFailedInboxDelivery(agentId: string, messageIds: string[], refundAttempt = true): void {
+    if (!messageIds.length) return;
+    const ph = messageIds.map(() => "?").join(",");
+    this.db.prepare(
+      `UPDATE agent_office_inbox SET status = 'unread', read_at = NULL,
+         wake_attempts = MAX(0, wake_attempts - ?)
+       WHERE to_agent_id = ? AND id IN (${ph}) AND status IN ('unread', 'read')`,
+    ).run(refundAttempt ? 1 : 0, agentId, ...messageIds);
+  }
+
+  /** Give back the wake attempt of letters a run took but could not finish through no fault of
+   *  its own (the Claude usage limit cut it). Only letters still unread: one the run acknowledged
+   *  before the cut stays done. */
+  refundInboxWakeAttempt(agentId: string, messageIds: string[]): void {
+    if (!messageIds.length) return;
+    const ph = messageIds.map(() => "?").join(",");
+    this.db.prepare(
+      `UPDATE agent_office_inbox SET wake_attempts = MAX(0, wake_attempts - 1)
+       WHERE to_agent_id = ? AND id IN (${ph}) AND status = 'unread'`,
+    ).run(agentId, ...messageIds);
   }
 
   /** Archive (unread → archived, read_at stays NULL) letters that exhausted their wakes.
@@ -1479,20 +1592,28 @@ export class AgentService {
     const asker = this.getAgent(q.from_agent_id);
     if (!asker) return false;
     const who = q.answered_by === "chief" ? "The chief" : "Your supervisor";
+    // The answer belongs to the project of the run that asked: the relaunch that reads it works for that project
+    // (03/11: Growth runs relaunched with no project showed up in every project's panel).
+    const project = q.run_id
+      ? ((this.db.prepare("SELECT project_id FROM agent_runs WHERE id = ?").get(q.run_id) as { project_id: string | null } | undefined)?.project_id ?? null)
+      : null;
     this.db
       .prepare(
         `INSERT INTO agent_office_inbox
-          (id, flow_id, from_agent_id, to_agent_id, subject, body, status, related_run_id, created_at, read_at)
-         VALUES (?, ?, '__top_agent__', ?, ?, ?, 'unread', '', ?, NULL)`,
+          (id, flow_id, from_agent_id, to_agent_id, subject, body, status, related_run_id, created_at, read_at, project_id)
+         VALUES (?, ?, '__top_agent__', ?, ?, ?, 'unread', '', ?, NULL, ?)`,
       )
       .run(
         newId(),
         asker.flow_id ?? "",
         q.from_agent_id,
         `ANSWER: ${q.question.slice(0, 160)}`,
-        `${who} answered your question.\n\n**Question:** ${q.question}\n\n**Answer:** ${q.selected_option}` +
+        // The id travels with the answer: a host op that needs the operator's approval (a big DEV write)
+        // asks for it, and without it the asker had to ask again (web#2677, 01/11: five times).
+        `${who} answered your question (question_id: ${q.id}).\n\n**Question:** ${q.question}\n\n**Answer:** ${q.selected_option}` +
           (q.answered_note && q.answered_note !== q.selected_option ? `\n\n**Note:** ${q.answered_note}` : ""),
         isoNow(),
+        project || null,
       );
     return true;
   }
@@ -1620,6 +1741,19 @@ export class AgentService {
 
   /** Find an agent by exact name within a specific flow. Used to resolve
    *  `to_agent_name` into a UUID when posting to the office inbox. */
+  /**
+   * The one active agent with this exact name (case-insensitive) anywhere in
+   * the fleet, or undefined when there is none or more than one. Lets an
+   * agent address a colleague in another office by name, which is all the
+   * fleet directory lists for other offices.
+   */
+  findAgentByUniqueName(name: string): Agent | undefined {
+    const rows = this.db
+      .prepare("SELECT * FROM agents WHERE active = 1 AND lower(name) = lower(?) LIMIT 2")
+      .all(name.trim()) as Agent[];
+    return rows.length === 1 ? rows[0] : undefined;
+  }
+
   findAgentByNameInFlow(flowId: string, name: string): Agent | undefined {
     return this.db
       .prepare("SELECT * FROM agents WHERE flow_id = ? AND name = ? LIMIT 1")

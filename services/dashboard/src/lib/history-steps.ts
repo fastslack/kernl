@@ -128,6 +128,16 @@ function parseRaw(raw: string | undefined): Record<string, unknown> {
  * also carries the lesson it drew and the lessons it retired, which LIVE saw
  * as separate events — so it fans out into up to three rows.
  */
+/** "step" log rows duplicate agent_run_steps, except these: they are never stored as run steps. */
+const STEP_ROWS_KEPT = new Set(['claude_account', 'claude_account_down']);
+
+/** Whether an event-log row belongs in the History timeline (it is turned by `eventLogToFlowEvents`). */
+export function isHistoryEventRow(row: Pick<EventLogRow, 'event_type' | 'event_subtype'>): boolean {
+  const sub = row.event_subtype;
+  if (!sub || sub === 'step') return false;
+  return row.event_type !== 'step' || STEP_ROWS_KEPT.has(sub);
+}
+
 export function eventLogToFlowEvents(row: EventLogRow, runId: string): AgentFlowEvent[] {
   const sub = String(row.event_subtype || row.event_type || 'event');
   const raw = parseRaw(row.raw_data);

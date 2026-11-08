@@ -22,7 +22,7 @@ const OPTS = [{ label: "A" }, { label: "B" }, { label: "C" }, { label: "D" }];
 const WRITERS = /(_create|_update|_delete|_remove|_write|_exec|_add|_apply|_set|_post|_send|_ack|_answer|_invoke|_run|_register|_unregister|_close|_comment|_approve|_merge|_push|_propose|ask_supervisor|call_meeting)\b/;
 
 describe("what the investigator may call", () => {
-  const def = investigatorDefinition("es", "claude-opus-5-5");
+  const def = investigatorDefinition("es", [{ provider: "claude_code", model: "claude-opus-5-5" }]);
 
   it("only reads: every allowed tool is a read, none matches a writer's name", () => {
     expect(def.allowed_tools.length).toBeGreaterThan(0);
@@ -32,7 +32,7 @@ describe("what the investigator may call", () => {
 
   it("every built-in that writes, runs commands or reaches the web is denied, and so is ask_supervisor", () => {
     for (const t of ["Bash", "Edit", "MultiEdit", "Write", "NotebookEdit", "Task", "WebFetch", "WebSearch", "kernel_agents_ask_supervisor"]) {
-      expect(def.denied_tools).toContain(t);
+      expect(def.denied_tools as string[]).toContain(t);
     }
     expect(def.denied_tools).toEqual([...INVESTIGATOR_DENIED]);
   });
@@ -51,9 +51,9 @@ describe("what the investigator may call", () => {
     expect(resolveSandboxDriverSlug({}, "")).toBeNull();
   });
 
-  it("one model, no chain", () => {
-    expect(def.model).toBe("claude-opus-5-5");
-    expect((def as Record<string, unknown>).model_chain).toBeUndefined();
+  it("uses the supplied fallback chain", () => {
+    expect(def.model).toBe("");
+    expect(def.model_chain).toEqual([{ provider: "claude_code", model: "claude-opus-5-5" }]);
   });
 });
 
@@ -91,7 +91,7 @@ describe("the investigator's lifecycle", () => {
     return service.createQuestion({ from_agent_id: w.id, question: "¿Pego la descripción en api!83?", options: OPTS, direct_to_human: true }).id;
   };
 
-  it("starts a claude_code run of a hidden, read-only agent and stores the opinion when it ends", async () => {
+  it("starts a native run of a hidden, read-only agent on its fallback chain and stores the opinion when it ends", async () => {
     const inv = createQuestionInvestigator({ service, executor, events, language: "es" });
     const qid = ask();
     const started = inv.start(qid);
@@ -100,9 +100,14 @@ describe("the investigator's lifecycle", () => {
     expect(goals[0]).toContain("MR api!83");
 
     const agent = service.getAgent(service.getSystemAgentId(INVESTIGATOR_ROLE))!;
-    expect(agent.executor_type).toBe("claude_code");
+    expect(agent.executor_type).toBe("native");
     expect(agent.show_on_dashboard).toBeFalsy();
-    expect(agent.model).toBe("claude-opus-5-5");
+    expect(agent.model).toBe("");
+    expect(JSON.parse(agent.model_chain as unknown as string)).toEqual([
+      { provider: "claude_code", model: "claude-opus-5-5" },
+      { provider: "anthropic", model: "claude-sonnet-5-5" },
+      { provider: "anthropic", model: "claude-haiku-5-5" },
+    ]);
 
     // Starting again while it runs joins the same run.
     expect(inv.start(qid).run_id).toBe(started.run_id);
@@ -143,7 +148,7 @@ describe("the investigator's lifecycle", () => {
     expect(callerToolDenial("someone-else", "kernel_repos_write")).toBeNull();
   });
 
-  it("a model it cannot reach is 'unavailable', with no second try on another model", async () => {
+  it("a model it cannot reach surfaces as 'unavailable' from the run result; the chain itself is the kernel's job, not the investigator's", async () => {
     const inv = createQuestionInvestigator({ service, executor, events, language: "es" });
     const qid = ask();
     const { run_id } = inv.start(qid);

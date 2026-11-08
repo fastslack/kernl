@@ -24,8 +24,8 @@ export interface AccountSyncStatus {
  * Gmail id, and the write paths (star, read) use it to route back here.
  */
 export const COMM_MAIL_PREFIX = "comm:";
-const GMAIL_SOURCE = "google_emails";
-const COMM_SOURCE = `(
+export const GMAIL_SOURCE = "google_emails";
+export const COMM_SOURCE = `(
   SELECT 'comm:' || c.id AS gmail_id,
          'comm:' || COALESCE(NULLIF(c.gmail_thread_id, ''), NULLIF(c.thread_id, ''), c.id) AS thread_id,
          COALESCE(json_extract(c.metadata, '$.from'), '') AS from_email,

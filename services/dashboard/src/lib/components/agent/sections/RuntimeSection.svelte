@@ -193,7 +193,7 @@
     return write({ executor_type: next });
   }
 
-  // ── The four numbers ─────────────────────────────────────────────
+  // ── The limit numbers ─────────────────────────────────────────────
   // One PUT per keystroke would be four writes to type "1200". 600ms after
   // the last one is late enough to be one write and early enough that nobody
   // waits for it.
@@ -207,6 +207,9 @@
     { key: 'max_tokens', label: 'agent.config.tokens', help: 'agent.config.tokens_help', unit: 'agent.config.unit_tokens', min: 0, step: 1000, scale: 1 },
     { key: 'timeout_ms', label: 'agent.config.timeout', help: 'agent.config.timeout_help', unit: 'agent.config.unit_seconds', min: 1, step: 10, scale: 1000 },
     { key: 'max_errors', label: 'agent.config.errors', help: 'agent.config.errors_help', unit: 'agent.config.unit_errors', min: 0, step: 1, scale: 1 },
+    // Native engine only: after this many tool turns a long result is resent
+    // trimmed (re-asking returns it whole). 0 keeps every result in full.
+    { key: 'keep_full_tool_turns', label: 'agent.config.keep_turns', help: 'agent.config.keep_turns_help', unit: 'agent.config.unit_turns', min: 0, step: 1, scale: 1 },
   ];
 
   const timers: Record<string, ReturnType<typeof setTimeout>> = {};

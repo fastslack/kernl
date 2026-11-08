@@ -16,9 +16,11 @@ import { z } from "zod";
 import type {
   KernelModule,
   ModuleContext,
+  RetentionPolicy,
   ToolDefinition,
   ToolResult,
 } from "../../core/types.js";
+import { agePolicy } from "../../sdk/retention.js";
 import { errorResult, safeJson, structuredResult } from "../../core/helpers.js";
 import { getRequestContext } from "../../core/request-context.js";
 import { runMigrations } from "../../core/db/migrations.js";
@@ -72,6 +74,20 @@ export function createToolMemoryModule(embeddingsFactory: () => Promise<Embeddin
             service = null;
           });
       }
+    },
+    getRetentionPolicies(): RetentionPolicy[] {
+      return [
+        agePolicy({
+          id: "tool-memory.calls",
+          label: "Tool call memory",
+          description: "Past tool calls kept to hint at similar ones before they run. Older calls stop being suggested.",
+          kind: "operational",
+          table: "tool_memory",
+          dateColumn: "created_at",
+          defaultDays: 60,
+          defaultEnabled: true,
+        }),
+      ];
     },
     getTools(): ToolDefinition[] { return tools; },
     getService(): ToolMemoryService | null { return service; },

@@ -26,7 +26,7 @@ function fakeChild() {
   return proc;
 }
 
-function setup(opts: { cli?: string | null; timeoutMs?: number; captureBrowser?: boolean; fetchImpl?: typeof fetch } = {}) {
+function setup(opts: { cli?: string | null; timeoutMs?: number; captureBrowser?: boolean; fetchImpl?: typeof fetch; duplicateOf?: (id: string) => { id: string; label: string; email?: string } | null } = {}) {
   const base = mkdtempSync(join(tmpdir(), "kernl-login-test-"));
   const dirs: string[] = [];
   const spawned: Array<{ cmd: string; args: string[]; env: NodeJS.ProcessEnv; proc: ReturnType<typeof fakeChild> }> = [];
@@ -43,6 +43,7 @@ function setup(opts: { cli?: string | null; timeoutMs?: number; captureBrowser?:
     captureBrowser: opts.captureBrowser,
     shimDir: () => { const d = mkdtempSync(join(base, "s-")); dirs.push(d); return d; },
     fetchImpl: opts.fetchImpl,
+    duplicateOf: opts.duplicateOf,
   });
   return { login, spawned, signedIn: () => signedIn, dirs };
 }
@@ -171,6 +172,65 @@ describe("createClaudeLogin", () => {
     spawned[0].proc.emit("exit", 0);
     expect(login.start().state).toBe("waiting");
     expect(spawned).toHaveLength(2);
+  });
+
+  describe("accounts", () => {
+    it("signs in to the chosen account's config dir", () => {
+      const { login, spawned } = setup();
+      const st = login.start({ accountId: "b1b1b1b1" });
+      expect(spawned[0].env.CLAUDE_CONFIG_DIR).toMatch(/claude-accounts[\\/]b1b1b1b1$/);
+      expect(st.accountId).toBe("b1b1b1b1");
+      expect(login.status().accountId).toBe("b1b1b1b1");
+    });
+
+    it("keeps the process-level token out of another account's sign-in, not the primary's", () => {
+      const prev = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = "tok-primary";
+      try {
+        const other = setup();
+        other.login.start({ accountId: "b1b1b1b1" });
+        expect(other.spawned[0].env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+        const primary = setup();
+        primary.login.start();
+        expect(primary.spawned[0].env.CLAUDE_CODE_OAUTH_TOKEN).toBe("tok-primary");
+      } finally {
+        if (prev === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN; else process.env.CLAUDE_CODE_OAUTH_TOKEN = prev;
+      }
+    });
+
+    it("without an account it signs in to the primary", () => {
+      const { login, spawned } = setup();
+      login.start();
+      expect(spawned[0].env.CLAUDE_CONFIG_DIR).toMatch(/kernl[\\/]claude$/);
+    });
+
+    it("reuses the page for the same account but restarts for another", () => {
+      const { login, spawned } = setup();
+      login.start({ accountId: "b1b1b1b1" });
+      login.start({ accountId: "b1b1b1b1" });
+      expect(spawned).toHaveLength(1);
+      login.start({ accountId: "c2c2c2c2" });
+      expect(spawned).toHaveLength(2);
+      expect(spawned[0].proc.killed).toBe(true);
+      expect(login.status().accountId).toBe("c2c2c2c2");
+      // The killed first CLI's late exit must not finish the second sign-in.
+      spawned[0].proc.emit("exit", 0);
+      expect(login.status().state).toBe("waiting");
+    });
+
+    it("flags the other account when the sign-in landed on the same person", () => {
+      const { login, spawned } = setup({ duplicateOf: (id) => (id === "b1b1b1b1" ? { id: "default", label: "Work", email: "a@b.c" } : null) });
+      login.start({ accountId: "b1b1b1b1" });
+      spawned[0].proc.emit("exit", 0);
+      expect(login.status()).toEqual({ state: "done", accountId: "b1b1b1b1", duplicateOf: { id: "default", label: "Work", email: "a@b.c" } });
+    });
+
+    it("omits duplicateOf when there is none", () => {
+      const { login, spawned } = setup({ duplicateOf: () => null });
+      login.start({ accountId: "b1b1b1b1" });
+      spawned[0].proc.emit("exit", 0);
+      expect(login.status()).toEqual({ state: "done", accountId: "b1b1b1b1" });
+    });
   });
 
   describe("deliver", () => {

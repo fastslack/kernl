@@ -10,6 +10,7 @@ import { emailTriageMigrations } from "./migrations/003_email_triage.js";
 import { accountIdMigrations } from "./migrations/004_account_id.js";
 import { authHealthMigrations } from "./migrations/005_auth_health.js";
 import { bodyHtmlMigrations } from "./migrations/006_body_html.js";
+import { attachmentsTextMigrations } from "./migrations/007_attachments_text.js";
 import { GoogleAuth } from "./auth.js";
 import { GoogleClient } from "./google-client.js";
 import { CrmService } from "../../../people/crm/_module/service.js";
@@ -54,6 +55,7 @@ export function createGoogleSyncModule(): GoogleSyncModule {
       runMigrations(ctx.sqlite, "google-sync-account-id", accountIdMigrations);
       runMigrations(ctx.sqlite, "google-sync-auth-health", authHealthMigrations);
       runMigrations(ctx.sqlite, "google-sync-body-html", bodyHtmlMigrations);
+      runMigrations(ctx.sqlite, "google-sync-attachments-text", attachmentsTextMigrations);
 
       const { clientId, clientSecret, callbackPort } = ctx.config.google;
 

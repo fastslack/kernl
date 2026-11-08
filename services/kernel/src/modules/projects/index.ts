@@ -9,7 +9,9 @@ import { ConnectorService } from "./connector-service.js";
 import { DraftNotifier } from "./draft-notifier.js";
 import { placesTool } from "./places.js";
 import { outboxTools, projectTools, type RunLookup, type FlowOfAgent } from "./tools.js";
-import { registerProjectsRoutes } from "./api-routes.js";
+import { ProjectAccountsService, deployEnvForRepo } from "./accounts.js";
+import { configureGoogleClient } from "./google-link.js";
+import { registerProjectsRoutes, type ProjectsRouteDeps } from "./api-routes.js";
 
 /** data/projects/{slug}/ — each project's home (BRIEF.md, MEMORY.md, assets/). */
 export const PROJECTS_ROOT = resolve(process.cwd(), "data", "projects");
@@ -37,12 +39,14 @@ export interface ProjectsModule extends ExtensibleModule {
   getService(): ProjectsService | null;
   getOutbox(): OutboxService | null;
   getConnector(): ConnectorService | null;
+  getAccounts(): ProjectAccountsService | null;
   /** How this module reads runs and agents' offices; bootstrap wires it after agents init. */
   setAgentLookups(lookups: {
     getRun: RunLookup;
     flowOf: FlowOfAgent;
     flowName?: (flowId: string) => string;
     listFlows?: () => Array<{ id: string; name: string }>;
+    postToOffice?: ProjectsRouteDeps["postToOffice"];
   }): void;
 }
 
@@ -55,6 +59,7 @@ export function createProjectsModule(): ProjectsModule {
   let service: ProjectsService | null = null;
   let outbox: OutboxService | null = null;
   let connector: ConnectorService | null = null;
+  let accounts: ProjectAccountsService | null = null;
   let connectorTimer: ReturnType<typeof setInterval> | null = null;
   let tools: ToolDefinition[] = [];
   let dashboard: DashboardDescriptor | null = null;
@@ -64,6 +69,7 @@ export function createProjectsModule(): ProjectsModule {
     flowOf: FlowOfAgent;
     flowName?: (flowId: string) => string;
     listFlows?: () => Array<{ id: string; name: string }>;
+    postToOffice?: ProjectsRouteDeps["postToOffice"];
   } = { getRun: () => undefined, flowOf: () => "" };
 
   return {
@@ -95,6 +101,15 @@ export function createProjectsModule(): ProjectsModule {
       }, OUTBOX_TICK_MS);
       tickTimer.unref?.();
       connector = new ConnectorService(ctx.sqlite, ctx.events, service);
+      accounts = new ProjectAccountsService(ctx.sqlite, ctx.config.encryption.key);
+      // Read at call time: the Google client saved in Ajustes applies without a restart. The redirect is the
+      // one already registered for google-sync; its callback hands project links back (google-link.ts).
+      configureGoogleClient(() => {
+        const g = (ctx.config as unknown as { google?: { clientId?: string; clientSecret?: string } }).google;
+        return g?.clientId && g.clientSecret
+          ? { clientId: g.clientId, clientSecret: g.clientSecret, redirectUri: `http://localhost:${ctx.config.dashboard.port}/auth/google/callback` }
+          : null;
+      });
       connectorTimer = setInterval(() => {
         void connector?.pullAllDue().catch((err) => log.warn(`projects: connector pull failed: ${String(err)}`));
       }, CONNECTOR_CHECK_MS);
@@ -109,17 +124,23 @@ export function createProjectsModule(): ProjectsModule {
       const svc = service;
       const ob = outbox;
       const cn = connector;
+      const ac = accounts;
       dashboard = {
         registerRoutes: (server) => registerProjectsRoutes(server, {
           projects: svc,
           outbox: ob,
           connector: cn,
+          accounts: ac,
+          deployEnv: (repo, origin) => deployEnvForRepo(ctx.sqlite, ac, repo, origin),
           flowName: (id) => lookups.flowName?.(id) ?? id,
           listFlows: () => lookups.listFlows?.() ?? [],
+          postToOffice: (flowId, letter) => lookups.postToOffice?.(flowId, letter) ?? { ok: false, error: "Offices are not available" },
         }),
         nav: [
           { id: "projects", label: "Proyectos", icon: "📁", group: "work", order: 40 },
-          { id: "outbox", label: "Aprobaciones", icon: "📤", group: "work", order: 50 },
+          // Everything that waits on the operator. Approvals keeps its page (/outbox, the full editor the Bandeja links to)
+          // but leaves the nav, like Overview, Tasks and Reminders (work-suite).
+          { id: "inbox", label: "Bandeja", icon: "📥", group: "work", order: 5 },
         ],
       };
     },
@@ -128,6 +149,7 @@ export function createProjectsModule(): ProjectsModule {
     getService() { return service; },
     getOutbox() { return outbox; },
     getConnector() { return connector; },
+    getAccounts() { return accounts; },
     setAgentLookups(l) { lookups = l; },
     async shutdown() {
       if (tickTimer) clearInterval(tickTimer);

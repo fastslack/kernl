@@ -70,7 +70,7 @@ export function createBenchModule(): ExtensibleModule {
       ];
     },
     getDashboardDescriptor(): DashboardDescriptor {
-      return { nav: [{ id: "bench", label: "Bench", icon: "🏁", group: "ai", order: 24 }] };
+      return { nav: [{ id: "bench", label: "Bench", icon: "🏁", group: "ai", order: 7 }] };
     },
     async shutdown() {},
   };

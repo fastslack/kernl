@@ -15,7 +15,7 @@
   import { liveStepHtml } from '$lib/step-view.js';
   import { emailCommId } from '$lib/agent-helpers.js';
   import {
-    liveStepIcon, liveStepLabel, liveEventType, liveEventSummary,
+    liveStepIcon, liveStepLabel, liveEventType, liveEventSummary, fallbackEnds,
     liveStepSummary, liveStepCategory, liveFmtDelta, liveFmtTokens,
     liveStepTokens, runElapsedMs, runTokensTotal,
     liveStepDeltaMs as liveStepDeltaMsOf,
@@ -62,6 +62,7 @@
   }
 
   $: liveHeadEvent = events[0] ?? null;
+  $: modelSwitches = events.filter((e) => ['fallback_used', 'provider_fallback', 'model_fallback'].includes(liveEventType(e)));
 
   // Set of step keys (liveEventKey) that the user has expanded — controls
   // whether the detail panel renders below the summary line. Defaults to
@@ -115,6 +116,16 @@
 </script>
 
 <div class="ip-body live-body">
+  {#if modelSwitches.length}
+    {@const change = modelSwitches[0]}
+    {@const ends = fallbackEnds(change.data)}
+    <div class="llm-fallback-notice" role="status">
+      <span class="llm-tag limited" title={String(change.data.reason ?? change.data.error ?? '')}>{ends.from} · limitado</span>
+      <span aria-hidden="true">→</span>
+      <span class="llm-tag active">{ends.to}</span>
+    </div>
+  {/if}
+  {#if !liveHeadEvent || !modelSwitches.includes(liveHeadEvent)}
   <div class="live-hero">
     <div class="live-hero-head">
       <span class="live-badge"><span class="live-dot-big"></span>LIVE</span>
@@ -161,6 +172,8 @@
       </div>
     {/if}
   </div>
+
+  {/if}
 
   <div class="live-timeline-head">
     <span class="live-timeline-h">Activity</span>
@@ -293,6 +306,11 @@
 </div>
 
 <style>
+  .llm-fallback-notice { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; font-size: 12px; }
+  .llm-tag { padding: 5px 9px; border: 1px solid; border-radius: 6px; font-weight: 600; overflow-wrap: anywhere; }
+  .llm-tag.limited { color: #fcd574; border-color: #b5852866; background: #fbbf2412; }
+  .llm-tag.active { color: #86efac; border-color: #4ade8066; background: #4ade8012; }
+
   /* Moved from AgentWorld3D: the whole `.live-*` stylesheet with its four
      keyframes, plus three rules whose last consumer was this tab —
      `.ip-sec-c`, `.email-view-link` and the `.ip-empty` half of the parent's

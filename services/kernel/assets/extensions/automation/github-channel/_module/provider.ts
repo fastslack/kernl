@@ -78,12 +78,20 @@ export class GitHubRepoProvider extends ForgeRepoProvider<GitHubConnection> impl
   }
 
   protected details(c: GitHubConnection): Record<string, string> {
-    return { app_id: c.app_id, installation_id: c.installation_id };
+    return c.token ? { auth: "token" } : { app_id: c.app_id, installation_id: c.installation_id };
   }
 
   protected async whoami(conn: GitHubConnection): Promise<string> {
+    if (conn.token) {
+      const user = await this.get<{ login?: string; id?: number }>(conn, `/user`);
+      return `OK — user id=${user.id ?? "?"} (${user.login ?? "unnamed"})`;
+    }
     const data = await this.get<{ slug?: string; name?: string; id?: number }>(conn, `/app`);
     return `OK — app id=${data.id ?? "?"} (${data.slug ?? data.name ?? "unnamed"})`;
+  }
+
+  protected probeRepo(conn: GitHubConnection, repo: string): Promise<unknown> {
+    return this.get(conn, `/repos/${repo}`);
   }
 
   async fetchOpenItems(repo: string, connectionId: string, maxPages = 50): Promise<RepoItem[]> {
@@ -188,7 +196,7 @@ export class GitHubRepoProvider extends ForgeRepoProvider<GitHubConnection> impl
       path,
       url: `${GITHUB_API}${path}`,
       headers: async () => ({
-        Authorization: `Bearer ${await this.installationToken(conn)}`,
+        Authorization: `Bearer ${conn.token || await this.installationToken(conn)}`,
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": API_VERSION,
       }),
@@ -196,7 +204,9 @@ export class GitHubRepoProvider extends ForgeRepoProvider<GitHubConnection> impl
       retryOn: [403, 429],
       resetHeader: "x-ratelimit-reset",
       // An expired installation token: drop it, and the one retry mints a new one.
+      // A personal token has nothing to refresh: a 401 is final.
       onUnauthorized: () => {
+        if (conn.token) return false;
         this.tokenCache.delete(cacheKey(conn));
         return true;
       },

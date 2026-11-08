@@ -29,6 +29,8 @@ import {
   type ToolDefinition,
   type EventBus,
   log,
+  llm,
+  stripReasoning,
 } from "@kernl/extension-sdk";
 import type { AgentsModule } from "../../../../../src/modules/agents/index.js";
 import { createChatProviders } from "../../../../../src/modules/chat/llm-adapter.js";
@@ -36,9 +38,13 @@ import type { BuiltinHandler } from "../../../../../src/modules/agents/builtin-h
 
 import { AgentEvalService } from "./eval-service.js";
 import { ClaudeCodeExecutor } from "./claude-code-executor.js";
+import { sweepTranscriptRunDirs, transcriptRunsRoot } from "./claude-resume.js";
 import { MeetingExecutor } from "./meeting-executor.js";
 import { DebateOrchestrator } from "./debate-orchestrator.js";
 import { InboxWaker } from "./inbox-waker.js";
+import { TicketDossiers } from "./ticket-dossier.js";
+import { TurnBudgets } from "./turn-budget.js";
+import { OutputBudgets } from "./output-budget.js";
 import { ConversationSubscriptionEngine } from "./conversation-subscription-engine.js";
 import { ReflectionOptimizer } from "./reflection-optimizer.js";
 import { WorkspaceService } from "./workspace-service.js";
@@ -132,7 +138,47 @@ export function createAgentAdvancedModule(): AgentAdvancedModule {
       // ── Claude Agent SDK alt executor (executor_type='claude_code') ──
       const claudeCodeExecutor = new ClaudeCodeExecutor();
       claudeCodeExecutor.setConfig(ctx.config);
+      // Per-run transcript dirs of sandboxed runs: none of those runs survived
+      // the restart, so whatever is left there was never cleaned up.
+      const sweptTranscripts = sweepTranscriptRunDirs(transcriptRunsRoot(ctx.config.sqlite.path));
+      if (sweptTranscripts > 0) log.info(`agent-advanced: removed ${sweptTranscripts} leftover sandbox transcript dir(s)`);
       claudeCodeExecutor.setEvalService(evalService);
+
+      // ── Turn budgets learned per kind of letter (opt out per agent: __adaptive_turns__ false) ──
+      try { claudeCodeExecutor.setOutputBudgets(new OutputBudgets(ctx.sqlite as any)); }
+      catch (err) { log.warn(`agent-advanced: learned output ceilings off — ${String(err)}`); }
+      try { claudeCodeExecutor.setTurnBudgets(new TurnBudgets(ctx.sqlite as any)); }
+      catch (err) { log.warn(`agent-advanced: learned turn budgets off — ${String(err)}`); }
+
+      // ── Ticket dossiers: what an office knows about each ticket, handed to the next run on it ──
+      // Kill switch: AGENTS_TICKET_DOSSIERS=0. Model: AGENT_DOSSIER_MODEL (empty: the configured chain).
+      if (process.env.AGENTS_TICKET_DOSSIERS !== "0") {
+        try {
+          const dossiers = new TicketDossiers(ctx.sqlite as any, async ({ system, user }) => {
+            const r = await llm().chat({ system, user, model: process.env.AGENT_DOSSIER_MODEL || undefined, maxTokens: 2000, temperature: 0, caller: "agents:ticket-dossier" });
+            return stripReasoning(r.text ?? "");
+          });
+          claudeCodeExecutor.setDossiers(dossiers);
+          ctx.events.on("agent.run.completed", (payload) => {
+            const p = payload as { run_id?: string; agent_id?: string };
+            if (!p?.run_id || !p.agent_id) return;
+            // The emitter stores the run before it emits; read it a moment later all the same.
+            setTimeout(() => {
+              try {
+                const run = agentService.getRun(p.run_id!);
+                const agent = agentService.getAgent(p.agent_id!);
+                if (!run || !agent) return;
+                void dossiers.afterRun({
+                  scope: agent.flow_id || agent.id, projectId: run.project_id ?? null, runId: run.id, agentName: agent.name,
+                  goal: run.goal ?? "", status: run.status, steps: run.steps_count ?? 0, result: run.result ?? "", error: run.error ?? "",
+                });
+              } catch (err) { log.debug(`agent-advanced: ticket dossier skipped — ${String(err)}`); }
+            }, 500);
+          });
+        } catch (err) {
+          log.warn(`agent-advanced: ticket dossiers off — ${String(err)}`);
+        }
+      }
       claudeCodeExecutor.setNativeExecutor(agentExecutor);
       // registerAltExecutor will forward the stashed SandboxDriverRegistry
       // (wired by the bootstrap drivers stage before extensions loaded).
@@ -176,11 +222,15 @@ export function createAgentAdvancedModule(): AgentAdvancedModule {
         agentService,
         agentExecutor,
         ctx.events,
-        { quietMs: ctx.config.agents?.inboxWakeQuietMs ?? 300_000 },
+        // Read from the environment here: config is built before the database opens, so a value saved in
+        // Settings (rehydrated into process.env by then) never reached config.agents (16/10).
+        { quietMs: Number(process.env.AGENTS_INBOX_WAKE_QUIET_MS) || ctx.config.agents?.inboxWakeQuietMs || 300_000 },
       );
       inboxWakerRef = inboxWaker;
       inboxWaker.start();
-      inboxWaker.startSweep(120_000, (letters) => {
+      // Letters written straight to the database (an office's host process) only reach their agent through
+      // this sweep: its interval is the latency of every such hop.
+      inboxWaker.startSweep(Number(process.env.AGENTS_INBOX_SWEEP_MS) || 120_000, (letters) => {
         void ctx.notifier?.send({
           title: `Office inbox: ${letters.length} letter(s) never handled`,
           body: letters.map((l) => `• ${l.subject}`).join("\n"),

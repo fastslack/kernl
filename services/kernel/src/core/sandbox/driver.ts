@@ -47,6 +47,24 @@ export interface NamedMount {
   hostPath: string;
 }
 
+/** Where a driver mounts `SandboxRunOptions.transcriptDir` inside the sandbox. */
+export const SANDBOX_TRANSCRIPTS_PATH = "/kernl-transcripts";
+
+/**
+ * Bootstrap lines that point the CLI's projects dir at the mounted transcript
+ * dir. A link rather than a mount straight onto `$HOME/.claude/projects`:
+ * the runtime creates the parents of a nested mount point as root, which
+ * leaves `$HOME/.claude` unwritable for the sandbox user and breaks the
+ * credentials copy.
+ */
+export function sandboxTranscriptLines(transcriptDir: string | undefined): string[] {
+  if (!transcriptDir) return [];
+  return [
+    'rm -rf "$HOME/.claude/projects"',
+    `ln -s ${SANDBOX_TRANSCRIPTS_PATH} "$HOME/.claude/projects"`,
+  ];
+}
+
 export interface ExtraMount {
   host: string;
   container: string;
@@ -98,6 +116,18 @@ export interface SandboxRunOptions {
     claudeJson?: string;
     claudeCreds?: string;
   };
+  /**
+   * Which Claude Code account's session the sandbox runs on (an id from the
+   * kernel's account list). Absent means the primary account.
+   */
+  claudeAccountId?: string;
+  /**
+   * Kernel-side dir that becomes the CLI's `$HOME/.claude/projects` inside the
+   * sandbox, so a run's transcripts outlive its container and the next
+   * container of the same run can resume the conversation. Drivers that
+   * cannot mount it ignore it (the run is then never resumed).
+   */
+  transcriptDir?: string;
   /** Command to run inside the sandbox. Defaults to `claude "$@"`. */
   entryCommand?: string;
 }
@@ -159,4 +189,9 @@ export interface SandboxDriver {
   prepareRun(opts: SandboxRunOptions): Promise<SandboxHandle>;
   /** Tear down per-run state (scripts, snapshots, tmpfiles). */
   cleanup(handle: SandboxHandle): Promise<void>;
+  /**
+   * The uid the agent CLI writes files as inside the sandbox, when the driver
+   * knows it; lets the caller keep a shared dir private to that uid.
+   */
+  sandboxUid?(): number | null;
 }

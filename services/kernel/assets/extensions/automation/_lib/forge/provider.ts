@@ -60,6 +60,24 @@ export abstract class ForgeRepoProvider<C extends ForgeConnectionRow> implements
     }
   }
 
+  /**
+   * Whether the connection reaches one repo (`group/project`). A token that is valid but scoped to other repos passes
+   * testConnection and still can't see this one; the forge answers 404 for a private repo it can't see.
+   */
+  async checkRepo(repo: string, connectionId: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      await this.probeRepo(this.requireConnection(connectionId), repo);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** One GET on the repo; forges without it say so. */
+  protected probeRepo(_conn: C, _repo: string): Promise<unknown> {
+    return Promise.reject(new Error(`${this.label} can't check a repo`));
+  }
+
   protected requireConnection(id: string): C {
     const conn = this.connections.get(id);
     if (!conn) throw new Error(`${this.label} connection not found: ${id}`);

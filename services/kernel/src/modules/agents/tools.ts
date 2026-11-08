@@ -10,12 +10,14 @@ import type { MeetingExecutorLike } from "./advanced-types.js";
 import type { EventBus } from "../../core/event-bus.js";
 import { resolveGoal, extractRoleFromReply, stripRoleWrapper } from "./executor.js";
 import { getRequestContext } from "../../core/request-context.js";
+import { focusSkillFile, runFocusQuery } from "../../sdk/skill-file-focus.js";
 import { askingRun, formatQuestionContext } from "./question-context.js";
 import { defineTool, defineToolNoInput, limitArg } from "../../core/tool-builder.js";
 import { answerAndDeliver } from "./question-delivery.js";
 import { leavesWorkToOperator } from "./operator-guard.js";
 import { resumeRun } from "./run-resume.js";
 import { formatTriageQuestion } from "./question-format.js";
+import { duplicateReply } from "./question-dedupe.js";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Agent-management policy
@@ -1245,6 +1247,12 @@ export function agentsTools(
           .filter((x): x is { label: string; value: string; url?: string; task?: boolean } => x !== null);
         if (options.length < 2 || options.length > 4) return errorResult("Provide 2 to 4 non-empty options, your preferred one first.");
 
+        const dup = await service.findDuplicateQuestion({ from_agent_id: caller.id, flow_id: caller.flow_id ?? "", question, context: input.context });
+        if (dup) {
+          log.info(`ask_supervisor: ${caller.name} repeated question ${dup.id} (${dup.status}) — not filed`);
+          return textResult(duplicateReply(dup, (id) => service.getAgent(id)?.name ?? "another agent"));
+        }
+
         const res = service.createQuestion({
           from_agent_id: caller.id,
           flow_id: caller.flow_id ?? "",
@@ -1391,7 +1399,7 @@ export function agentsTools(
         "`role: \"counter\"` — 2+ counters from different agents on the same conversation auto-opens a debate.",
       schema: z.object({
         to_agent_id: z.string().optional().describe("UUID of the recipient. Preferred."),
-        to_agent_name: z.string().optional().describe("Exact agent name (within your own office for name-only lookups). Use UUID across offices."),
+        to_agent_name: z.string().optional().describe("Exact agent name. Your own office is searched first, then the whole fleet (the name must be unique there)."),
         subject: z.string().describe("One-line subject. Max 300 chars."),
         body: z.string().describe("Message body (markdown OK). Include context and what action you want."),
         role: z.enum(["stmt","question","answer","counter","vote","summary"]).optional().describe("Semantic role of this turn. Default 'stmt'. Use 'counter' to disagree."),
@@ -1423,14 +1431,14 @@ export function agentsTools(
         let toId = input.to_agent_id?.trim() ?? "";
         const toName = input.to_agent_name?.trim() ?? "";
         if (!toId && toName) {
-          // Name-only resolution is scoped to the caller's office to stay
-          // unambiguous. Cross-office calls must supply the UUID.
-          if (!caller.flow_id) {
-            return errorResult(`Cannot resolve agent name "${toName}" without an office context — supply to_agent_id instead.`);
-          }
-          const resolved = service.findAgentByNameInFlow(caller.flow_id, toName);
+          // Own office first (names repeat across offices: every office has
+          // a "Lead"), then the whole fleet when the name is unique there —
+          // the fleet directory lists other offices by name only.
+          const resolved =
+            (caller.flow_id ? service.findAgentByNameInFlow(caller.flow_id, toName) : undefined) ??
+            service.findAgentByUniqueName(toName);
           if (!resolved) {
-            return errorResult(`No agent named "${toName}" found in your office. Use kernel_agents_directory or supply to_agent_id.`);
+            return errorResult(`No single agent named "${toName}" (none, or several in different offices). Use kernel_agents_directory and pass to_agent_id.`);
           }
           toId = resolved.id;
         }
@@ -1751,6 +1759,10 @@ export function agentsTools(
           .string()
           .optional()
           .describe("A reference file the skill ships (a path from its 'Files in this skill' list). Omit to load the playbook itself."),
+        query: z
+          .string()
+          .optional()
+          .describe('Only for a long list file (a lessons log): what to look for in it. Omitted: what this run is about. "*": the whole file.'),
       }),
       handler: async (input) => {
         const { slug, file } = input;
@@ -1767,7 +1779,11 @@ export function agentsTools(
                 (files.length ? ` Files: ${files.join(", ")}` : " This skill ships no reference files."),
             );
           }
-          return textResult(`# Skill ${slug} · ${file}\n\n${text}`);
+          // A file grown into a long log (lessons every round appends to) comes focused on this run's task.
+          const runId = getRequestContext().callerRunId;
+          const goal = runId ? service.getRun(runId)?.goal ?? "" : "";
+          const query = input.query ?? (goal ? runFocusQuery(goal, (id) => service.getInboxMessage(id)) : "");
+          return textResult(`# Skill ${slug} · ${file}\n\n${query ? focusSkillFile(text, query) : text}`);
         }
         // Skills that lean on profiles or models name them in the body; the
         // list is what makes those names openable instead of dead references.

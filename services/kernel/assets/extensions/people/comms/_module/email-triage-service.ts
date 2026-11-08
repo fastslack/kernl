@@ -22,8 +22,10 @@ import {
   localDateTime,
   kernelTimezone,
 } from "@kernl/extension-sdk";
-import { type AgendaItem, AGENDA_PROMPT_RULES, parseAgendaItems } from "./agenda-extract.js";
+import { type AgendaItem, AGENDA_LANGUAGE_KEY, DEFAULT_AGENDA_LANGUAGE, agendaPromptRules, parseAgendaItems } from "./agenda-extract.js";
 import { mailLlmChat } from "./mail-llm.js";
+import { translateAgendaTitles } from "./agenda-translate.js";
+import { COMM_SOURCE, GMAIL_SOURCE } from "./email-service.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -69,7 +71,17 @@ export interface AttentionItem {
   draft_comm_id: string;
   draft_body: string;
   draft_status: string;
+  account_id: string;
 }
+
+const URGENCY_RANK: Record<Urgency, number> = { critical: 1, high: 2, normal: 3, low: 4 };
+
+/**
+ * Subjects of a booking, ticket or appointment confirmation. These usually come from noreply addresses, which triage
+ * otherwise skips; they carry the dates the agenda needs (07/11: a ferry e-ticket never reached the calendar).
+ */
+const BOOKING_WORDS = ["booking", "reserva", "reservation", "ticket", "pasaje", "boarding", "itinerar", "vuelo", "flight", "turno", "appointment", "cita", "confirmación de compra", "order confirmation", "check-in", "boeking", "afspraak"];
+const BOOKING_SUBJECT_SQL = BOOKING_WORDS.map((w) => `lower(subject) LIKE '%${w}%'`).join(" OR ");
 
 /** How far back getUnclassifiedComms looks for inbound mail to classify. */
 export const TRIAGE_WINDOW_DAYS = 14;
@@ -128,6 +140,24 @@ export class EmailTriageService {
     private config: KernelConfig,
   ) {}
 
+  /** The language agenda titles go in (comms.agenda.language), Spanish when unset. */
+  private agendaLanguage(): string {
+    try {
+      const row = this.db.prepare("SELECT value FROM app_settings WHERE key = ?").get(AGENDA_LANGUAGE_KEY) as { value: string } | undefined;
+      return row?.value?.trim() || DEFAULT_AGENDA_LANGUAGE;
+    } catch {
+      return DEFAULT_AGENDA_LANGUAGE;
+    }
+  }
+
+  /** One batch of calendar titles from mail checked/translated into the agenda language, on the mail model. */
+  async translateAgendaTitles(limit = 25): Promise<number> {
+    // Reasoning models (the mail model is one) think before answering: with 4 096 tokens the thinking ate the whole
+    // budget and the list never came (07/11). Same headroom as triage.
+    return translateAgendaTitles(this.db, (system, user) =>
+      mailLlmChat(this.db, this.config, { system, user, caller: "email-agenda-translate", maxTokens: 12_000 }), this.agendaLanguage(), limit);
+  }
+
   /** LLM call on the mail model (see mail-llm.ts), else the default chain. */
   private async llmChat(system: string, user: string): Promise<string> {
     // Reasoning models think out loud before the JSON; with the default 2048
@@ -143,24 +173,27 @@ export class EmailTriageService {
   getUnclassified(limit = 20): GoogleEmailRow[] {
     const cutoff = new Date(Date.now() - TRIAGE_WINDOW_DAYS * 86_400_000).toISOString();
     try {
+      // google-sync adds attachments_text (the PDFs' text); without google-sync's migration the column is absent.
+      const hasAttachments = (this.db.prepare("PRAGMA table_info(google_emails)").all() as Array<{ name: string }>)
+        .some((c) => c.name === "attachments_text");
       const rows = this.db.prepare(`
         SELECT gmail_id, thread_id, from_email, from_name, to_emails,
-               subject, snippet, body_text, date, labels
+               subject, snippet, body_text, date, labels${hasAttachments ? ", attachments_text" : ""}
         FROM google_emails
         WHERE attention_needed = -1
           AND labels LIKE '%"INBOX"%'
           AND date >= ?
-          AND from_email NOT LIKE '%noreply%'
-          AND from_email NOT LIKE '%no-reply%'
+          AND ((from_email NOT LIKE '%noreply%' AND from_email NOT LIKE '%no-reply%') OR (${BOOKING_SUBJECT_SQL}))
           AND from_email NOT LIKE '%notifications%'
           AND from_email NOT LIKE '%mailer-daemon%'
         ORDER BY date DESC
         LIMIT ?
-      `).all(cutoff, limit) as Array<Omit<GoogleEmailRow, "thread_key" | "body_excerpt">>;
-      return rows.map((r) => ({
+      `).all(cutoff, limit) as Array<Omit<GoogleEmailRow, "thread_key" | "body_excerpt"> & { attachments_text?: string | null }>;
+      return rows.map(({ attachments_text, ...r }) => ({
         ...r,
         thread_key: r.thread_id || r.gmail_id,
-        body_excerpt: (r.body_text || r.snippet || "").slice(0, 1500),
+        body_excerpt: (r.body_text || r.snippet || "").slice(0, 1500)
+          + (attachments_text ? `\n\n${attachments_text.slice(0, 2500)}` : ""),
       }));
     } catch {
       return [];
@@ -213,7 +246,7 @@ attention_needed = false when:
 
 Be conservative: only mark attention_needed=true when a response is clearly expected.
 
-${AGENDA_PROMPT_RULES}
+${agendaPromptRules(this.agendaLanguage())}
 Use an empty array for agenda_items when the email has no dated item.
 
 Respond ONLY with the JSON array.`;
@@ -300,7 +333,8 @@ Respond ONLY with the JSON array.`;
    *
    *  Rows the auto labeller has not tagged yet (no or empty
    *  metadata.auto_label) are left for a later tick, so the newsletter
-   *  exclusion always has a label to act on. */
+   *  exclusion always has a label to act on. Spam remains eligible for LLM
+   *  triage; auto_label is a review hint, never a destructive action. */
   getUnclassifiedComms(limit = 20): GoogleEmailRow[] {
     const cutoff = new Date(Date.now() - TRIAGE_WINDOW_DAYS * 86_400_000).toISOString();
     try {
@@ -482,32 +516,42 @@ ${bodyPreview}`;
     return commId;
   }
 
-  /** Get emails needing attention with their draft info */
-  getAttentionQueue(limit = 50): AttentionItem[] {
-    try {
-      return this.db.prepare(`
-        SELECT e.gmail_id, e.thread_id, e.from_email, e.from_name,
-               e.subject, e.snippet, e.date, e.urgency, e.ai_summary,
-               e.draft_comm_id,
-               COALESCE(c.body, '') as draft_body,
-               COALESCE(c.status, '') as draft_status
-        FROM google_emails e
-        LEFT JOIN communications c ON c.id = e.draft_comm_id AND e.draft_comm_id <> ''
-        WHERE e.attention_needed = 1
-        ORDER BY
-          CASE e.urgency
-            WHEN 'critical' THEN 1
-            WHEN 'high' THEN 2
-            WHEN 'normal' THEN 3
-            WHEN 'low' THEN 4
-            ELSE 5
-          END,
-          e.date DESC
-        LIMIT ?
-      `).all(limit) as AttentionItem[];
-    } catch {
-      return [];
+  /**
+   * Emails needing attention with their draft info, from every source that
+   * holds the account's mail: Gmail rows and IMAP rows (triaged in
+   * communications.metadata) alike. Without an account, all of them.
+   */
+  getAttentionQueue(limit = 50, accountId?: string): AttentionItem[] {
+    const provider = accountId
+      ? (this.db.prepare("SELECT provider FROM email_accounts WHERE id = ?").get(accountId) as { provider: string } | undefined)?.provider
+      : undefined;
+    const sources: string[] = [];
+    if (provider !== "imap_smtp") sources.push(GMAIL_SOURCE);
+    if (!accountId || provider === "imap_smtp") sources.push(COMM_SOURCE);
+    const accFilter = accountId ? " AND e.account_id = ?" : "";
+    const items: AttentionItem[] = [];
+    for (const src of sources) {
+      try {
+        items.push(...this.db.prepare(`
+          SELECT e.gmail_id, e.thread_id, e.from_email, e.from_name,
+                 e.subject, e.snippet, e.date, e.urgency, e.ai_summary,
+                 e.draft_comm_id, e.account_id,
+                 COALESCE(c.body, '') as draft_body,
+                 COALESCE(c.status, '') as draft_status
+          FROM ${src} e
+          LEFT JOIN communications c ON c.id = e.draft_comm_id AND e.draft_comm_id <> ''
+          WHERE e.attention_needed = 1${accFilter}
+          ORDER BY e.date DESC
+          LIMIT ?
+        `).all(...(accountId ? [accountId] : []), limit) as AttentionItem[]);
+      } catch {
+        // google-sync not installed, or a table mid-migration: that source is empty
+      }
     }
+    const rank = (u: string) => URGENCY_RANK[u as Urgency] ?? 5;
+    return items
+      .sort((a, b) => rank(a.urgency) - rank(b.urgency) || (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+      .slice(0, limit);
   }
 
   /** Get triage stats for dashboard */

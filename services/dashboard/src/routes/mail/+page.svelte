@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, type ComponentProps } from 'svelte';
   import { goto } from '$app/navigation';
   import { rpcOrCall } from '$lib/ws.js';
   import { listEmailSuggestions, fetchGoogleSyncStatus, apiFetchRaw } from '$lib/api';
@@ -20,6 +20,7 @@
     is_read: number; is_starred: number; has_attachments: number;
     labels: string; message_count: number; contact_name?: string;
     urgency?: string; attention_needed?: number; ai_summary?: string; draft_comm_id?: string;
+    account_id?: string;
   }
   interface EmailDetail extends EmailListItem {
     cc_emails: string; body_text: string; body_html: string | null; size_bytes: number;
@@ -33,6 +34,7 @@
     gmail_id: string; thread_id: string; from_email: string; from_name: string;
     subject: string; snippet: string; date: string; urgency: string;
     ai_summary: string; draft_comm_id: string; draft_body: string; draft_status: string;
+    account_id?: string;
   }
   interface TriageStats { unclassified: number; attention_needed: number; critical: number; high: number; drafts_pending: number }
   interface Counts { inbox: number; unread: number; starred: number; sent: number; drafts: number; trash: number; archived: number; snoozed: number; important: number; attention: number; categories?: Record<Category, { total: number; unread: number }> }
@@ -54,6 +56,7 @@
   let folder: Folder = 'inbox';
   let category: Category = 'primary';
   let selectedAccountId = '';
+  let mailAccounts: NonNullable<ComponentProps<AccountSwitcher>['accounts']> = [];
   let emails: EmailListItem[] = [];
   let total = 0;
   let page = 1;
@@ -207,7 +210,7 @@
     selectedEmail = null;
     thread = null;
     lastStored = -1;
-    loadFolder();
+    if (folder === 'attention') loadAttention(); else loadFolder();
     loadCounts();
     loadSyncStatus();
   }
@@ -216,7 +219,8 @@
     if (d) labels = d;
   }
   async function loadAttention() {
-    const d = await api('/api/emails/attention');
+    const qs = selectedAccountId ? `?account_id=${encodeURIComponent(selectedAccountId)}` : '';
+    const d = await api('/api/emails/attention' + qs);
     if (d) { attentionItems = d.items ?? []; triageStats = d.stats ?? triageStats; }
   }
   async function approveDraft(commId: string) {
@@ -435,6 +439,20 @@
     return p.length > 1 ? (p[0][0] + p[p.length-1][0]).toUpperCase() : name.substring(0, 2).toUpperCase();
   }
 
+  // Which mailbox a message sits in, for the all-accounts view and the reader.
+  $: accountById = new Map(mailAccounts.map((a) => [a.id, a]));
+  $: currentAccount = accountById.get(selectedAccountId) ?? null;
+  $: multiAccount = !selectedAccountId && mailAccounts.length > 1;
+  function accountEmail(id?: string): string {
+    return (id && accountById.get(id)?.email) || '';
+  }
+  /** A steady hue per account, so the same mailbox always reads the same color. */
+  function accountHue(id?: string): number {
+    let h = 0;
+    for (const ch of id ?? '') h = (h * 31 + ch.charCodeAt(0)) % 360;
+    return h;
+  }
+
   function urgencyColor(u?: string): string {
     switch (u) {
       case 'critical': return '#ef4444';
@@ -473,7 +491,16 @@
     // overview links here); anything else falls back to the inbox.
     const wanted = new URLSearchParams(window.location.search).get('folder') as Folder | null;
     if (wanted && FOLDER_IDS.includes(wanted)) folder = wanted;
-    loadFolder(); loadCounts(); loadLabels(); loadAttention(); loadSuggestionsCount(); loadGoogleSync(); loadSyncStatus();
+    // `?account=all` (the header's mail button, whose count spans every
+    // account) or `?account=<id>` overrides the remembered account. Runs after
+    // the switcher restored it, and is remembered in its place.
+    const account = new URLSearchParams(window.location.search).get('account');
+    if (account !== null) {
+      selectedAccountId = account === 'all' ? '' : account;
+      try { localStorage.setItem('mail.selected_account', selectedAccountId); } catch {}
+    }
+    if (folder !== 'attention') loadFolder();
+    loadCounts(); loadLabels(); loadAttention(); loadSuggestionsCount(); loadGoogleSync(); loadSyncStatus();
     document.addEventListener('keydown', handleKey);
   });
   onDestroy(() => {
@@ -559,7 +586,7 @@
   <!-- ── Email List ───────────────────── -->
   <div class="mail-list">
     <div class="mail-search">
-      <AccountSwitcher bind:value={selectedAccountId} onChange={onAccountChange} />
+      <AccountSwitcher bind:value={selectedAccountId} bind:accounts={mailAccounts} onChange={onAccountChange} />
       <input type="text" placeholder="Search emails..." bind:value={query} on:keydown={(e) => e.key === 'Enter' && doSearch()} />
       <button on:click={doSearch}>Search</button>
       <MailFetchButton onTick={loadSyncStatus} />
@@ -586,7 +613,12 @@
     {/if}
 
     <div class="mail-list-header">
-      <span class="folder-title">{folder.charAt(0).toUpperCase() + folder.slice(1)} ({total})</span>
+      <span class="folder-title">
+        {folder.charAt(0).toUpperCase() + folder.slice(1)} ({folder === 'attention' ? attentionItems.length : total})
+        <span class="folder-scope" title={currentAccount ? currentAccount.label : 'Mezcla el correo de todas las cuentas; cada mensaje dice de cuál es'}>
+          {#if currentAccount}en {currentAccount.email}{:else}en todas las cuentas{/if}
+        </span>
+      </span>
       <span class="pagination">
         {#if total > 0}{start}–{end}{:else}0{/if}
         {#if page > 1}<button on:click={() => { page--; loadFolder(); }}>◀</button>{/if}
@@ -616,6 +648,9 @@
               <div class="mail-row-content">
                 <div class="mail-row-top">
                   <span class="mail-from">{item.from_name || item.from_email || 'Unknown'}</span>
+                  {#if multiAccount && accountEmail(item.account_id)}
+                    <span class="account-tag" style="--acc-hue:{accountHue(item.account_id)}" title="Llegó a {accountEmail(item.account_id)}">{accountEmail(item.account_id)}</span>
+                  {/if}
                   <span class="mail-date">{fmtDate(item.date)}</span>
                 </div>
                 <div class="mail-subject">{item.subject || '(no subject)'}</div>
@@ -669,6 +704,9 @@
             <div class="mail-row-content">
               <div class="mail-row-top">
                 <span class="mail-from">{em.contact_name || em.from_name || em.from_email || 'Unknown'}</span>
+                {#if multiAccount && accountEmail(em.account_id)}
+                  <span class="account-tag" style="--acc-hue:{accountHue(em.account_id)}" title="Llegó a {accountEmail(em.account_id)}">{accountEmail(em.account_id)}</span>
+                {/if}
                 <span class="mail-date">{fmtDate(em.date)}</span>
               </div>
               <div class="mail-subject">
@@ -730,6 +768,9 @@
           <div class="from-info">
             <div class="from-name">{selectedEmail.from_name || selectedEmail.from_email}</div>
             <div class="from-meta">{selectedEmail.from_email} · {fmtDate(selectedEmail.date)}</div>
+            {#if accountEmail(selectedEmail.account_id)}
+              <div class="from-meta">Cuenta: <span class="account-tag" style="--acc-hue:{accountHue(selectedEmail.account_id)}">{accountEmail(selectedEmail.account_id)}</span></div>
+            {/if}
           </div>
         </div>
         {#if selectedEmail.to_emails}<div class="detail-recipients">To: {selectedEmail.to_emails}</div>{/if}
@@ -981,6 +1022,12 @@
     color: var(--text-2);
   }
   .folder-title { font-weight: 600; }
+  .folder-scope { font-weight: 400; color: var(--text-3); margin-left: 6px; }
+  .account-tag {
+    flex-shrink: 1; min-width: 0; max-width: 45%; margin-left: auto;
+    font-size: 10px; padding: 0 6px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    color: hsl(var(--acc-hue) 70% 68%); background: hsl(var(--acc-hue) 60% 50% / .12); border: 1px solid hsl(var(--acc-hue) 60% 50% / .3);
+  }
   .category-tabs { display: flex; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
   .category-tab {
     flex: 1 0 auto;

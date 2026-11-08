@@ -21,7 +21,7 @@ describe("credentials", () => {
     const c = getProviderConfig("nvidia");
     expect(c).toEqual({
       apiKey: "", baseUrl: "https://integrate.api.nvidia.com/v1",
-      model: "nvidia/nemotron-3-super-120b-a12b", region: "", oauthToken: "",
+      model: "nvidia/nemotron-3-ultra-550b-a55b", region: "", oauthToken: "",
     });
     expect(isConnected("nvidia")).toBe(false);
   });

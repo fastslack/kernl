@@ -33,6 +33,7 @@ import { createDockerDriver, createCubeDriver } from "../sandbox/drivers/index.j
 import { LlmProviderRegistry } from "../llm/provider-registry.js";
 import { registerBuiltinLlmProviders } from "../llm/providers/index.js";
 import { setCredentialSource } from "../llm/credentials.js";
+import { initClaudeAccounts } from "../llm/claude-accounts-store.js";
 import { DbDriverRegistry } from "../db-drivers/db-driver-registry.js";
 import { registerBuiltinGraphDrivers } from "../db-drivers/builtins/index.js";
 import { createLicenseService } from "../license/index.js";
@@ -93,6 +94,8 @@ export function initRegistries(args: {
   // migration has created `installed_extensions` (core-modules stage). Seeding
   // rows and migrating credentials therefore happen in initDrivers (Task 8).
   setCredentialSource(llmRegistry);
+  // The SDK resolver must exist in every transport, not only when HTTP boots.
+  initClaudeAccounts();
 
   // ── DB Driver Registry (graph today; vector/kv/… coming) ──
   const dbRegistry = new DbDriverRegistry();

@@ -3,6 +3,7 @@
  * REST endpoints for the Agent Composer (dashboard)
  */
 
+import { SkillVectorIndex, type SemanticScores } from "./skill-vectors.js";
 import { HttpError, type KernelHttpServer, type RouteMethod } from "../../core/http-server.js";
 import { agentOperations } from "./operations.js";
 import type { AgentService, QuestionOption, QuestionStatus } from "./service.js";
@@ -262,7 +263,7 @@ export function registerAgentRoutes(
     return { success: true, status: r.status };
   });
 
-  // An office's host process (Acme's host-ops) files a question for one of its agents:
+  // An office's host process (its own service on the host) files a question for one of its agents:
   // the answer reaches that agent like any other.
   server.route<{ from_agent_slug: string; question: string; context?: string; options: QuestionOption[]; for_operator?: boolean }>(
     "POST", "/api/agents/questions", ({ body }) => {
@@ -300,6 +301,19 @@ export function registerAgentRoutes(
     const state = investigator?.state(id);
     if (!state) throw new HttpError(404, "Question not found");
     return { state };
+  });
+
+  // A letter to an office's lead from the operator's inbox (a task handed to an office). Signed by the chief.
+  server.route<{ subject?: unknown; body?: unknown; project_id?: unknown }>("POST", "/api/agents/flows/:id/handoff", ({ params: { id }, body }) => {
+    const subject = typeof body?.subject === "string" ? body.subject.trim() : "";
+    const text = typeof body?.body === "string" ? body.body.trim() : "";
+    if (!subject || !text) throw new HttpError(400, "subject and body are required");
+    const r = service.postToOffice(id, {
+      agent_id: "", subject: subject.slice(0, 300), body: text.slice(0, 20_000),
+      project_id: typeof body?.project_id === "string" && body.project_id ? body.project_id : null,
+    });
+    if (!r.ok) throw new HttpError(/not found/i.test(r.error ?? "") ? 404 : 409, r.error ?? "The letter did not go out");
+    return { success: true, to_agent_id: r.to_agent_id };
   });
 
   server.route("POST", "/api/agents/questions/:id/dismiss", ({ params: { id } }) => {
@@ -626,6 +640,9 @@ export function registerAgentRoutes(
   // instead of a note nobody reads. A skill not yet installed is included
   // flagged `installed: false` — that is what turns a recommendation into an
   // installer.
+  // Meaning-based scores for the route below; built once, cached in SQLite.
+  const skillVectors = new SkillVectorIndex(service.getDb(), () => service.getEmbeddingsClient());
+
   server.route("GET", "/api/agents/:id/skill-suggestions", async ({ params: { id }, query }) => {
     const agent = requireAgent(id, "agent not found");
 
@@ -666,23 +683,43 @@ export function registerAgentRoutes(
     if (candidates.length === 0) return { suggestions: [] };
 
     const attached = agentSkills(agent);
+    const agentText = agentRowText({
+      name: agent.name,
+      description: agent.description ?? "",
+      system_prompt: agent.system_prompt ?? "",
+      flow_name: null,
+    });
+
+    // Never fatal: no embeddings client, a dead provider or a catalogue
+    // still being embedded all degrade to the keyword ranking.
+    let semantic: SemanticScores = { state: "off", scores: new Map() };
+    try {
+      semantic = await skillVectors.score({ id: agent.id, text: agentText }, candidates);
+    } catch (e) {
+      log.warn(`skill-suggestions: semantic scoring failed — ${String(e)}`);
+    }
 
     const ranked = rankSkillsForAgent(
-      {
-        text: agentRowText({
-          name: agent.name,
-          description: agent.description ?? "",
-          system_prompt: agent.system_prompt ?? "",
-          flow_name: null,
-        }),
-        attached: new Set(attached.map(String)),
-      },
+      { text: agentText, attached: new Set(attached.map(String)) },
       candidates.map((c) => ({ slug: c.slug, text: c.text })),
-      { minScore, topN },
+      {
+        minScore,
+        topN,
+        agentCorpus: service.listAgents({}).map((a) =>
+          agentRowText({
+            name: a.name,
+            description: a.description ?? "",
+            system_prompt: a.system_prompt ?? "",
+            flow_name: null,
+          }),
+        ),
+        semantic: semantic.state === "on" ? semantic.scores : undefined,
+      },
     );
 
     const byslug = new Map(candidates.map((c) => [c.slug, c]));
     return {
+      semantic: semantic.state,
       suggestions: ranked.map((m) => {
         const c = byslug.get(m.slug);
         return {

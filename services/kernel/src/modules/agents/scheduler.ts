@@ -9,6 +9,7 @@ import type { BuiltinHandler } from "./builtin-handlers.js";
 import { normalizeDriverResult, driverThrewOutcome } from "./driver-result.js";
 import { resolveGoal } from "./executor.js";
 import { resumeRun } from "./run-resume.js";
+import { getClaudeModelLimit, isClaudeUsageLimitStop } from "../../sdk/claude-limits.js";
 
 /**
  * How long after start() the interrupted runs resume. Sandbox-agent tools are
@@ -191,6 +192,19 @@ export class AgentScheduler {
             }
           }
 
+          // The office may say this slot has nothing to work on (no data yet, a
+          // blocker only the operator clears): skip it, it comes back by itself.
+          const precheck = this.service.checkScheduledSlot(agent, schedule.project_id ?? null);
+          if (precheck) {
+            log.info(`Agent scheduler: "${agent.name}" skipped — ${precheck.reason}`);
+            const nextRun = this.computeNextRun(schedule.cron_expression, schedule.interval_ms);
+            this.service.updateScheduleNextRun(schedule.id, nextRun, isoNow());
+            this.events.emit("agent.schedule.skipped", {
+              agent_id: agent.id, schedule_id: schedule.id, project_id: schedule.project_id ?? null, reason: precheck.reason,
+            });
+            continue;
+          }
+
           // Check if this agent has a builtin handler
           if (agent.builtin_handler && this.builtinHandlers.has(agent.builtin_handler)) {
             await this.executeBuiltin(agent, schedule);
@@ -206,6 +220,9 @@ export class AgentScheduler {
               continue;
             }
             if (this.inFlight.size >= MAX_SCHEDULED_RUNS) continue;
+            // Over its usage limit: the slot stays due and goes out once the limit lifts,
+            // instead of failing now and waiting for the next slot.
+            if (agent.executor_type === "claude_code" && getClaudeModelLimit(agent.model || "claude-opus-4-6") !== null) continue;
             this.inFlight.add(agent.id);
             this.executeLlm(agent, schedule)
               .catch((err) => {
@@ -362,6 +379,13 @@ export class AgentScheduler {
       steps_count: result.steps_count,
       tokens_used: result.tokens_used,
     });
+
+    // Cut by the Claude usage limit: due again now, so it goes out as soon as the limit lifts
+    // (the tick holds it while the model is limited) rather than a whole slot later.
+    if (result.status === "failed" && isClaudeUsageLimitStop(result.error)) {
+      this.service.updateScheduleNextRun(schedule.id, isoNow(), isoNow());
+      log.info(`Agent scheduler: "${agent.name}" cut by the Claude usage limit — runs again when it lifts`);
+    }
 
     // Circuit breaker tracking (persistent — see AgentService.recordRunOutcome)
     this.service.recordRunOutcome(agent.id, {

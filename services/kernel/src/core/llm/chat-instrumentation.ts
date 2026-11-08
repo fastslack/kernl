@@ -3,6 +3,7 @@ import * as providerHealth from "./provider-health.js";
 // the boundary gate keeps call-log out of them.
 import { recordLlmCall } from "../../sdk/facades.js";
 import { getCatalogEntry } from "./provider-catalog.js";
+import { beginLlmCall } from "../../sdk/llm-inflight.js";
 import { logLlmStart, logLlmEnd, logLlmFail } from "./logger.js";
 import type { ChatLlmProvider } from "./chat-provider.js";
 
@@ -26,7 +27,8 @@ export function instrumentProvider<P extends ChatLlmProvider>(p: P): P {
   const slug = getCatalogEntry(p.name)?.slug ?? p.name;
   p.chatCompletion = async (msgs, opts) => {
     const t0 = Date.now();
-    const requestedModel = opts?.model;
+    // With no model the adapter uses its default: name it, or a dead default is never retired.
+    const requestedModel = opts?.model || p.getDefaultModel?.() || undefined;
     const caller = opts?.caller;
     // Pull a short preview of the last user message for verbose mode.
     let preview: string | undefined;
@@ -50,10 +52,15 @@ export function instrumentProvider<P extends ChatLlmProvider>(p: P): P {
       preview,
     });
 
+    // Shown live in the LIVE pill until the call settles, whichever way —
+    // unless the llm() driver already registered it (its Claude Code route
+    // lands here).
+    const endInFlight = beginLlmCall({ slug, model: requestedModel, caller });
     try {
       const result = await original(msgs, opts);
       const durationMs = Date.now() - t0;
       providerHealth.recordSuccess(p.name, durationMs);
+      providerHealth.recordModelOutcome(slug, requestedModel ?? "", true);
       logLlmEnd({
         slug: p.name,
         model: result.model || requestedModel,
@@ -91,6 +98,7 @@ export function instrumentProvider<P extends ChatLlmProvider>(p: P): P {
       // A model the provider advertises but does not serve retires itself
       // here, so the picker stops handing it to the next person.
       providerHealth.reportModelFault(p.name, requestedModel ?? "", kind, message);
+      if (kind === "model") providerHealth.recordModelOutcome(slug, requestedModel ?? "", false);
       logLlmFail({
         slug: p.name,
         model: requestedModel,
@@ -111,6 +119,8 @@ export function instrumentProvider<P extends ChatLlmProvider>(p: P): P {
         toolsSent: opts?.tools?.length ?? 0,
       }, { silent: true });
       throw err;
+    } finally {
+      endInFlight();
     }
   };
   return p;

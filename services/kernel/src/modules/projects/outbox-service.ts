@@ -23,6 +23,17 @@ const toItem = (r: Row): OutboxItem => ({ ...r, payload: JSON.parse(r.payload ||
  * double approve or a tick racing an approve can never publish twice. Nothing
  * is ever retried automatically: a failed send waits for a human.
  */
+/**
+ * The item's project, inside what the channel receives when the draft did not carry it. A channel only sees
+ * the payload: Growth's web_change could not tell which project a change was for when Growth works on several
+ * (16/10: three approved requests to Desarrollo failed with "falta project_id").
+ */
+export function withProject(payload: unknown, projectId: string | null | undefined): unknown {
+  if (!projectId || !payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
+  const p = payload as Record<string, unknown>;
+  return typeof p.project_id === "string" && p.project_id ? p : { ...p, project_id: projectId };
+}
+
 export class OutboxService {
   private channels = new Map<string, OutboxChannelHandler>();
   private policies = new Map<string, OutboxPolicy>();
@@ -123,7 +134,12 @@ export class OutboxService {
       // project's — otherwise it lands unscoped and out of the project's queue.
       // An internal channel has no account to match: the office's only project owns it.
       const office = this.projects.list({ flowId: input.flow_id });
-      const owners = h.needsAccount === false ? office : office.filter((p) => this.projects.links(p.id).some(isThisAccount));
+      // An office serving several projects names the one in the payload (id or slug); only one it serves counts.
+      const named = (input.payload as { project_id?: unknown } | null)?.project_id;
+      const pick = typeof named === "string" && named ? office.find((p) => p.id === named || p.slug === named) : undefined;
+      // The channel reads it from the payload by id (Growth's web_change looks up the project's repos by id).
+      if (pick && named !== pick.id) (input.payload as Record<string, unknown>).project_id = pick.id;
+      const owners = pick ? [pick] : h.needsAccount === false ? office : office.filter((p) => this.projects.links(p.id).some(isThisAccount));
       if (owners.length === 1) projectId = owners[0].id;
     }
     if (projectId && h.needsAccount !== false) {
@@ -186,16 +202,60 @@ export class OutboxService {
     return out;
   }
 
+  /**
+   * A draft the operator turns down, or a failed send they drop. Only a draft's note teaches the agent: a failed
+   * item was approved, so what went wrong was the channel (a token, a scope), not what the agent wrote.
+   */
   reject(id: string, note: string): OutboxItem {
+    const was = this.mustGet(id).status;
     const now = isoNow();
     const res = this.db.prepare(
-      "UPDATE outbox_items SET status = 'rejected', review_note = ?, decided_at = ?, updated_at = ? WHERE id = ? AND status = 'draft'",
+      "UPDATE outbox_items SET status = 'rejected', review_note = ?, decided_at = ?, updated_at = ? WHERE id = ? AND status IN ('draft', 'failed')",
     ).run(note.trim(), now, now, id);
-    if (Number(res.changes) === 0) throw new Error("Only a draft can be rejected");
+    if (Number(res.changes) === 0) throw new Error("Only a draft or a failed item can be rejected");
     const it = this.mustGet(id);
-    if (note.trim()) this.onReject(it, note.trim());
+    if (was === "draft" && note.trim()) this.onReject(it, note.trim());
     this.changed(it);
     return it;
+  }
+
+  /**
+   * Pass a draft or a failed item to an office to sort out (07/11: a web_change GitLab refused with 403 could only be
+   * retried). The letter goes first; only once it is delivered does the item leave the queue, as rejected with a note
+   * that says where it went. Nobody learns from it: it is a hand-off, not a verdict on the draft.
+   */
+  handoff(
+    id: string,
+    office: { flow_id: string; name: string },
+    note: string,
+    deliver: (letter: { flow_id: string; agent_id: string; project_id: string | null; subject: string; body: string }) => { ok: boolean; error?: string },
+  ): OutboxItem {
+    const it = this.mustGet(id);
+    if (it.status !== "draft" && it.status !== "failed") throw new Error(`Only a draft or a failed item can be handed to an office (item is ${it.status})`);
+    let pv: OutboxPreview;
+    try { pv = this.preview(id); } catch { pv = { title: it.channel, body: JSON.stringify(it.payload, null, 2) } as OutboxPreview; }
+    const body = [
+      "El operador te pasa este pedido de Aprobaciones para que lo resuelvas.",
+      ...(note.trim() ? ["", `Nota del operador: ${note.trim()}`] : []),
+      "",
+      `Pedido ${it.id} · canal ${it.channel} · sale desde ${it.account_ref} · estado ${it.status === "failed" ? "falló al enviarse" : "borrador sin aprobar"}`,
+      ...(it.status === "failed" && it.error ? [`Error: ${it.error}`] : []),
+      "",
+      `## ${pv.title}`,
+      "",
+      pv.body,
+      "",
+      "Si para resolverlo hace falta mandar algo afuera, proponé un borrador nuevo (kernel_outbox_propose): este ya salió de la cola.",
+    ].join("\n");
+    const r = deliver({ flow_id: office.flow_id, agent_id: it.agent_id, project_id: it.project_id, subject: `Aprobaciones: ${pv.title}`.slice(0, 300), body });
+    if (!r.ok) throw new Error(r.error || `The letter to ${office.name} did not go out`);
+    const now = isoNow();
+    const reviewNote = note.trim() ? `Pasado a ${office.name}: ${note.trim()}` : `Pasado a ${office.name}`;
+    this.db.prepare("UPDATE outbox_items SET status = 'rejected', review_note = ?, decided_at = ?, updated_at = ? WHERE id = ? AND status IN ('draft', 'failed')")
+      .run(reviewNote, now, now, id);
+    const out = this.mustGet(id);
+    this.changed(out);
+    return out;
   }
 
   /** An approval waiting for its time goes back to draft (the operator's pause). Sending or sent: too late. */
@@ -263,7 +323,7 @@ export class OutboxService {
     if (Number(claim.changes) === 0) return this.mustGet(id);
     const it = this.mustGet(id);
     try {
-      const { ref } = await this.handler(it.channel).send(it.payload, it.account_ref);
+      const { ref } = await this.handler(it.channel).send(withProject(it.payload, it.project_id), it.account_ref);
       const now = isoNow();
       this.db.prepare("UPDATE outbox_items SET status = 'sent', sent_ref = ?, sent_at = ?, updated_at = ? WHERE id = ?")
         .run(ref, now, now, id);

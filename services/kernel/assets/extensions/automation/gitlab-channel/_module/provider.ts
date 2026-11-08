@@ -71,6 +71,10 @@ export class GitLabRepoProvider extends ForgeRepoProvider<GitLabConnection> impl
     return `OK — user id=${data.id} (${data.username})`;
   }
 
+  protected probeRepo(conn: GitLabConnection, repo: string): Promise<unknown> {
+    return this.get(conn, `/projects/${encodeURIComponent(repo)}`);
+  }
+
   async fetchOpenItems(repo: string, connectionId: string, maxPages = 50): Promise<RepoItem[]> {
     const conn = this.requireConnection(connectionId);
     const projectId = encodeURIComponent(repo);

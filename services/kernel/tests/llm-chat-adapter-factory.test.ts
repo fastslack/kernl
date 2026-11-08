@@ -24,8 +24,8 @@ function capture(content = "<think>let me see</think>ok"): Seen[] {
 }
 
 describe("buildChatAdapter", () => {
-  it("builds NVIDIA from the registry with the catalog model and its quirks", async () => {
-    install({ nvidia: { apiKey: "nvapi-abc" } });
+  it("builds NVIDIA from the registry with the chosen model and its quirks", async () => {
+    install({ nvidia: { apiKey: "nvapi-abc", defaultModel: "nvidia/nemotron-3-super-120b-a12b" } });
     const seen = capture();
     const r = await buildChatAdapter("nvidia")!.chatCompletion([{ role: "user", content: "hi" }]);
     expect(seen[0].url).toBe("https://integrate.api.nvidia.com/v1/chat/completions");
@@ -40,7 +40,7 @@ describe("buildChatAdapter", () => {
   });
 
   it("a caller's temperature beats the quirk", async () => {
-    install({ nvidia: { apiKey: "k" } });
+    install({ nvidia: { apiKey: "k", defaultModel: "nvidia/nemotron-3-super-120b-a12b" } });
     const seen = capture();
     await buildChatAdapter("nim")!.chatCompletion([{ role: "user", content: "hi" }], { temperature: 0.2 });
     expect(seen[0].body.temperature).toBe(0.2);

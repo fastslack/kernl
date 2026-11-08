@@ -19,11 +19,14 @@
  * thing anyone reads.
  */
 
+import { isClaudeCodeAuthError } from "./claude-code-auth.js";
+
 export type RemedyKind =
   | "pick-tool-capable-provider"
   | "switch-executor-claude-code"
   | "configure-provider"
   | "reauth-google"
+  | "reconnect-claude"
   | "retry";
 
 export interface Remedy {
@@ -57,6 +60,29 @@ function droppedProviders(error: string): string {
 
 export function analyzeRunFailure(error: string): RunFailure {
   const text = error ?? "";
+
+  // Over Claude's usage limit, a coding agent waits for the reset instead of degrading to a weaker model.
+  if (text.startsWith("Claude usage limit — waiting for the reset:")) {
+    return {
+      titleKey: "agent.failure.claude_limit",
+      detail: text,
+      remedies: [{ kind: "configure-provider", labelKey: "agent.failure.use_api_key" }, RETRY],
+    };
+  }
+
+  // The Claude subscription itself is gone (switched off, expired, logged
+  // out): sign in again, with this or another account, or move to an API key.
+  if (isClaudeCodeAuthError(text)) {
+    return {
+      titleKey: "agent.failure.claude_access",
+      detail: text,
+      remedies: [
+        { kind: "reconnect-claude", labelKey: "agent.failure.reconnect_claude" },
+        { kind: "configure-provider", labelKey: "agent.failure.use_api_key" },
+        RETRY,
+      ],
+    };
+  }
 
   if (text.includes("No LLM provider in the chain can run tool calls")) {
     const dropped = droppedProviders(text);

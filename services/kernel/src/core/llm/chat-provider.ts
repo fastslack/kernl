@@ -16,6 +16,8 @@ export const ADAPTER_TIMEOUT_MS = 300_000;
 export interface ChatLlmProvider {
   readonly name: string;
   available(): boolean;
+  /** Model selected when the call has no explicit override. */
+  getDefaultModel?(): string;
   /**
    * Whether this provider can sustain a tool-use loop — send tool definitions,
    * receive a tool call, take the result back and continue.

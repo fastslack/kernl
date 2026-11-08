@@ -24,8 +24,7 @@
  *     without a restart.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { claudeSessionPresent } from "../../sdk/claude-accounts.js";
 import { claudeConfigDir } from "../../sdk/claude-cli.js";
 
 // Both live in the SDK so the agents executor (an extension) builds the same
@@ -58,16 +57,7 @@ export interface ClaudeAuthStatus {
  */
 /** A session the official CLI created itself — never a token Kernl holds. */
 export function hasCliSession(env: NodeJS.ProcessEnv = process.env): boolean {
-  const dir = claudeConfigDir(env);
-  if (existsSync(resolve(dir, ".credentials.json"))) return true;
-  try {
-    const raw = readFileSync(resolve(dir, ".claude.json"), "utf-8");
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return parsed.oauthAccount != null;
-  } catch {
-    // Missing, unreadable or malformed all mean the same thing here.
-    return false;
-  }
+  return claudeSessionPresent(claudeConfigDir(env));
 }
 
 /**

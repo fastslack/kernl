@@ -15,6 +15,64 @@ export interface LlmLoopBudgets {
   timeoutMs: number;
   /** Same tool+args this many times → abort as stuck loop. Default: 8. */
   toolLoopThreshold?: number;
+  /**
+   * Tool results stay verbatim for this many tool turns, then a long one is
+   * cut down to its opening (see compactOldToolResults). Default 3; 0 keeps
+   * every result whole, the old behaviour.
+   */
+  keepFullToolTurns?: number;
+  /**
+   * Output cap for each turn. Left unset, the provider's own default applies
+   * (4096 on the OpenAI-compatible adapter), which a reasoning model can
+   * spend entirely on its hidden thinking and answer with nothing.
+   */
+  maxOutputTokens?: number;
+}
+
+/** A result longer than this is cut once it ages out; shorter ones stay. */
+const COMPACT_MIN_CHARS = 800;
+/** How much of a cut result is kept: enough to recognise it and its shape. */
+const COMPACT_HEAD_CHARS = 300;
+const COMPACT_MARK = "[TRIMMED";
+
+/**
+ * Every turn re-sends the whole conversation, so a tool result costs its
+ * size again on each later turn: a prospector that read a 3 KB state file
+ * and ran a dozen place searches early on paid for all of it on every one
+ * of its ~20 calls (110-130k tokens a run, nearly half the instance's
+ * spend). By the time a result is a few turns old the model has already
+ * acted on it, so it is cut to its opening plus a marker. Nothing is lost:
+ * calling the same tool with the same arguments again returns the full
+ * text from the run's cache without re-executing it.
+ *
+ * Mutates `messages` in place, once per result, so the history is cut at a
+ * stable point — a provider's prompt cache keeps matching the prefix up to
+ * the newest cut instead of missing on every turn. Returns the tool_use ids
+ * it cut on this call.
+ */
+export function compactOldToolResults(messages: ChatMessage[], keepTurns: number): string[] {
+  if (keepTurns <= 0) return [];
+  const cut: string[] = [];
+  let toolTurnsSeen = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "user" || !Array.isArray(m.content)) continue;
+    const blocks = m.content as ContentBlock[];
+    if (!blocks.some((b) => b.type === "tool_result")) continue;
+    toolTurnsSeen++;
+    if (toolTurnsSeen <= keepTurns) continue;
+    for (const b of blocks) {
+      if (b.type !== "tool_result" || typeof b.content !== "string") continue;
+      if (b.content.length <= COMPACT_MIN_CHARS || b.content.startsWith(COMPACT_MARK)) continue;
+      const full = b.content.length;
+      b.content =
+        `${COMPACT_MARK} — ${full} chars, shown in full ${keepTurns} turns ago and already used. ` +
+        `Calling the same tool with the same arguments returns the full text again.]\n` +
+        b.content.slice(0, COMPACT_HEAD_CHARS) + "\n…";
+      cut.push(b.tool_use_id);
+    }
+  }
+  return cut;
 }
 
 export interface LlmLoopHooks {
@@ -124,6 +182,11 @@ function stableArgsKey(input: unknown): string {
   return parts.join("|");
 }
 
+const MAX_EMPTY_NUDGES = 1;
+const EMPTY_TURN_NUDGE =
+  "[Your last reply was empty. Continue the task from the tool results above: " +
+  "call the next tool you need, or write your final answer.]";
+
 const UNKNOWN_OUTCOME =
   "[INTERRUPTED — the kernel restarted while this tool was running, so its outcome is unknown. " +
   "It may or may not have taken effect. Check the current state before calling it again.]";
@@ -200,9 +263,15 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
   const toolsUsed = new Set<string>();
   let consecutiveErrors = 0;
   let abortReason = "";
+  let emptyNudges = 0;
 
   const toolCallCounts = new Map<string, number>();
   const toolResultCache = new Map<string, string>();
+  const keepFullToolTurns = budgets.keepFullToolTurns ?? 3;
+  /** tool_use id → call key, so a cut result can be handed back whole. */
+  const callKeyById = new Map<string, string>();
+  /** Call keys whose result was cut from the history. */
+  const trimmedKeys = new Set<string>();
 
   const priorElapsedMs = resumeFrom?.elapsedMs ?? 0;
   const startedAt = Date.now();
@@ -251,7 +320,13 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
           ? (waitMs, attempt) => hooks.onRateLimitWait!({ waitMs, attempt })
           : undefined,
         caller,
+        ...(budgets.maxOutputTokens ? { max_tokens: budgets.maxOutputTokens } : {}),
       };
+
+      for (const id of compactOldToolResults(messages, keepFullToolTurns)) {
+        const key = callKeyById.get(id);
+        if (key) trimmedKeys.add(key);
+      }
 
       const completion = await provider.chatCompletion(messages, opts);
       totalTokens += completion.tokens_used;
@@ -261,6 +336,21 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
 
       // No tool calls → final text response
       if (!completion.tool_calls || completion.tool_calls.length === 0) {
+        // Some models end the turn with nothing at all right after reading a
+        // tool result: the run would close as "completed" having done
+        // nothing. Ask once to carry on before taking silence as the answer.
+        const last = messages[messages.length - 1];
+        if (
+          !completion.content?.trim() &&
+          emptyNudges < MAX_EMPTY_NUDGES &&
+          last?.role === "user" &&
+          Array.isArray(last.content) &&
+          (last.content as ContentBlock[]).some((b) => b.type === "tool_result")
+        ) {
+          emptyNudges++;
+          (last.content as ContentBlock[]).push({ type: "text", text: EMPTY_TURN_NUDGE });
+          continue;
+        }
         finalContent += completion.content;
         hooks?.onFinal?.({ content: completion.content, tokens: completion.tokens_used });
         break;
@@ -297,8 +387,16 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
         // with a hint instead of re-executing (prevents local model loops)
         const callKey = `${tc.name}::${stableArgsKey(toolInput)}`;
         const prevCount = (toolCallCounts.get(callKey) ?? 0);
+        callKeyById.set(tc.id, callKey);
+        let refetchedTrimmed = false;
         let result: { text: string; isError: boolean };
-        if (prevCount > 0) {
+        if (prevCount > 0 && trimmedKeys.has(callKey) && toolResultCache.has(callKey)) {
+          // Its earlier copy was trimmed from the history: asking again is
+          // the documented way back to the full text, not a loop.
+          trimmedKeys.delete(callKey);
+          refetchedTrimmed = true;
+          result = { text: toolResultCache.get(callKey)!, isError: false };
+        } else if (prevCount > 0) {
           // Already called with same args — return hint instead of re-executing
           const cachedResult = toolResultCache.get(callKey) ?? "Same as before";
           result = {
@@ -317,7 +415,7 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
         // Loop detection by tool-name + args fingerprint: batch searches with
         // distinct args are legitimate progress; exact repeats are a stuck loop.
         const loopKey = `${tc.name}::${stableArgsKey(toolInput)}`;
-        const count = (toolCallCounts.get(loopKey) ?? 0) + 1;
+        const count = (toolCallCounts.get(loopKey) ?? 0) + (refetchedTrimmed ? 0 : 1);
         toolCallCounts.set(loopKey, count);
         if (count >= loopThreshold) {
           abortReason = `Tool "${tc.name}" called ${count} times with the same args — likely stuck in a loop`;

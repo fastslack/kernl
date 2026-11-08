@@ -1,12 +1,14 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@kernl/extension-sdk";
-import { forgeConnectionTools, forgeReadTools } from "../../_lib/forge/index.js";
+import type { SqliteDb, ToolDefinition } from "@kernl/extension-sdk";
+import { forgeConnectionTools, forgeReadTools, scopeConnections } from "../../_lib/forge/index.js";
 import type { GitLabConnectionsService } from "./connections-service.js";
 import type { GitLabRepoProvider } from "./provider.js";
 
 export function gitlabChannelTools(
   connections: GitLabConnectionsService,
   provider: GitLabRepoProvider,
+  /** Kernel db, to keep a project's own connection for its repos (scope.ts). */
+  db?: SqliteDb,
 ): ToolDefinition[] {
   return [...forgeConnectionTools({
     prefix: "gitlab",
@@ -30,6 +32,7 @@ export function gitlabChannelTools(
     changeNoun: "mr",
     reader: provider,
     connections: () => connections.list(),
+    scope: db ? (all, host, path) => scopeConnections(db, "gitlab_connection", all, host, path) : undefined,
     hostOf: (c) => { try { return new URL(c.host).hostname.toLowerCase(); } catch { return ""; } },
   })];
 }

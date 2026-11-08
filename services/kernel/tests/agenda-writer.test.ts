@@ -120,4 +120,58 @@ describe("AgendaWriter", () => {
   it("fingerprint strips accents so the same title with/without diacritics matches", () => {
     expect(fingerprint({ ...meeting, title: "Reunión" })).toBe(fingerprint({ ...meeting, title: "Reunion" }));
   });
+
+  // 07/11: one lab closure (10/11) became nine events — the triage reworded it in every mail of the thread, the
+  // auto-replies came in their own threads, and the lookup wanted the exact same title in the same thread.
+  describe("the same thing mentioned again", () => {
+    const lab = { source_table: "communications" as const, source_id: "m1", thread_key: "lab", subject: "Turno", from: "Laboratorio <lab@hospital.example>" };
+    const closed = (title: string): AgendaItem => ({ kind: "event", title, start_at: "2030-11-10", all_day: true, confidence: "high", evidence: "lunes cerrado" });
+
+    it("reworded in a later mail of the thread is still one event", () => {
+      writer.write(lab, [closed("Laboratorio cerrado por feriado extraordinario")]);
+      const r = writer.write({ ...lab, source_id: "m2" }, [closed("Cierre del laboratorio por visita del Papa")]);
+      expect(r.created).toBe(0);
+      expect(db.query("SELECT COUNT(*) n FROM events").get()).toEqual({ n: 1 });
+    });
+
+    it("the sender's auto-reply in another thread, same day, is the same item", () => {
+      writer.write(lab, [closed("Laboratorio cerrado por feriado extraordinario")]);
+      writer.write({ ...lab, source_id: "m3", thread_key: "auto", from: "lab@hospital.example" }, [closed("El laboratorio permanecerá cerrado")]);
+      expect(db.query("SELECT COUNT(*) n FROM events").get()).toEqual({ n: 1 });
+    });
+
+    it("another sender with nearly the same title, same day, is the same item", () => {
+      writer.write(lab, [closed("Laboratorio central cerrado por feriado")]);
+      writer.write({ ...lab, source_id: "m4", thread_key: "x", from: "otro@example.com" }, [closed("Laboratorio cerrado por feriado")]);
+      expect(db.query("SELECT COUNT(*) n FROM events").get()).toEqual({ n: 1 });
+    });
+
+    it("two appointments of one sender on the same day at different times stay two", () => {
+      const at = (title: string, t: string): AgendaItem => ({ kind: "appointment", title, start_at: `2030-11-10T${t}`, all_day: false, confidence: "high", evidence: t });
+      writer.write(lab, [at("Extracción de sangre", "08:00")]);
+      writer.write({ ...lab, source_id: "m5" }, [at("Consulta con el médico", "15:00")]);
+      expect(db.query("SELECT COUNT(*) n FROM events").get()).toEqual({ n: 2 });
+    });
+
+    it("singular and plural are the same words", () => {
+      writer.write(lab, [closed("Laboratorio cerrado por feriados extraordinarios")]);
+      writer.write({ ...lab, source_id: "m9", thread_key: "z", from: "" }, [closed("Laboratorio cerrado por feriado extraordinario")]);
+      expect(db.query("SELECT COUNT(*) n FROM events").get()).toEqual({ n: 1 });
+    });
+
+    it("one sender's two different items on the same day stay two (two stock lots expiring)", () => {
+      const lot = (title: string): AgendaItem => ({ kind: "expiry", title, start_at: "2030-11-10", all_day: true, confidence: "high", evidence: "x" });
+      const wh = { ...lab, from: "stock@warehouse.example" };
+      writer.write({ ...wh, thread_key: "a" }, [lot("YOG-1KG L2999-Q expires (30 @ E-01-02-A) — quarantine")]);
+      writer.write({ ...wh, thread_key: "b", source_id: "m7" }, [lot("ALC-500 L2743-1 expires (40 @ B-02-03-C) — promote")]);
+      writer.write({ ...wh, thread_key: "a", source_id: "m8" }, [lot("GRN-2KG L3001-B expires (12 @ C-04-01-A) — sell first")]);
+      expect(db.query("SELECT COUNT(*) n FROM reminders").get()).toEqual({ n: 3 });
+    });
+
+    it("an unrelated sender and title on the same day stays separate", () => {
+      writer.write(lab, [closed("Laboratorio cerrado por feriado")]);
+      writer.write({ ...lab, source_id: "m6", thread_key: "y", from: "amigo@example.com" }, [closed("Cumpleaños de Juan")]);
+      expect(db.query("SELECT COUNT(*) n FROM events").get()).toEqual({ n: 2 });
+    });
+  });
 });

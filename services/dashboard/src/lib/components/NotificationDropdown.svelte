@@ -3,6 +3,7 @@
   import { miniMd } from '$lib/mini-md.js';
   import type { DashboardNotification } from '$lib/stores.js';
   import { timeAgo } from '$shared/utils';
+  import HeaderIcon, { badgeText } from './HeaderIcon.svelte';
 
   export let open = false;
   export let notifications: DashboardNotification[] = [];
@@ -29,24 +30,26 @@
 </script>
 
 <div class="notif-wrapper">
-  <button class="header-icon-btn" on:click={() => dispatch('toggle')} title="Notifications">
-    🔔
+  <button class="header-icon-btn" on:click={() => dispatch('toggle')}
+    title={unreadCount > 0 ? `Notificaciones — ${unreadCount} sin leer` : 'Notificaciones'}
+    aria-label={unreadCount > 0 ? `Notificaciones: ${unreadCount} sin leer` : 'Notificaciones'} aria-expanded={open}>
+    <HeaderIcon name="bell" />
     {#if unreadCount > 0}
-      <span class="header-icon-badge hb-visible">{unreadCount}</span>
+      <span class="header-icon-badge hb-visible">{badgeText(unreadCount)}</span>
     {/if}
   </button>
   {#if open}
     <div class="notif-panel">
       <div class="notif-header">
-        <span class="notif-title">Notifications</span>
+        <span class="notif-title">Notificaciones</span>
         {#if unreadCount > 0}
-          <button class="notif-mark-all" on:click={() => dispatch('markAllRead')}>Mark all read</button>
+          <button class="notif-mark-all" on:click={() => dispatch('markAllRead')}>Marcar todo como leído</button>
         {/if}
-        <button class="notif-mark-all" on:click={() => dispatch('viewAll')}>View All</button>
+        <button class="notif-mark-all" on:click={() => dispatch('viewAll')}>Ver todas</button>
       </div>
       <div class="notif-list">
         {#if notifications.length === 0}
-          <div class="notif-empty">No notifications</div>
+          <div class="notif-empty">No hay notificaciones</div>
         {:else}
           {#each notifications as n (n.id)}
             <div

@@ -3,11 +3,12 @@
  *
  * GET  /api/google/status       — Auth state + credential check + last sync info
  * POST /api/google/auth/start   — Returns the Google auth URL (redirect to Google)
- * GET  /auth/google/callback    — OAuth redirect handler (Google sends code here)
+ * GET  /auth/google/callback    — OAuth redirect handler (Google sends code here; a project's own
+ *                                  Google link, Proyectos → Cuentas, goes back to the projects module)
  * POST /api/google/revoke       — Revoke stored tokens
  */
 
-import { type KernelHttpServer, type KernelConfig, type SqliteDb, log } from "@kernl/extension-sdk";
+import { type KernelHttpServer, type KernelConfig, type SqliteDb, log, projects } from "@kernl/extension-sdk";
 import { GoogleAuth } from "./auth.js";
 import { googleSyncOperations } from "./dashboard-rpc-actions.js";
 import { returnTarget } from "./return-to.js";
@@ -60,6 +61,15 @@ export function registerGoogleOAuthRoutes(
 
     if (!code) {
       res.writeHead(302, { Location: back("error", "/?google_auth=error&error=missing_code") });
+      res.end();
+      return;
+    }
+
+    // A project's own Google account (Proyectos → Cuentas) rides on this same registered redirect.
+    if (projects.isGoogleLinkState(state)) {
+      const r = await projects.completeGoogleLink(state, code);
+      if (!r.ok) log.warn(`Google OAuth (project link): ${r.error}`);
+      res.writeHead(302, { Location: back(r.ok ? "success" : "error", `/projects?google_auth=${r.ok ? "success" : "error"}`) + (r.ok ? "" : `&google_error=${encodeURIComponent(r.error ?? "")}`) });
       res.end();
       return;
     }

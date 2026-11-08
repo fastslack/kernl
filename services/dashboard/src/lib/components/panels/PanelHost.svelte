@@ -111,7 +111,7 @@
       {:else if view.component === 'kpis'}
         <PanelKpis {rows} />
       {:else if view.component === 'table'}
-        <PanelTable {view} {rows} on:open={(e) => (detailKey = e.detail)} />
+        <PanelTable {view} {rows} {flowId} actions={spec?.actions ?? {}} on:open={(e) => (detailKey = e.detail)} />
       {:else if view.component === 'board'}
         <PanelBoard {view} {rows} {counts} on:open={(e) => (detailKey = e.detail)} />
       {:else if view.component === 'timeline'}

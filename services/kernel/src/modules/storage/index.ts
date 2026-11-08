@@ -15,9 +15,11 @@ import { log } from "../../core/logger.js";
 import { storageMigrations } from "./migrations.js";
 import { corePolicies } from "./core-policies.js";
 import { StorageService, compactRefusal } from "./service.js";
+import { GraphStorageService } from "./graph.js";
 
 export interface StorageModule extends KernelModule {
   getService(): StorageService | null;
+  getGraphService(): GraphStorageService | null;
 }
 
 function fmtBytes(n: number): string {
@@ -28,12 +30,18 @@ function fmtBytes(n: number): string {
 
 export function createStorageModule(listModules: () => KernelModule[]): StorageModule {
   let service: StorageService | null = null;
+  let graphService: GraphStorageService | null = null;
   let firstMeasure: ReturnType<typeof setTimeout> | null = null;
+  let txlogBoot: ReturnType<typeof setTimeout> | null = null;
   const policies = corePolicies();
 
   const need = (): StorageService => {
     if (!service) throw new Error("storage module not initialised");
     return service;
+  };
+  const needGraph = (): GraphStorageService => {
+    if (!graphService) throw new Error("storage module not initialised");
+    return graphService;
   };
 
   /** Long work runs detached; the page follows it through `storage.progress.get`. */
@@ -51,6 +59,7 @@ export function createStorageModule(listModules: () => KernelModule[]): StorageM
       ...summary.details.filter((d) => d.deleted > 0 || d.error).map((d) => `- ${d.label}: ${d.deleted}${d.error ? ` (error: ${d.error})` : ""}`),
       `DB: ${fmtBytes(summary.dbBytesBefore)} → ${fmtBytes(summary.dbBytesAfter)}`,
     ];
+    if (graphService && graphService.budgets().length > 0) lines.push(...(await graphService.apply()));
     return lines.join("\n");
   };
 
@@ -60,6 +69,15 @@ export function createStorageModule(listModules: () => KernelModule[]): StorageM
     async initialize(ctx: ModuleContext) {
       runMigrations(ctx.sqlite, "storage", storageMigrations);
       service = new StorageService(ctx.sqlite, ctx.config.sqlite.path, listModules);
+      // ctx.graph is read per call: the driver can come up or be swapped after boot.
+      graphService = new GraphStorageService(ctx.sqlite, listModules, () => ctx.graph);
+      // A live dbms.setConfigValue is lost when Neo4j restarts; put the user's
+      // choice back once the graph is up. Only when they made one.
+      txlogBoot = setTimeout(() => {
+        if (!graphService || graphService.txlog() === "default") return;
+        graphService.applyTxlog().catch((err) => log.warn("storage: graph transaction log setting failed", err));
+      }, 60_000);
+      txlogBoot.unref?.();
       // The page needs one measurement to show anything; take it shortly
       // after boot when today has none, off the boot path.
       firstMeasure = setTimeout(() => {
@@ -75,6 +93,7 @@ export function createStorageModule(listModules: () => KernelModule[]): StorageM
     },
 
     getService: () => service,
+    getGraphService: () => graphService,
 
     getRetentionPolicies(): RetentionPolicy[] {
       return policies;
@@ -158,12 +177,42 @@ export function createStorageModule(listModules: () => KernelModule[]): StorageM
             need().preview(String(args.id ?? ""), args.days === undefined ? undefined : Number(args.days)),
         },
         { name: "storage.stray.delete", handler: async (args) => need().deleteStrayFile(String(args.name ?? "")) },
+        { name: "storage.graph.get", handler: async () => needGraph().overview() },
+        {
+          name: "storage.graph.set",
+          handler: async (args) => {
+            const g = needGraph();
+            const patch: Parameters<GraphStorageService["set"]>[0] = {};
+            if (args.maxGb !== undefined) patch.maxGb = args.maxGb === null ? null : Number(args.maxGb);
+            if (typeof args.txlog === "string") patch.txlog = args.txlog;
+            if (typeof args.budget === "string") patch.budget = args.budget;
+            if (args.maxItems !== undefined) patch.maxItems = args.maxItems === null ? null : Number(args.maxItems);
+            if (Array.isArray(args.excluded)) patch.excluded = args.excluded.map(String);
+            g.set(patch);
+            // The log setting is cheap and live; apply it now rather than tonight.
+            if (patch.txlog !== undefined) await g.applyTxlog().catch((err) => log.warn("storage: graph transaction log setting failed", err));
+            return g.overview();
+          },
+        },
+        {
+          name: "storage.graph.apply",
+          handler: async () => {
+            const g = needGraph();
+            if (g.isApplying()) throw new Error("The graph limits are already being applied");
+            return detach("graph limits", async () => {
+              const lines = await g.apply();
+              log.info(lines.join(" "));
+            });
+          },
+        },
       ];
     },
 
     async shutdown() {
       if (firstMeasure) clearTimeout(firstMeasure);
+      if (txlogBoot) clearTimeout(txlogBoot);
       service = null;
+      graphService = null;
     },
   };
 }

@@ -23,6 +23,7 @@ import { isToolsUnsupportedError, observeToolSupport, toolSupportFor } from "./m
 import { classifyModel } from "./model-traits.js";
 import { probeAdapter } from "./provider-probe.js";
 import { PROBE_CALLER } from "./chat-instrumentation.js";
+import { ModelBlocklist } from "./model-blocklist.js";
 
 /** Providers whose calls cost the operator nothing (free tier or local). */
 const FREE = new Set(["nvidia", "ollama", "lmstudio"]);
@@ -73,7 +74,10 @@ export async function verifyProvider(slug: string, deps: VerifyDeps): Promise<Ve
   const adapter = deps.adapters.get(slug);
   if (!adapter || adapter.supportsToolLoop === false || SKIP.has(slug)) return report;
 
-  const chat = (await deps.listModels(slug)).filter((id) => classifyModel(slug, id).chat);
+  // A model already proven dead (404, retired) answers nothing about tools: asking it again every
+  // pass only filled the call log with failures (06/11: 50 of NVIDIA's on each pass).
+  const listed = new ModelBlocklist(deps.db).filterAvailable(slug, await deps.listModels(slug));
+  const chat = listed.filter((id) => classifyModel(slug, id).chat);
   const known = toolSupportFor(deps.db, slug, chat);
   const unknown = chat.filter((id) => known.get(id) === undefined);
   const queue = modelsToVerify(slug, unknown, deps.outputPrice);

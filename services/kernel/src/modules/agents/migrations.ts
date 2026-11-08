@@ -1025,6 +1025,30 @@ export const agentsMigrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_operator_messages_code ON operator_messages(code);
     `,
   },
+  {
+    // Embedding cache for the skill recommender (skill-vectors.ts): one
+    // vector per skill and per agent, per embedding model, re-made only when
+    // the hash of the embedded text changes.
+    version: 58,
+    sql: `
+      CREATE TABLE IF NOT EXISTS agent_skill_vectors (
+        kind       TEXT NOT NULL,
+        ref        TEXT NOT NULL,
+        model      TEXT NOT NULL,
+        text_hash  TEXT NOT NULL,
+        vector     BLOB NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (kind, ref, model)
+      );
+    `,
+  },
+  {
+    // Per-agent trim of old tool results in the native loop (tool-loop.ts
+    // compactOldToolResults): results stay whole for this many tool turns;
+    // 0 never trims, for agents that keep citing what they read early.
+    version: 59,
+    sql: `ALTER TABLE agents ADD COLUMN keep_full_tool_turns INTEGER NOT NULL DEFAULT 3;`,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is

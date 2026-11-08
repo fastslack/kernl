@@ -337,7 +337,63 @@ export interface KernelModule {
    * enabled ones nightly. See `RetentionPolicy`.
    */
   getRetentionPolicies?(): RetentionPolicy[];
+  /**
+   * Optional — the share of the graph database this module fills, with the
+   * knobs the user gets on /system?tab=storage to bound it: which sources go
+   * in and how many items at most. See `GraphBudget`.
+   */
+  getGraphBudgets?(): GraphBudget[];
   shutdown(): Promise<void>;
+}
+
+// ── Graph budgets ────────────────────────────────────────
+
+/** What the user set for one budget on the storage page. */
+export interface GraphLimits {
+  /** Source keys whose items stay out of the graph. */
+  excludedSources: string[];
+  /** Most items the graph may hold; null = no limit. */
+  maxItems: number | null;
+  /**
+   * The graph reached the size ceiling: let nothing new in until it is back
+   * under. Items already there stay.
+   */
+  frozen: boolean;
+}
+
+export interface GraphBudgetStatus {
+  /** Items the graph holds for this module right now. */
+  inGraph: number;
+  /** Items the limits keep out (still in SQLite). */
+  keptOut: number;
+  /** Node counts by label, for the page. */
+  nodes: Record<string, number>;
+}
+
+export interface GraphBudgetApplyResult {
+  removed: number;
+  readmitted: number;
+  orphansRemoved: number;
+}
+
+/**
+ * A module's footprint in the graph database, and how to bound it. The storage
+ * module stores the limits, measures the database and calls `apply` nightly
+ * (and when the user asks); the module decides which items those limits keep.
+ */
+export interface GraphBudget {
+  /** Stable id, namespaced by owner: "cinema.graph". */
+  id: string;
+  label: string;
+  /** What an item is, as a key the dashboard words ("titles"). */
+  unit: string;
+  /** Choices for the item ceiling (null, "no limit", is always offered too). */
+  capOptions: number[];
+  /** Sources the user can leave out, with how many items each brings. */
+  sources(db: SqliteDb): Array<{ key: string; count: number }>;
+  status(db: SqliteDb, graph: GraphDriver | null): Promise<GraphBudgetStatus>;
+  /** Bring the graph in line with `limits`: drop what falls out, readmit what came back. */
+  apply(db: SqliteDb, graph: GraphDriver, limits: GraphLimits): Promise<GraphBudgetApplyResult>;
 }
 
 // ── Data retention ───────────────────────────────────────

@@ -1,3 +1,5 @@
+import { buildChainView } from "./chain-status.js";
+import { listInFlight } from "../../sdk/llm-inflight.js";
 /**
  * Admin HTTP routes for LlmProviderRegistry.
  *
@@ -249,6 +251,10 @@ export function registerLlmProviderRoutes(
     } else {
       delete config.oauthToken;
     }
+
+    // Same for the Claude account list: only claude-accounts-store.ts writes it.
+    if (Array.isArray(stored.accounts)) config.accounts = stored.accounts;
+    else delete config.accounts;
 
     const ok = registry.saveConfig(slug, config);
     if (!ok) { server.json(res, 500, { error: "failed to persist config" }); return; }
@@ -553,44 +559,9 @@ export function registerLlmProviderRoutes(
   //   "auth"      → blocked because of 401/403 (bad key / forbidden)
   //   "degraded"  → recent transient failures, still in rotation
   server.route("GET", "/api/llm/chain", () => {
-    const chain = llm().describeChain();
-    const health = getAllHealth();
-    type LinkStatus = "active" | "standby" | "no-key" | "quota" | "rate-limit" | "auth" | "degraded";
-    const describe = (link: { slug: string; provider: string; model: string; available: boolean }, isPrimary: boolean) => {
-      const h = health[link.slug];
-      let status: LinkStatus;
-      let reason: string | undefined;
-      if (!link.available) {
-        status = "no-key";
-        reason = "no API key configured";
-      } else if (h?.blocked) {
-        const kind = h.lastFailureKind ?? "transient";
-        if (kind === "exhausted") { status = "quota"; reason = "credits exhausted / billing required"; }
-        else if (kind === "rate-limit") { status = "rate-limit"; reason = "rate-limited by provider"; }
-        else if (kind === "auth") { status = "auth"; reason = "auth rejected (bad key / forbidden)"; }
-        else { status = "degraded"; reason = "blocked after repeated transient failures"; }
-      } else if ((h?.failures ?? 0) > 0) {
-        status = "degraded";
-        reason = `${h?.failures} recent failure(s)`;
-      } else {
-        status = isPrimary ? "active" : "standby";
-      }
-      return {
-        slug: link.slug,
-        provider: link.provider,
-        model: link.model,
-        status,
-        reason,
-        latencyMs: h?.ewmaMs,
-        blockedForMs: h?.blockedFor,
-        lastSuccessAt: h?.lastSuccessAt,
-        failures: h?.failures ?? 0,
-      };
-    };
-    return {
-      primary: describe(chain.primary, true),
-      fallbacks: chain.fallbacks.map(l => describe(l, false)),
-    };
+    // Each link also carries `inFlight` (calls running on it now, oldest
+    // first) and `logSlug` (its slug in /api/llm/calls and /api/llm/usage).
+    return buildChainView(llm().describeChain(), getAllHealth(), blocklist.listAll(), listInFlight());
   });
 }
 

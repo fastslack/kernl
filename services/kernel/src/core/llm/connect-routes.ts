@@ -20,6 +20,9 @@ import { classifyModel } from "./model-traits.js";
 import { probeAdapter, type ProbeResult } from "./provider-probe.js";
 import { maskSecret } from "./provider-routes.js";
 import type { ClaudeLogin } from "./claude-code-login.js";
+import { addAccount, listAccounts, moveAccount, removeAccount, renameAccount } from "./claude-accounts-store.js";
+import { isClaudeAccountDown, listClaudeLimits } from "../../sdk/claude-limits.js";
+import { claudeAccountUsage } from "./claude-usage.js";
 
 // Brand logos are cached by the browser for a day, so a redrawn logo would
 // stay hidden behind the old one: the URL carries a hash of the file instead.
@@ -172,13 +175,73 @@ export function registerConnectRoutes(server: KernelHttpServer, deps: ConnectDep
     if (!deps.claudeLogin) throw new HttpError(404, "sign-in from the dashboard is not available here");
     return deps.claudeLogin;
   };
-  server.route("POST", "/api/llm/claude-code/login", () => login().start());
+  server.route<{ accountId?: unknown }>("POST", "/api/llm/claude-code/login", ({ body }) => {
+    const l = login();
+    if (body.accountId === undefined || body.accountId === null || body.accountId === "") return l.start();
+    if (typeof body.accountId !== "string") throw new HttpError(400, "accountId must be a string");
+    if (!listAccounts().some((a) => a.id === body.accountId)) throw new HttpError(404, "unknown account");
+    return l.start({ accountId: body.accountId });
+  });
   server.route("GET", "/api/llm/claude-code/login", () => login().status());
   server.route("DELETE", "/api/llm/claude-code/login", () => login().cancel());
   server.route<{ url?: unknown }>("POST", "/api/llm/claude-code/login/callback", async ({ body }) => {
     if (typeof body.url !== "string" || !body.url.trim()) throw new HttpError(400, "url is required");
     const r = await login().deliver(body.url);
     return { ...login().status(), delivered: r.ok, ...(r.ok ? {} : { deliverError: r.error }) };
+  });
+
+  // The subscription accounts: every mutation answers with the fresh list so
+  // the dashboard never has to guess what the store ended up with.
+  const accountsView = () => {
+    const now = Date.now();
+    return {
+      accounts: listAccounts().map((a) => ({
+        ...a,
+        down: isClaudeAccountDown(a.id, now),
+        limits: listClaudeLimits(a.id, now).map((l) => ({ model: l.model, until: new Date(l.blockedUntil).toISOString(), detail: l.detail })),
+      })),
+    };
+  };
+  const checkLabel = (label: unknown): string | undefined => {
+    if (label === undefined) return undefined;
+    if (typeof label !== "string") throw new HttpError(400, "label must be a string");
+    if (label.trim().length > 80) throw new HttpError(400, "label must be at most 80 characters");
+    return label;
+  };
+  const knownAccount = (id: string) => {
+    if (!listAccounts().some((a) => a.id === id)) throw new HttpError(404, "unknown account");
+  };
+  server.route("GET", "/api/llm/claude-code/accounts", () => accountsView());
+  // How much of each connected subscription is used (5-hour window, week, per-model week). ?refresh=1 reads again now.
+  server.route("GET", "/api/llm/claude-code/usage", async ({ query }) => {
+    const force = query.get("refresh") === "1";
+    const accounts = listAccounts().filter((a) => a.connected);
+    const usage = await Promise.all(accounts.map((a) => claudeAccountUsage(a.id, force)));
+    return { accounts: accounts.map((a, i) => ({ id: a.id, usage: usage[i] })) };
+  });
+  server.route<{ label?: unknown }>("POST", "/api/llm/claude-code/accounts", ({ body }) => {
+    addAccount(checkLabel(body.label) ?? "");
+    return accountsView();
+  });
+  // PUT, not PATCH: the HTTP server (and its CORS preflight) only knows GET/POST/PUT/DELETE.
+  server.route<{ label?: unknown; move?: unknown }>("PUT", "/api/llm/claude-code/accounts/:id", ({ params, body }) => {
+    const id = params.id ?? "";
+    knownAccount(id);
+    const label = checkLabel(body.label);
+    if (body.move !== undefined && body.move !== "up" && body.move !== "down") throw new HttpError(400, "move must be up or down");
+    if (label !== undefined) renameAccount(id, label);
+    if (body.move !== undefined) moveAccount(id, body.move);
+    return accountsView();
+  });
+  server.route("DELETE", "/api/llm/claude-code/accounts/:id", ({ params }) => {
+    const id = params.id ?? "";
+    knownAccount(id);
+    try {
+      removeAccount(id);
+    } catch (err) {
+      throw new HttpError(400, err instanceof Error ? err.message : String(err));
+    }
+    return accountsView();
   });
 
   server.route("POST", "/api/llm-providers/:slug/test", async ({ params, body }) => {
@@ -252,7 +315,10 @@ export function registerConnectRoutes(server: KernelHttpServer, deps: ConnectDep
 
   server.route("DELETE", "/api/llm-providers/:slug/connection", async ({ params }) => {
     const entry = requireEntry(params);
+    // Disconnecting Claude Code drops the sign-in, not the Claude account list.
+    const accounts = entry.slug === "claude-code" ? getStoredConfig(entry.slug).accounts : undefined;
     clearProviderConfig(entry.slug);
+    if (Array.isArray(accounts)) saveProviderConfig(entry.slug, { accounts });
     await deps.registry.stopProvider(entry.slug).catch(() => false);
     deps.setChain(deps.getChain().filter((l) => canonicalSlug(l.provider) !== entry.slug));
     deps.onChanged(entry.slug, `provider "${entry.slug}" was removed`);

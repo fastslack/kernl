@@ -304,6 +304,8 @@ export interface KernelEvents {
   "agent.run.completed": AgentRunPayload & { durationMs: number; success: boolean };
   "agent.run.failed": AgentRunPayload & { error: string };
   "agent.alert": AgentAlertPayload;
+  /** A scheduled slot the agent's office said had nothing to work on (SchedulePrecheck). */
+  "agent.schedule.skipped": { agent_id: string; schedule_id: string; project_id: string | null; reason: string };
   "agent:auto_paused": AgentAutoPausedPayload;
   "agent:question_asked": AgentQuestionAskedPayload;
   "agent:question_triage": AgentQuestionTriagePayload;

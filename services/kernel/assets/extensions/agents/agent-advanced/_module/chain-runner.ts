@@ -66,14 +66,14 @@ export function buildAgentChain(
     //     model (or is empty). A misconfigured `claude/gpt-4o-mini` stays on
     //     the REST API path — passing it to the SDK would surface a confusing
     //     "selected model … may not exist or you may not have access" error.
-    //   - When the entry has no explicit model, force "claude-sonnet-4-5". The
+    //   - When the entry has no explicit model, force "claude-sonnet-5-5". The
     //     claude_code provider's own default falls back to CHAT_DEFAULT_MODEL,
     //     which may not be a Claude model name — same SDK error.
     if (name === "claude" && sdkAvailable) {
       const looksLikeClaude = !model || /^claude[-_]/i.test(model);
       if (looksLikeClaude) {
         name = "claude_code";
-        if (!model) model = "claude-sonnet-4-5";
+        if (!model) model = "claude-sonnet-5-5";
       }
     }
     const key = `${name}::${model || ""}`;

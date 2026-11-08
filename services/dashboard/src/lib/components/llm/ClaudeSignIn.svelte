@@ -26,8 +26,11 @@
   export let showDone = false;
   /** Where to send the operator when this install cannot sign in from the dashboard. */
   export let fallbackHref = '/settings?section=ai&card=providers&connect=claude-code';
+  /** Which Claude Code account to sign in; absent = the primary one. */
+  export let accountId: string | undefined = undefined;
   export let onStart: () => void = () => {};
-  export let onDone: () => void | Promise<void> = () => {};
+  /** Gets the finished sign-in status, so a caller can see `duplicateOf`. */
+  export let onDone: (status?: ClaudeLoginStatus) => void | Promise<void> = () => {};
 
   let login: ClaudeLoginStatus = { state: 'idle' };
   let loginTimer: ReturnType<typeof setTimeout> | null = null;
@@ -63,7 +66,7 @@
     // it as a popup; it is pointed at the approval page once the kernel has it.
     const tab = pasteLogin ? window.open('about:blank', '_blank') : null;
     try {
-      login = await startClaudeLogin();
+      login = await startClaudeLogin(accountId);
       if (pasteLogin) {
         for (let i = 0; i < 20 && login.state === 'waiting' && !login.authorizeUrl; i++) {
           await new Promise((r) => setTimeout(r, 300));
@@ -99,7 +102,7 @@
   function pollLogin(): void {
     if (loginTimer) clearTimeout(loginTimer);
     loginTimer = null;
-    if (login.state === 'done') { login = { state: 'idle' }; void finish(); return; }
+    if (login.state === 'done') { const finished = login; login = { state: 'idle' }; void finish(finished); return; }
     if (login.state !== 'waiting') return;
     loginTimer = setTimeout(async () => {
       try { login = await claudeLoginStatus(); } catch { /* keep waiting; the next poll retries */ }
@@ -107,8 +110,8 @@
     }, 1500);
   }
 
-  async function finish(): Promise<void> {
-    try { await onDone(); } catch { /* the caller reports its own failure */ }
+  async function finish(status?: ClaudeLoginStatus): Promise<void> {
+    try { await onDone(status); } catch { /* the caller reports its own failure */ }
     done = true;
   }
 

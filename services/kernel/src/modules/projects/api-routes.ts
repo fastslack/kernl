@@ -5,15 +5,23 @@ import { HttpError } from "../../sdk/http-error.js";
 import type { ProjectsService } from "./projects-service.js";
 import type { OutboxService } from "./outbox-service.js";
 import type { ConnectorService } from "./connector-service.js";
+import { ACCOUNT_PROVIDERS, type AccountProvider, type ProjectAccountsService } from "./accounts.js";
+import { log } from "../../core/logger.js";
+import { googleConsentUrl, googleOptions } from "./google-link.js";
 import { ProjectBriefSchema, SLUG_RE } from "./brief.js";
-import type { OutboxStatus, ProjectLinkKind, ProjectStatus } from "./types.js";
+import { PROJECT_LINK_KINDS, type OutboxStatus, type ProjectLinkKind, type ProjectStatus } from "./types.js";
 
 export interface ProjectsRouteDeps {
   projects: ProjectsService;
   outbox: OutboxService;
   connector: ConnectorService;
+  accounts: ProjectAccountsService;
   flowName: (flowId: string) => string;
   listFlows: () => Array<{ id: string; name: string; active?: number }>;
+  /** A letter to an office's lead (AgentService.postToOffice); absent = hand-offs are refused. */
+  postToOffice?: (flowId: string, letter: { agent_id: string; subject: string; body: string; project_id: string | null }) => { ok: boolean; error?: string };
+  /** The deploy environment of the project that owns a repo (deployEnvForRepo): throws when it can't be given. */
+  deployEnv?: (repo: string, origin: string | undefined) => { project: string; env: Record<string, string> };
 }
 
 const WEBHOOK_MAX_BYTES = 1024 * 1024;
@@ -31,7 +39,7 @@ const UpdateBody = z.object({
 });
 const ConnectorBody = z.object({ url: z.string(), token: z.string().optional() });
 const LinkBody = z.object({
-  kind: z.enum(["repo", "social_account", "email_account", "task_project", "workspace"]),
+  kind: z.enum(PROJECT_LINK_KINDS),
   ref_id: z.string().min(1),
 });
 const ScopeBody = z.object({ serves_any: z.boolean() });
@@ -39,6 +47,7 @@ const OfficeBody = z.object({ active: z.boolean().optional(), settings: z.record
 const EditBody = z.object({ payload: z.record(z.unknown()) });
 const ApproveBody = z.object({ scheduled_for: z.string().nullable().optional() });
 const RejectBody = z.object({ note: z.string().trim().min(1, "a reason is required to reject a draft") });
+const HandoffBody = z.object({ flow_id: z.string().min(1), note: z.string().max(2000).optional() });
 
 function parse<T>(schema: z.ZodType<T>, body: unknown): T {
   const r = schema.safeParse(body ?? {});
@@ -70,7 +79,7 @@ function readRaw(req: IncomingMessage, maxBytes: number): Promise<string> {
 
 /** Everything the dashboard needs for /projects, /outbox and the office panel. */
 export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsRouteDeps): void {
-  const { projects, outbox, connector } = deps;
+  const { projects, outbox, connector, accounts } = deps;
 
   const mustProject = (idOrSlug: string) => {
     const p = projects.get(idOrSlug);
@@ -137,8 +146,70 @@ export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsR
   server.route("POST", "/api/projects/:id/links", ({ params, body }) => {
     const p = mustProject(params.id);
     const b = parse(LinkBody, body);
-    projects.link(p.id, b.kind as ProjectLinkKind, b.ref_id);
+    try { projects.link(p.id, b.kind as ProjectLinkKind, b.ref_id); } catch (err) { asHttp(err); }
     return { links: projects.links(p.id) };
+  });
+
+  // ── The project's own accounts (Cloudflare, Datadog, AWS, git identity) ──
+  const mustProvider = (p: string): AccountProvider => {
+    if (!(ACCOUNT_PROVIDERS as readonly string[]).includes(p)) throw new HttpError(404, `Unknown account type: ${p}`);
+    return p as AccountProvider;
+  };
+
+  // For an office's own deploy service on the host (not the dashboard: a request with an Origin is refused), so its
+  // deploys run as the project that owns the repo — the project's Cloudflare, AWS, git — and not as whatever the
+  // machine is logged in as. Body: { repo: <registered path or remote> }.
+  server.route<{ repo?: unknown }>("POST", "/api/projects/deploy-env", ({ req, body }) => {
+    if (!deps.deployEnv) throw new HttpError(404, "Not available");
+    const repo = typeof body?.repo === "string" ? body.repo : "";
+    const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+    try {
+      const r = deps.deployEnv(repo, origin);
+      log.info(`projects: deploy environment of ${r.project} handed out for ${repo} (${Object.keys(r.env).sort().join(", ") || "no accounts"})`);
+      return r;
+    } catch (err) {
+      throw new HttpError(origin ? 403 : 404, err instanceof Error ? err.message : String(err));
+    }
+  });
+
+  server.route("GET", "/api/projects/:id/accounts", ({ params }) => {
+    const p = mustProject(params.id);
+    return { accounts: accounts.list(p.id) };
+  });
+
+  // Tested against the service before it is saved; a refusal leaves the stored account as it was.
+  server.route("PUT", "/api/projects/:id/accounts/:provider", async ({ params, body }) => {
+    const p = mustProject(params.id);
+    const provider = mustProvider(params.provider);
+    try {
+      return { account: await accounts.set(p.id, provider, (body ?? {}) as Record<string, unknown>) };
+    } catch (err) { return asHttp(err); }
+  });
+
+  server.route("POST", "/api/projects/:id/accounts/:provider/test", async ({ params }) => {
+    const p = mustProject(params.id);
+    return await accounts.test(p.id, mustProvider(params.provider));
+  });
+
+  // Google: linked on Google's consent screen, then the user picks what to read from what it can see.
+  server.route("POST", "/api/projects/:id/accounts/google/connect", ({ params, body }) => {
+    const p = mustProject(params.id);
+    const returnTo = typeof (body as { return_to?: unknown } | undefined)?.return_to === "string" ? (body as { return_to: string }).return_to : "";
+    try { return { authUrl: googleConsentUrl(p.id, returnTo) }; } catch (err) { throw new HttpError(400, err instanceof Error ? err.message : String(err)); }
+  });
+
+  server.route("GET", "/api/projects/:id/accounts/google/options", async ({ params }) => {
+    const p = mustProject(params.id);
+    const a = accounts.get(p.id, "google");
+    if (!a?.secrets.refresh_token) throw new HttpError(404, "El proyecto no tiene una cuenta de Google conectada");
+    try { return await googleOptions(a.secrets.refresh_token, a.config.email ?? "", fetch); }
+    catch (err) { throw new HttpError(502, err instanceof Error ? err.message : String(err)); }
+  });
+
+  server.route("DELETE", "/api/projects/:id/accounts/:provider", ({ params }) => {
+    const p = mustProject(params.id);
+    accounts.remove(p.id, mustProvider(params.provider));
+    return { accounts: accounts.list(p.id) };
   });
 
   server.route("DELETE", "/api/projects/:id/links", ({ params, query }) => {
@@ -218,6 +289,18 @@ export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsR
   server.route("POST", "/api/outbox/:id/reject", ({ params, body }) => {
     const b = parse(RejectBody, body);
     try { return { item: outbox.reject(params.id, b.note) }; } catch (err) { return asHttp(err); }
+  });
+
+  // Pass a draft or a failed send to an office: its lead gets a letter with the item, the error and the note.
+  server.route("POST", "/api/outbox/:id/handoff", ({ params, body }) => {
+    const b = parse(HandoffBody, body);
+    const flow = deps.listFlows().find((f) => f.id === b.flow_id);
+    if (!flow) throw new HttpError(404, `Office not found: ${b.flow_id}`);
+    const post = deps.postToOffice;
+    if (!post) throw new HttpError(503, "Offices are not available");
+    try {
+      return { item: outbox.handoff(params.id, { flow_id: flow.id, name: deps.flowName(flow.id) }, b.note ?? "", (l) => post(l.flow_id, l)) };
+    } catch (err) { return asHttp(err); }
   });
 
   server.route("POST", "/api/outbox/:id/retry", async ({ params }) => {

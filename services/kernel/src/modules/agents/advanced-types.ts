@@ -25,9 +25,18 @@ export interface AltExecuteParams {
   service: AgentService;
   events?: EventBus;
   depth?: number;
+  /** Let the caller continue an untouched run through other providers. */
+  allowProviderFallback?: boolean;
+}
+
+export interface NativeFallbackSession {
+  tools: import("../../core/types.js").ToolDefinition[];
+  cleanup(): Promise<void>;
+  prompt?: string;
 }
 
 export interface AltExecutorLike {
+  prepareNativeFallbackTools?(params: AltExecuteParams): Promise<NativeFallbackSession>;
   execute(params: AltExecuteParams): Promise<ExecutionResult>;
   cancelRun(runId: string): boolean;
 }
@@ -127,6 +136,19 @@ export interface WorkspaceEvolverLike {
   runCycle(opts: Record<string, unknown>): Promise<unknown>;
   revertTo(workspaceId: string, ref: string): Promise<unknown>;
 }
+
+/**
+ * An office's say on its own scheduled slots: `skip` when the run would have
+ * nothing to work on (no data yet, a blocker only the operator can clear).
+ * Registered per flow by the extension that owns the office. Only scheduled
+ * slots ask it — a run someone launches always goes out.
+ */
+export type SchedulePrecheck = (slot: {
+  agent_id: string;
+  agent_slug: string;
+  flow_id: string;
+  project_id: string | null;
+}) => { skip: true; reason: string } | null;
 
 /**
  * Project gate (src/modules/projects). The agents module never imports the

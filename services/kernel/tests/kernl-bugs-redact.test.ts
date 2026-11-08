@@ -1,13 +1,16 @@
 import { describe, it, expect } from "bun:test";
 import { redactForReport, isPrivateTool, normalizeError, bugFingerprint } from "../src/modules/agents/kernl-bugs-redact.js";
 
+// The fake keys are assembled at run time: written whole, secret scanners report them as leaked credentials.
+const fake = (...parts: string[]) => parts.join("");
+
 describe("redactForReport", () => {
   it.each([
     ["Authorization: Bearer abcdefghijklmnop1234", "Authorization: Bearer ‹redacted›"],
-    ["key sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUV here", "key ‹redacted-key› here"],
-    ["token ghp_ABCDEFGHIJKLMNOPQRSTUVWX12 ok", "token ‹redacted-key› ok"],
-    ["slack xoxb-1234567890-abcdefghij", "slack ‹redacted-key›"],
-    ["google AIzaSyA1234567890abcdefghijklmnopqrstuv", "google ‹redacted-key›"],
+    [`key ${fake("sk-", "ant-api03-", "ABCDEFGHIJKLMNOPQRSTUV")} here`, "key ‹redacted-key› here"],
+    [`token ${fake("ghp", "_ABCDEFGHIJKLMNOPQRSTUVWX12")} ok`, "token ‹redacted-key› ok"],
+    [`slack ${fake("xox", "b-1234567890-abcdefghij")}`, "slack ‹redacted-key›"],
+    [`google ${fake("AI", "za", "SyA1234567890abcdefghijklmnopqrstuv")}`, "google ‹redacted-key›"],
     ["jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.abcdefghijk", "jwt ‹redacted-jwt›"],
     ["secret 0123456789abcdef0123456789abcdef0123456789", "secret ‹redacted-secret›"],
     ["mail me at maguirre@matware.nl now", "mail me at ‹email› now"],
@@ -49,7 +52,7 @@ describe("bugFingerprint", () => {
 
 describe("redactForReport · review fixes", () => {
   it("redacts fine-grained GitHub tokens and lowercase bearer headers", () => {
-    expect(redactForReport("t github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz end")).toBe("t ‹redacted-key› end");
+    expect(redactForReport(`t ${fake("github", "_pat_", "11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz")} end`)).toBe("t ‹redacted-key› end");
     expect(redactForReport("authorization: bearer abcdefghijklmnop1234")).toBe("authorization: Bearer ‹redacted›");
   });
 });

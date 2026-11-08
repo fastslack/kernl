@@ -108,6 +108,14 @@ describe("agent questions — chief triage", () => {
     expect(inbox[0].body).toContain("only on Friday");
   });
 
+  it("the answer letter names the question id, so the asker can cite the approval", () => {
+    const worker = service.createAgent({ name: "Worker" });
+    const q = service.createQuestion({ from_agent_id: worker.id, question: "Load 700 rows in DEV?", options: OPTS });
+    service.answerQuestion(q.id, { selected_index: 0, selected_option: OPTS[0].label, answered_by: "human" });
+    service.postAnswerToInbox(q.id);
+    expect(service.getUnreadInbox(worker.id)[0].body).toContain(`question_id: ${q.id}`);
+  });
+
   it("expireTriage hands stale triage questions to the human", () => {
     makeChief();
     const worker = service.createAgent({ name: "Worker" });

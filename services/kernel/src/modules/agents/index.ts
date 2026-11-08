@@ -193,6 +193,8 @@ export function createAgentsModule(): AgentsModule {
 
       // An unattended run that left something for the operator without asking: file the question for it.
       new UnattendedAskWatcher(agentService, ctx.events, (o) => llm().chatJson(o)).start();
+      // A question the office already has open (or answered lately) is not filed twice.
+      agentService.setQuestionJudge((o) => llm().chatJson(o));
 
       // Kernl's own bugs, filed by the chief or the operator. The key seals the GitHub token.
       kernlBugs = new KernlBugService(ctx.sqlite, ctx.config.encryption.key);
@@ -331,8 +333,8 @@ export function createAgentsModule(): AgentsModule {
     getDashboardDescriptor(): DashboardDescriptor {
       return {
         nav: [
-          { id: "agents", label: "Agents", icon: "🤖", group: "ai", order: 20 },
-          { id: "autogenesis", label: "Autogenesis", icon: "🧬", group: "ai", order: 21 },
+          { id: "agents", label: "Agents", icon: "🤖", group: "ai", order: 3 },
+          { id: "autogenesis", label: "Autogenesis", icon: "🧬", group: "ai", order: 4 },
         ],
         channels: [
           {

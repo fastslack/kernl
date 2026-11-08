@@ -236,6 +236,7 @@ export function cinemaAgentDrivers(deps: CinemaDriverDeps): AgentDriver[] {
         if (!graph?.capabilities.cypher) {
           return "Cinema embedder: skipped — no graph driver active with cypher support. Activate one in /extensions.";
         }
+        if (svc.graphFrozen()) return "Cinema embedder: skipped — the graph is at its size ceiling (System › Storage).";
 
         // 96 rows ≈ 3 batches of 32 ≈ ~6 sec on LMStudio bge-m3. Good per-tick
         // budget when running every few minutes; tune via cron frequency, not

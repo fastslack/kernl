@@ -3,7 +3,7 @@ import type { EventBus } from "../../core/event-bus.js";
 import { newId, isoNow } from "../../core/helpers.js";
 import type { ProjectsService } from "./projects-service.js";
 import {
-  SnapshotV1Schema, WebhookEventSchema, verifySignature, describeZodError, FUNNEL_TYPES, type SnapshotV1,
+  SnapshotV1Schema, WebhookEventSchema, EventsPageSchema, verifySignature, describeZodError, FUNNEL_TYPES, type SnapshotV1,
 } from "./connector-contract.js";
 
 /** How often a project is pulled; webhooks fill the gaps in between. */
@@ -118,6 +118,14 @@ export class ConnectorService {
     if (!verifySignature(rawBody, signatureHeader, webhookSecret)) return { status: 401, body: "bad signature" };
     let json: unknown;
     try { json = JSON.parse(rawBody); } catch { return { status: 400, body: "invalid json" }; }
+    const r = this.ingestEvent(p.id, json);
+    if (r.status === 200 && r.body === "ok") this.projects.markConnector(p.id, { last_webhook_at: isoNow() });
+    return r;
+  }
+
+  /** One event, pushed (webhook) or pulled (`/events`): validated, deduplicated by event_id, stored and announced. */
+  private ingestEvent(projectId: string, json: unknown): { status: 200 | 400; body: string } {
+    const p = this.projects.get(projectId)!;
     const parsed = WebhookEventSchema.safeParse(json);
     if (!parsed.success) return { status: 400, body: describeZodError(parsed.error) };
     const ev = parsed.data;
@@ -129,14 +137,46 @@ export class ConnectorService {
     if ((FUNNEL_TYPES as readonly string[]).includes(ev.type)) {
       this.upsertRecord(p.id, "funnel_event", ev.event_id, { type: ev.type, occurred_at: ev.occurred_at, ...(ev.data as object) });
     }
-    this.projects.markConnector(p.id, { last_webhook_at: isoNow() });
     this.events.emit(`project:${ev.type}`, { ...ev.data, project_id: p.id, project_slug: p.slug, event_id: ev.event_id });
     return { status: 200, body: "ok" };
+  }
+
+  /**
+   * Pulls `GET {url}/events?since=` (see EventsPageSchema). A project without that endpoint answers 404: that is
+   * "no events by pull", not an error. The cursor lives in project_records (kind connector_cursor).
+   */
+  async pullEvents(projectId: string): Promise<{ events: number; rejected: number }> {
+    const p = this.projects.get(projectId);
+    if (!p) throw new Error(`Project not found: ${projectId}`);
+    const { url, token } = this.projects.connectorSecrets(p.id);
+    if (!url) throw new Error(`Project ${p.slug} has no connector`);
+    const cursor = this.records(p.id, "connector_cursor").find((r) => r.external_id === "events")?.data as { since?: string } | undefined;
+    const since = cursor?.since ?? "1970-01-01T00:00:00Z";
+    const res = await this.fetchFn(`${url.replace(/\/$/, "")}/events?since=${encodeURIComponent(since)}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (res.status === 404) return { events: 0, rejected: 0 };
+    if (!res.ok) throw new Error(`events HTTP ${res.status}`);
+    const page = EventsPageSchema.safeParse(await res.json());
+    if (!page.success) throw new Error(`events out of schema — ${describeZodError(page.error)}`);
+    let ok = 0, rejected = 0, newest = since;
+    for (const ev of page.data.events) {
+      const r = this.ingestEvent(p.id, ev);
+      if (r.status === 400) rejected++; else ok++;
+      const at = (ev as { occurred_at?: unknown })?.occurred_at;
+      if (typeof at === "string" && at > newest) newest = at;
+    }
+    this.upsertRecord(p.id, "connector_cursor", "events", { since: page.data.next_since ?? newest });
+    if (ok) this.projects.markConnector(p.id, { last_webhook_at: isoNow() });
+    return { events: ok, rejected };
   }
 
   async pullAllDue(now: Date = new Date()): Promise<void> {
     for (const p of this.projects.list({ status: "active" })) {
       if (!p.connector_url) continue;
+      // Events every check (15 min): they are what the funnel is measured with.
+      await this.pullEvents(p.id).catch((err) => this.projects.markConnector(p.id, { connector_error: err instanceof Error ? err.message : String(err) }));
       if (p.last_pull_at && now.getTime() - Date.parse(p.last_pull_at) < PULL_EVERY_MS) continue;
       await this.pull(p.id).catch(() => { /* recorded in connector_error */ });
     }

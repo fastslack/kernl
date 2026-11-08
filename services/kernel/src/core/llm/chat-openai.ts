@@ -25,6 +25,8 @@ export class ChatOpenAiProvider implements ChatLlmProvider {
     this.name = name;
   }
 
+  getDefaultModel(): string { return this.defaultModel; }
+
   available(): boolean {
     return this.apiKey.length > 0;
   }

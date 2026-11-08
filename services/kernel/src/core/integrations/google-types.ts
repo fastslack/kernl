@@ -111,8 +111,11 @@ export interface GmailMessageDetail {
 
 export interface GmailMessagePart {
   mimeType: string;
+  /** Set on attachment parts. */
+  filename?: string;
   headers?: Array<{ name: string; value: string }>;
-  body?: { size: number; data?: string };
+  /** `attachmentId` instead of `data` when the part is an attachment (fetched separately). */
+  body?: { size: number; data?: string; attachmentId?: string };
   parts?: GmailMessagePart[];
 }
 

@@ -18,6 +18,14 @@
 #   scripts/kernl.sh stop [service...]      stop containers (volumes untouched)
 #   scripts/kernl.sh logs [service] [-f] [--since 10m] [--errors]
 #   scripts/kernl.sh doctor                 status + why the kernel last died
+#   scripts/kernl.sh resume-offices         resume the offices a cut-short drain left paused
+#
+# Restarting or recreating the kernel goes through one door, safe when several
+# sessions share the stack: a lock makes a second restart wait for the first,
+# and the active offices are drained first — paused so no new agent run starts,
+# the running ones get up to KERNL_DRAIN_TIMEOUT seconds (default 600) to finish
+# — and resumed after. Only the offices it paused are resumed. --no-drain skips
+# the wait (an emergency restart).
 #
 # Services: kernel dashboard mtw-request whatsapp-bridge neo4j searxng
 
@@ -250,6 +258,91 @@ wait_kernel() {
   return 0
 }
 
+# ── one door for kernel restarts: lock + drain ──────────────────────────────
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/kernl"
+LOCK_FILE="$STATE_DIR/kernel-restart.lock"
+DRAINED_FILE="$STATE_DIR/drained-offices"
+DRAIN_TIMEOUT="${KERNL_DRAIN_TIMEOUT:-600}"
+NO_DRAIN=0
+
+# The kernel's own API from inside its container (the auth token lives there).
+kernel_api() {
+  docker exec -i "$(container kernel)" bun -e '
+    const [what, ...ids] = process.argv.slice(1);
+    const t = (await Bun.file("/app/data/.kernel-auth-token").text()).trim();
+    const h = { Authorization: "Bearer " + t, "Content-Type": "application/json" };
+    const api = async (p, init = {}) => (await fetch("http://localhost:3087" + p, { headers: h, ...init })).json();
+    if (what === "active-offices") {
+      const f = await api("/api/agents/flows"); const flows = Array.isArray(f) ? f : f.flows ?? [];
+      console.log(flows.filter((x) => x.active && !x.paused).map((x) => x.id).join("\n"));
+    } else if (what === "running") {
+      console.log(((await api("/api/agents/runs/active")).runs ?? []).length);
+    } else if (what === "pause" || what === "resume") {
+      // Checked against the flows as they are after the call: right after a restart the kernel reports healthy
+      // before every RPC is up, and an unchecked call reported «resumed» with every office still paused.
+      for (const id of ids) {
+        const r = await fetch("http://localhost:3087/api/rpc/agents.flows.set_paused", { method: "POST", headers: h, body: JSON.stringify({ flow_id: id, paused: what === "pause" }) });
+        if (!r.ok) { console.error(`set_paused ${id}: ${r.status}`); process.exit(1); }
+      }
+      const f = await api("/api/agents/flows"); const flows = Array.isArray(f) ? f : f.flows ?? [];
+      const wrong = flows.filter((x) => ids.includes(x.id) && Boolean(x.paused) !== (what === "pause"));
+      if (wrong.length) { console.error(`${wrong.length} office(s) not ${what}d`); process.exit(1); }
+    }' "$@" 2>/dev/null
+}
+
+resume_drained() {
+  [[ -s "$DRAINED_FILE" ]] || return 0
+  local ids i; mapfile -t ids < "$DRAINED_FILE"
+  # A kernel that just came up may not take the call yet: retried for ~2 min, each try checked.
+  for ((i = 0; i < 12; i++)); do
+    if kernel_api resume "${ids[@]}"; then
+      info "resumed ${#ids[@]} office(s) paused for the restart"
+      rm -f "$DRAINED_FILE"
+      return 0
+    fi
+    sleep 10
+  done
+  warn "the ${#ids[@]} office(s) paused for the restart are STILL PAUSED — run: $0 resume-offices"
+  return 1
+}
+
+drain_kernel() {
+  ((NO_DRAIN)) && { warn "--no-drain: running agent runs will be cut"; return 0; }
+  [[ "$(docker inspect "$(container kernel)" --format '{{.State.Status}}' 2>/dev/null)" == running ]] || return 0
+  local ids; mapfile -t ids < <(kernel_api active-offices | sed '/^$/d')
+  if ((${#ids[@]})); then
+    printf '%s\n' "${ids[@]}" > "$DRAINED_FILE"
+    kernel_api pause "${ids[@]}" || warn "could not pause the offices"
+    info "paused ${#ids[@]} office(s): no new agent runs while the kernel restarts"
+  fi
+  local waited=0 n
+  while :; do
+    n="$(kernel_api running || echo 0)"
+    [[ "$n" =~ ^[0-9]+$ ]] || n=0
+    ((n == 0)) && { info "no agent runs in flight"; return 0; }
+    ((waited >= DRAIN_TIMEOUT)) && { warn "$n agent run(s) still running after ${DRAIN_TIMEOUT}s: restarting anyway"; return 0; }
+    ((waited % 60 == 0)) && info "waiting for $n agent run(s) to finish…"
+    sleep 10; waited=$((waited + 10))
+  done
+}
+
+# Runs "$@" holding the restart lock, with the kernel drained before and the offices resumed after (also on error).
+with_kernel_door() {
+  mkdir -p "$STATE_DIR"
+  exec 9>"$LOCK_FILE"
+  if ! flock -n 9; then
+    info "another session is restarting the kernel: waiting for it…"
+    flock 9
+  fi
+  resume_drained # a previous drain cut short
+  trap resume_drained EXIT
+  drain_kernel
+  "$@"
+  resume_drained
+  trap - EXIT
+}
+
 # ── logs / doctor ────────────────────────────────────────────────────────────
 
 cmd_logs() {
@@ -302,6 +395,16 @@ cmd_doctor() {
 # ── main ─────────────────────────────────────────────────────────────────────
 
 cmd="${1:-status}"; shift || true
+args=()
+for a in "$@"; do if [[ "$a" == --no-drain ]]; then NO_DRAIN=1; else args+=("$a"); fi; done
+set -- "${args[@]}"
+touches_kernel() {
+  if [[ "$cmd" == restart && $# -eq 0 ]]; then return 0; fi
+  [[ " $* " == *" kernel "* ]]
+}
+case "$cmd" in
+  restart|recreate) if touches_kernel "$@"; then with_kernel_door "cmd_$cmd" "$@"; exit 0; fi ;;
+esac
 case "$cmd" in
   status)   cmd_status ;;
   up|start) cmd_up "$@" ;;
@@ -310,6 +413,7 @@ case "$cmd" in
   stop|down) cmd_stop "$@" ;;
   logs|log) cmd_logs "$@" ;;
   doctor)   cmd_doctor ;;
+  resume-offices) resume_drained ;;
   -h|--help|help) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (status|up|restart|recreate|stop|logs|doctor)" ;;
+  *) die "unknown command '$cmd' (status|up|restart|recreate|stop|logs|doctor|resume-offices)" ;;
 esac

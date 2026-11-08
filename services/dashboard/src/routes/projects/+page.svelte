@@ -8,10 +8,13 @@
     from, and the optional data connection. Every field says what it is for.
   */
   import { onMount, tick } from 'svelte';
-  import { apiFetchRaw, readApiError } from '$lib/api.js';
-  import ViewHeader from '$shared/components/ViewHeader.svelte';
+  import { apiFetchRaw, readApiError, rpcPost } from '$lib/api.js';
   import Skeleton from '$shared/components/Skeleton.svelte';
   import BriefFields, { emptyBrief, type BriefDraft } from '$lib/components/projects/BriefFields.svelte';
+  import DeployAccounts from '$lib/components/projects/DeployAccounts.svelte';
+  import ForgeAccess from '$lib/components/projects/ForgeAccess.svelte';
+  import PendingApprovals from '$lib/components/projects/PendingApprovals.svelte';
+  import { goto } from '$app/navigation';
 
   type Status = 'active' | 'paused' | 'archived';
   interface Brief {
@@ -30,39 +33,98 @@
 
   /** What can be linked. `pick` kinds offer the accounts that really exist. */
   const LINK_KINDS = [
+    { id: 'website', kind: 'website', label: 'Sitio web', pick: false, hint: 'https://tusitio.com', help: 'Las direcciones del producto. Growth las audita para SEO, revisa qué ven los asistentes de IA y muestra sus visitas en vivo.', empty: '' },
     { id: 'email', kind: 'email_account', label: 'Correo', pick: true, hint: '', help: 'La casilla desde la que Ventas y Marketing escriben mails para este proyecto.', empty: 'No hay cuentas de correo. Agregá una desde Social → Comms.' },
     { id: 'linkedin', kind: 'social_account', label: 'LinkedIn', pick: true, hint: '', help: 'La cuenta desde la que Marketing publica posts.', empty: 'No hay cuentas de LinkedIn conectadas. Conectá una desde Social → LinkedIn.' },
     { id: 'whatsapp', kind: 'social_account', label: 'WhatsApp', pick: true, hint: '', help: 'Para escribirle a quien ya te dejó su número o te escribió. Nunca en frío.', empty: 'WhatsApp no está conectado. Vinculalo desde Ajustes → Canales.' },
-    { id: 'repo', kind: 'repo', label: 'Repositorio', pick: false, hint: 'Nombre del repo registrado', help: 'Código del producto, para que los agentes lo consulten.', empty: '' },
+    { id: 'github', kind: 'github_connection', label: 'GitHub', pick: true, hint: '', help: 'La cuenta de GitHub con la que la oficina y Growth leen y abren issues en los repos de este proyecto. Queda reservada: ningún otro proyecto la usa.', empty: 'No hay conexiones de GitHub. Creá una acá abajo.' },
+    { id: 'gitlab', kind: 'gitlab_connection', label: 'GitLab', pick: true, hint: '', help: 'La cuenta de GitLab con la que la oficina y Growth leen y abren issues en los repos de este proyecto. Queda reservada: ningún otro proyecto la usa.', empty: 'No hay conexiones de GitLab. Creá una acá abajo.' },
+    { id: 'repo', kind: 'repo', label: 'Repositorio', pick: true, hint: '', help: 'Código del producto, para que los agentes lo consulten.', empty: 'No hay repos registrados. Registralos en IA → Repos.' },
     { id: 'task_project', kind: 'task_project', label: 'Proyecto de tareas', pick: false, hint: 'Nombre del proyecto de tareas', help: 'Dónde las oficinas anotan tareas de este proyecto.', empty: '' },
     { id: 'workspace', kind: 'workspace', label: 'Workspace', pick: false, hint: 'Nombre del workspace', help: 'Carpeta compartida con material del proyecto.', empty: '' },
     { id: 'other', kind: 'social_account', label: 'Otra cuenta (avanzado)', pick: false, hint: 'tipo:id, ej. twitter:mi_cuenta', help: 'Referencia manual para una integración sin selector.', empty: '' },
   ];
 
-  let accountOptions: Record<string, Array<{ ref: string; label: string }>> = { email: [], linkedin: [], whatsapp: [] };
+  /** The tab's sections, in order: what each groups and what it is for. */
+  const GROUPS = [
+    { id: 'sites', title: 'Sitios web', icon: '🌐', kinds: ['website'], help: 'Las direcciones del producto. Growth las audita para SEO, revisa qué ven los asistentes de IA y muestra sus visitas en vivo.', empty: 'Sin sitios todavía. Agregá la dirección del producto.' },
+    { id: 'social', title: 'Correo y redes', icon: '✉', kinds: ['email', 'linkedin', 'whatsapp', 'other'], help: 'Desde dónde escriben y publican los agentes. Siempre como borrador para que lo apruebes.', empty: 'Sin cuentas. Vinculá el correo o la red desde la que querés que trabajen.' },
+    { id: 'code', title: 'Código', icon: '⌘', kinds: ['repo'], help: 'Los repos del producto, la cuenta con la que los agentes entran a GitLab o GitHub y el autor de sus commits.', empty: 'Sin repos todavía.' },
+    { id: 'work', title: 'Tareas y archivos', icon: '▤', kinds: ['task_project', 'workspace'], help: 'Dónde las oficinas anotan tareas y guardan material de este proyecto.', empty: 'Nada vinculado.' },
+  ] as const;
+  const groupOfLink = (l: Link) => {
+    if (l.kind === 'website') return 'sites';
+    if (l.kind === 'email_account' || l.kind === 'social_account') return 'social';
+    if (l.kind === 'repo' || l.kind === 'github_connection' || l.kind === 'gitlab_connection') return 'code';
+    return 'work';
+  };
+  /** GitLab/GitHub accounts have their own rows (ForgeAccess), not a line in the repo list. */
+  const FORGE_KINDS = ['gitlab_connection', 'github_connection'];
+  /** Each resource group is its own tab, so the whole project fits one screen without scrolling. */
+  type Tab = 'brief' | 'sites' | 'social' | 'code' | 'deploy' | 'work' | 'offices' | 'connector';
+  const RESOURCE_TABS: readonly Tab[] = ['sites', 'social', 'code', 'deploy', 'work'];
+  const kindsOf = (gid: string) => LINK_KINDS.filter((k) => (GROUPS.find((x) => x.id === gid)?.kinds as readonly string[] | undefined)?.includes(k.id));
+  /** The section whose "Agregar" form is open ('' = none); the sites section always shows its own input. */
+  let addOpen = '';
+  let newSite = '';
+  function openAdd(g: (typeof GROUPS)[number]) { addOpen = addOpen === g.id ? '' : g.id; linkKind = g.kinds[0]; linkRef = ''; }
+  const addSite = () => run(async () => {
+    if (!detail || !newSite.trim()) return;
+    for (const url of newSite.split(/[\s,]+/).filter(Boolean)) {
+      await call(`/api/projects/${detail.project.id}/links`, { method: 'POST', body: JSON.stringify({ kind: 'website', ref_id: url }) });
+    }
+    newSite = '';
+    await load();
+  }, 'Sitio agregado');
+  const siteText = (url: string) => url.replace(/^https:\/\//, '');
+
+  let accountOptions: Record<string, Array<{ ref: string; label: string }>> = { email: [], linkedin: [], whatsapp: [], github: [], gitlab: [], repo: [] };
+
+  interface ForgeConn { id: string; name: string; details: Record<string, string>; lastTestOk: boolean | null }
+  const forgeOptions = (r: { connections?: ForgeConn[] } | null) =>
+    (r?.connections ?? []).map((c) => ({
+      ref: c.id,
+      label: [c.name, c.details.host?.replace(/^https?:\/\//, ''), c.details.auth === 'token' ? 'token personal' : c.details.app_id ? 'GitHub App' : '', c.lastTestOk === false ? 'última prueba falló' : '']
+        .filter(Boolean).join(' · '),
+    }));
 
   async function loadAccountOptions() {
-    const [mail, li, wa] = await Promise.all([
+    const [mail, li, wa, gh, gl, rp] = await Promise.all([
       call('/api/email-accounts').catch(() => []),
       call('/api/linkedin/accounts').catch(() => ({ accounts: [] })),
       call('/api/channels/whatsapp/status').catch(() => null),
+      rpcPost('github.connections.list').catch(() => null),
+      rpcPost('gitlab.connections.list').catch(() => null),
+      rpcPost('repos.list', { limit: 500 }).catch(() => null),
     ]);
     accountOptions = {
       email: (Array.isArray(mail) ? mail : []).map((a: { id: string; label: string; email: string }) => ({ ref: `comms:${a.id}`, label: `${a.label} · ${a.email}` })),
       linkedin: (li?.accounts ?? []).filter((a: { status: string }) => a.status === 'active').map((a: { id: string; display_name: string }) => ({ ref: `linkedin:${a.id}`, label: a.display_name })),
       whatsapp: wa?.bridge_connected && wa?.jid ? [{ ref: 'whatsapp:default', label: `Número vinculado (${String(wa.jid).split('@')[0]})` }] : [],
+      github: forgeOptions(gh),
+      gitlab: forgeOptions(gl),
+      repo: ((rp?.repos ?? []) as Array<{ id: string; name: string; remote_url?: string; path?: string }>)
+        .map((x) => ({ ref: x.id, label: [x.name, (x.remote_url || x.path || '').replace(/^(https?:\/\/|git@)/, '').replace(/\.git$/, '')].filter(Boolean).join(' · ') })),
     };
   }
 
   /** A linked ref as a person reads it. */
   function linkLabel(l: Link, opts: Record<string, Array<{ ref: string; label: string }>>): { kind: string; text: string } {
-    for (const k of ['email', 'linkedin', 'whatsapp']) {
-      const hit = opts[k]?.find((o) => o.ref === l.ref_id);
+    const forge = LINK_KINDS.find((k) => k.kind === l.kind && (k.id === 'github' || k.id === 'gitlab'));
+    if (forge) return { kind: forge.label, text: opts[forge.id]?.find((o) => o.ref === l.ref_id)?.label ?? `Conexión de ${forge.label} (ya no existe)` };
+    for (const k of ['email', 'linkedin', 'whatsapp', 'repo']) {
+      // Older email links hold the bare account id, newer ones `comms:<id>`.
+      const hit = opts[k]?.find((o) => o.ref === l.ref_id || (k === 'email' && o.ref === `comms:${l.ref_id}`));
       if (hit) return { kind: LINK_KINDS.find((x) => x.id === k)!.label, text: hit.label };
     }
     if (l.ref_id.startsWith('comms:')) return { kind: 'Correo', text: 'Cuenta de correo (ya no existe)' };
     if (l.ref_id.startsWith('linkedin:')) return { kind: 'LinkedIn', text: 'Cuenta de LinkedIn (ya no existe)' };
     if (l.ref_id === 'whatsapp:default') return { kind: 'WhatsApp', text: 'Número vinculado (desconectado)' };
+    if (l.kind === 'website') return { kind: 'Sitio web', text: siteText(l.ref_id) };
+    if (l.kind === 'email_account') return { kind: 'Correo', text: l.ref_id.includes('@') ? l.ref_id : 'Cuenta de correo (ya no existe)' };
+    if (l.kind === 'repo' && /^[0-9a-f-]{36}$/.test(l.ref_id)) return { kind: 'Repositorio', text: 'Repo (ya no está registrado)' };
+    if (l.kind === 'workspace') return { kind: 'Workspace', text: l.ref_id };
+    if (l.kind === 'task_project') return { kind: 'Proyecto de tareas', text: l.ref_id };
     return { kind: LINK_KINDS.find((k) => k.kind === l.kind && !k.pick)?.label ?? l.kind, text: l.ref_id };
   }
 
@@ -72,7 +134,7 @@
   let error = '';
   let selectedId = '';
   let mode: 'view' | 'create' = 'view';
-  let tab: 'brief' | 'resources' | 'offices' | 'connector' = 'brief';
+  let tab: Tab = 'brief';
 
   let detail: { project: Project; links: Link[]; offices: OfficeRow[] } | null = null;
   let editName = '';
@@ -111,13 +173,30 @@
     return r.json();
   }
 
+  // ?project=<id>&tab=<tab> opens that project on that tab (Growth sends here to set up «Datos del producto»).
+  const TABS: readonly Tab[] = ['brief', ...RESOURCE_TABS, 'offices', 'connector'];
+  /** Older links (Growth's «Sitios y cuentas») say `resources`: that was the sites first. */
+  const tabFromLink = (t: string): Tab | null => (t === 'resources' ? 'sites' : (TABS as readonly string[]).includes(t) ? (t as Tab) : null);
+  let deepLink: { id: string; tab: string } | null = (() => {
+    try {
+      const u = new URL(window.location.href);
+      const id = u.searchParams.get('project') ?? '';
+      return id ? { id, tab: u.searchParams.get('tab') ?? '' } : null;
+    } catch { return null; }
+  })();
+
   async function load() {
     try {
       const [list, fl] = await Promise.all([call('/api/projects'), call('/api/agents/flows')]);
       projects = list.projects ?? [];
       flows = (Array.isArray(fl) ? fl : fl.flows ?? []).filter((f: Flow) => f.active !== 0);
       error = '';
-      if (mode === 'view') {
+      if (mode === 'view' && deepLink && projects.some((p) => p.id === deepLink!.id || p.slug === deepLink!.id)) {
+        const want = deepLink;
+        deepLink = null;
+        await select(projects.find((p) => p.id === want.id || p.slug === want.id)!.id);
+        tab = tabFromLink(want.tab) ?? tab;
+      } else if (mode === 'view') {
         if (selectedId && projects.some((p) => p.id === selectedId)) await select(selectedId, false);
         else if (projects.length) await select(projects[0].id);
         else detail = null;
@@ -230,10 +309,26 @@
 
   const addLink = () => run(async () => {
     if (!detail || !linkRef.trim()) return;
+    // A GitHub/GitLab connection has to reach this project's repos before it is linked.
+    if (kind.id === 'github' || kind.id === 'gitlab') {
+      await rpcPost(`${kind.id}.connections.check`, { id: linkRef, project_id: detail.project.id });
+    }
     await call(`/api/projects/${detail.project.id}/links`, { method: 'POST', body: JSON.stringify({ kind: kind.kind, ref_id: linkRef.trim() }) });
     linkRef = '';
     await load();
   }, 'Vinculado');
+
+  // ForgeAccess tests the account before it calls these; they only write the link and reload.
+  async function linkForge(kind: string, ref: string) {
+    if (!detail) return;
+    await call(`/api/projects/${detail.project.id}/links`, { method: 'POST', body: JSON.stringify({ kind, ref_id: ref }) });
+    await Promise.all([load(), loadAccountOptions()]);
+  }
+  async function unlinkForge(kind: string, ref: string) {
+    if (!detail) return;
+    await call(`/api/projects/${detail.project.id}/links?kind=${encodeURIComponent(kind)}&ref_id=${encodeURIComponent(ref)}`, { method: 'DELETE' });
+    await load();
+  }
 
   const removeLink = (l: Link) => run(async () => {
     if (!detail) return;
@@ -315,11 +410,12 @@
   $: if (kind.pick && !options.some((o) => o.ref === linkRef)) linkRef = options[0]?.ref ?? '';
   let lastKind = linkKind;
   $: if (linkKind !== lastKind) { lastKind = linkKind; if (!kind.pick) linkRef = ''; }
-  $: if (tab === 'resources') void loadAccountOptions();
+  $: if (RESOURCE_TABS.includes(tab)) void loadAccountOptions();
+  $: linksIn = (gid: string) => (detail?.links ?? []).filter((l) => groupOfLink(l) === gid && !FORGE_KINDS.includes(l.kind)).length;
   $: steps = detail
     ? [
         { done: true, label: 'Ficha del proyecto', go: () => (tab = 'brief') },
-        { done: detail.links.length > 0, label: 'Vincular una cuenta', go: () => (tab = 'resources') },
+        { done: detail.links.length > 0, label: 'Vincular una cuenta', go: () => (tab = 'social') },
         { done: officeOn.size > 0, label: 'Asignar una oficina', go: () => (tab = 'offices') },
         { done: !!detail.project.connector_url, label: 'Conectar datos', optional: true, go: () => (tab = 'connector') },
       ]
@@ -329,9 +425,7 @@
 
 <svelte:window on:click={() => (menuFor = '')} />
 
-<ViewHeader title="Proyectos" sub="Los productos o negocios para los que trabajan tus oficinas de agentes" />
-
-<div class="pj">
+<div class="pj k-form">
 {#if error}<div class="banner err" role="alert">{error}</div>{/if}
 
 <div class="layout">
@@ -361,7 +455,10 @@
                 {(p.offices ?? []).filter((o) => o.active).length || 'sin'} oficina{(p.offices ?? []).filter((o) => o.active).length === 1 ? '' : 's'}
               </small>
             </span>
-            <span class="num pending" class:hot={(p.pending_drafts ?? 0) > 0} title="Borradores esperando tu aprobación">{p.pending_drafts ?? 0}<small>por aprobar</small></span>
+            <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+            <span class="num pending" class:hot={(p.pending_drafts ?? 0) > 0}
+              title={(p.pending_drafts ?? 0) > 0 ? 'Borradores que prepararon los agentes y esperan tu OK: tocá para revisarlos en Aprobaciones' : 'Nada esperando tu aprobación'}
+              on:click={(e) => { if ((p.pending_drafts ?? 0) > 0) { e.stopPropagation(); void goto(`/outbox?project=${encodeURIComponent(p.id)}`); } }}>{p.pending_drafts ?? 0}<small>por aprobar</small></span>
             <span class="num leads" title="Leads de este proyecto">{p.leads ?? 0}<small>leads</small></span>
           </button>
           <button class="more" aria-label="Más acciones para {p.name}" on:click|stopPropagation={() => (menuFor = menuFor === p.id ? '' : p.id)}>⋯</button>
@@ -422,6 +519,8 @@
         {#if notice}<span class="notice" aria-live="polite">✓ {notice}</span>{/if}
       </div>
 
+      <PendingApprovals projectId={detail.project.id} offices={detail.offices} />
+
       {#if pendingSteps > 0}
         <ol class="steps" aria-label="Próximos pasos">
           {#each steps as s, i}
@@ -441,9 +540,14 @@
 
       <div class="tabs" role="tablist">
         <button role="tab" aria-selected={tab === 'brief'} class:on={tab === 'brief'} on:click={() => (tab = 'brief')}>Ficha</button>
-        <button role="tab" aria-selected={tab === 'resources'} class:on={tab === 'resources'} on:click={() => (tab = 'resources')}>Cuentas y recursos <small>{detail.links.length}</small></button>
+        {#each GROUPS as g (g.id)}
+          <button role="tab" aria-selected={tab === g.id} class:on={tab === g.id} on:click={() => (tab = g.id)}>{g.title} <small>{linksIn(g.id)}</small></button>
+          {#if g.id === 'code'}
+            <button role="tab" aria-selected={tab === 'deploy'} class:on={tab === 'deploy'} on:click={() => (tab = 'deploy')}>Despliegue</button>
+          {/if}
+        {/each}
         <button role="tab" aria-selected={tab === 'offices'} class:on={tab === 'offices'} on:click={() => (tab = 'offices')}>Oficinas <small>{officeOn.size}</small></button>
-        <button role="tab" aria-selected={tab === 'connector'} class:on={tab === 'connector'} on:click={() => (tab = 'connector')}>Datos del producto <small>opcional</small></button>
+        <button role="tab" aria-selected={tab === 'connector'} class:on={tab === 'connector'} on:click={() => (tab = 'connector')}>Datos del producto</button>
       </div>
 
       {#if tab === 'brief'}
@@ -455,41 +559,76 @@
           <BriefFields bind:this={editFields} bind:brief={editBrief} productName={editName} idPrefix="edit" />
           <div class="actions"><button class="btn primary" disabled={saving}>{saving ? 'Guardando…' : 'Guardar ficha'}</button></div>
         </form>
-      {:else if tab === 'resources'}
-        <p class="help">Las cuentas y recursos de <b>{detail.project.name}</b>. Los agentes solo publican o escriben desde lo que vincules acá, y siempre como borrador para que lo apruebes.</p>
-        <form class="link-form" on:submit|preventDefault={addLink}>
-          <div class="field">
-            <label for="link-kind">Tipo</label>
-            <select id="link-kind" bind:value={linkKind}>
-              {#each LINK_KINDS as k}<option value={k.id}>{k.label}</option>{/each}
-            </select>
-          </div>
-          <div class="field grow">
-            <label for="link-ref">{kind.pick ? 'Cuenta' : 'Nombre o referencia'}</label>
-            {#if kind.pick}
-              {#if options.length}
-                <select id="link-ref" bind:value={linkRef}>
-                  {#each options as o}<option value={o.ref}>{o.label}</option>{/each}
-                </select>
-              {:else}
-                <p class="no-acc" id="link-ref">{kind.empty}</p>
-              {/if}
-            {:else}
-              <input id="link-ref" bind:value={linkRef} placeholder={kind.hint} />
+      {:else if tab === 'deploy'}
+        <section class="res-group" id="res-deploy">
+          <DeployAccounts projectId={detail.project.id} projectName={detail.project.name} except={['git']} title="Despliegue y servicios" />
+        </section>
+      {:else if RESOURCE_TABS.includes(tab)}
+        {#each GROUPS.filter((x) => x.id === tab) as g (g.id)}
+          {@const mine = detail.links.filter((l) => groupOfLink(l) === g.id && !FORGE_KINDS.includes(l.kind))}
+          <section class="res-group" class:dense={g.id === 'code'} id="res-{g.id}">
+            <header class="res-head">
+              <p class="help">{g.help}</p>
+              {#if g.id !== 'sites'}<button class="btn sm" on:click={() => openAdd(g)} aria-expanded={addOpen === g.id}>{addOpen === g.id ? 'Cerrar' : '+ Agregar'}</button>{/if}
+            </header>
+            {#if g.id === 'sites'}
+              <form class="link-form" on:submit|preventDefault={addSite}>
+                <div class="field grow">
+                  <label for="new-site" class="sr">Dirección del sitio</label>
+                  <input id="new-site" bind:value={newSite} placeholder="https://tusitio.com" autocomplete="off" />
+                </div>
+                <button class="btn" disabled={saving || !newSite.trim()}>Agregar sitio</button>
+              </form>
+            {:else if addOpen === g.id}
+              <form class="link-form" on:submit|preventDefault={addLink}>
+                {#if g.kinds.length > 1}
+                  <div class="field">
+                    <label for="link-kind-{g.id}">Tipo</label>
+                    <select id="link-kind-{g.id}" bind:value={linkKind}>
+                      {#each kindsOf(g.id) as k}<option value={k.id}>{k.label}</option>{/each}
+                    </select>
+                  </div>
+                {/if}
+                <div class="field grow">
+                  <label for="link-ref-{g.id}">{kind.pick ? 'Cuenta' : 'Nombre o referencia'}</label>
+                  {#if kind.pick}
+                    {#if options.length}
+                      <select id="link-ref-{g.id}" bind:value={linkRef}>
+                        {#each options as o}<option value={o.ref}>{o.label}</option>{/each}
+                      </select>
+                    {:else}
+                      <p class="no-acc" id="link-ref-{g.id}">{kind.empty}</p>
+                    {/if}
+                  {:else}
+                    <input id="link-ref-{g.id}" bind:value={linkRef} placeholder={kind.hint} />
+                  {/if}
+                </div>
+                <button class="btn" disabled={saving || !linkRef.trim()}>Vincular</button>
+              </form>
+              <p class="help">{kind.help}</p>
             {/if}
-          </div>
-          <button class="btn" disabled={saving || !linkRef.trim()}>Vincular</button>
-        </form>
-        <p class="help">{kind.help}</p>
-        <ul class="links">
-          {#each detail.links as l}
-            {@const ll = linkLabel(l, accountOptions)}
-            <li><span class="chip">{ll.kind}</span><span class="ref" title={l.ref_id}>{ll.text}</span>
-              <button class="x" aria-label="Desvincular {l.ref_id}" on:click={() => removeLink(l)}>×</button></li>
-          {:else}
-            <li class="no-links">Todavía no vinculaste nada. Empezá por la red social o el correo desde el que querés que trabajen los agentes.</li>
-          {/each}
-        </ul>
+            <ul class="links">
+              {#each mine as l (l.kind + l.ref_id)}
+                {@const ll = linkLabel(l, accountOptions)}
+                <li>
+                  {#if g.id !== 'sites' && g.id !== 'code'}<span class="chip">{ll.kind}</span>{/if}
+                  {#if l.kind === 'website'}<a class="ref" href={l.ref_id} target="_blank" rel="noopener noreferrer">{ll.text} ↗</a>{:else}<span class="ref" title={l.ref_id}>{ll.text}</span>{/if}
+                  <button class="x" aria-label="Quitar {ll.text}" title="Quitar" on:click={() => removeLink(l)}>×</button>
+                </li>
+              {:else}
+                <li class="no-links">{g.empty}</li>
+              {/each}
+            </ul>
+            {#if g.id === 'code'}
+              <div class="code-side">
+                <ForgeAccess projectId={detail.project.id} projectSlug={detail.project.slug} projectName={detail.project.name}
+                  links={detail.links} options={{ gitlab: accountOptions.gitlab, github: accountOptions.github }} link={linkForge} unlink={unlinkForge} />
+                <DeployAccounts projectId={detail.project.id} projectName={detail.project.name} only={['git']} title="Autor de los commits"
+                  help="Con qué nombre y email firman los agentes sus commits y, si hace falta, una clave SSH de deploy sin passphrase (su parte pública va como Deploy key con escritura en los repos)." />
+              </div>
+            {/if}
+          </section>
+        {/each}
       {:else if tab === 'offices'}
       <div class="offices-box">
         <h3>¿Qué oficinas trabajan para {detail.project.name}?</h3>
@@ -568,7 +707,9 @@
 <style>
   /* The page's own palette. The active theme may flatten --teal & co. to grey;
      these hues stay warm and alive whatever theme is on. */
+  /* Full-bleed view (+layout FULL_BLEED_VIEWS): the page brings its own thin margin and fills the height. */
   .pj {
+    display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 6px;
     --pj-life: #34D399; --pj-life-2: #2DD4BF; --pj-on-life: #052E22;
     --pj-sun: #FBBF24; --pj-sky: #38BDF8; --pj-coral: #FB7185; --pj-violet: #A78BFA;
     --pj-h0: #34D399; --pj-h1: #38BDF8; --pj-h2: #FBBF24; --pj-h3: #FB7185; --pj-h4: #A78BFA; --pj-h5: #A3E635;
@@ -577,21 +718,21 @@
   }
   .banner { border-radius: var(--radius-sm); padding: 9px 12px; margin-bottom: 10px; font-size: 13.5px; }
   .banner.err { background: color-mix(in srgb, var(--pj-coral) 10%, transparent); border: 1px solid var(--pj-coral); color: var(--pj-coral); }
-  .layout { display: grid; grid-template-columns: minmax(320px, 34%) 1fr; gap: 16px; height: calc(100vh - 150px); min-height: 0; }
+  .layout { display: grid; grid-template-columns: minmax(280px, 27%) 1fr; gap: 10px; flex: 1; min-height: 0; }
   section { background: var(--panel, var(--surface-1)); border: 1px solid var(--border); border-radius: 14px; min-height: 0; overflow: auto; }
-  .list { padding: 12px 10px; background: linear-gradient(180deg, color-mix(in srgb, var(--pj-life) 7%, var(--surface-1)), var(--surface-1) 160px); }
-  .detail { padding: 20px 24px; }
+  .list { padding: 8px 6px; background: linear-gradient(180deg, color-mix(in srgb, var(--pj-life) 7%, var(--surface-1)), var(--surface-1) 160px); }
+  .detail { padding: 10px 12px; }
   h2 { margin: 0; font-family: var(--font-display); font-size: 18px; color: var(--text-1); font-weight: 600; }
-  .list-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 4px 12px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+  .list-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 4px 8px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
   .list-head h2 { font-size: 15px; display: flex; align-items: center; gap: 8px; }
   .count { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--pj-life) 18%, transparent); color: var(--pj-life); font-size: 12px; font-weight: 700; }
   ul { list-style: none; margin: 0; padding: 0; }
-  .list li { position: relative; display: flex; align-items: center; border-radius: 10px; margin-bottom: 4px; border: 1px solid transparent; transition: background 150ms ease-out, border-color 150ms ease-out; }
+  .list li { position: relative; display: flex; align-items: center; border-radius: 10px; margin-bottom: 2px; border: 1px solid transparent; transition: background 150ms ease-out, border-color 150ms ease-out; }
   .list li:hover { background: color-mix(in srgb, var(--hue) 6%, transparent); }
   .list li.sel { background: color-mix(in srgb, var(--hue) 11%, var(--surface-1)); border-color: color-mix(in srgb, var(--hue) 45%, transparent); box-shadow: inset 3px 0 0 var(--hue); }
-  .row { flex: 1; display: grid; grid-template-columns: 36px 1fr 66px 50px; align-items: center; gap: 10px; min-height: 56px; padding: 7px 8px 7px 10px; background: none; border: 0; color: var(--text-1); text-align: left; cursor: pointer; font: inherit; border-radius: 10px; }
+  .row { flex: 1; display: grid; grid-template-columns: 34px 1fr 60px 44px; align-items: center; gap: 8px; min-height: 50px; padding: 5px 6px 5px 8px; background: none; border: 0; color: var(--text-1); text-align: left; cursor: pointer; font: inherit; border-radius: 10px; }
   .avatar { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; font-family: var(--font-display); font-weight: 700; font-size: 13.5px; color: var(--hue); background: color-mix(in srgb, var(--hue) 16%, transparent); border: 1px solid color-mix(in srgb, var(--hue) 35%, transparent); }
-  .avatar.big { width: 48px; height: 48px; border-radius: 13px; font-size: 17px; flex: none; }
+  .avatar.big { width: 40px; height: 40px; border-radius: 11px; font-size: 15px; flex: none; }
   .name { display: flex; flex-direction: column; gap: 3px; font-size: 14.5px; font-weight: 600; min-width: 0; }
   .name small { display: flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 12px; font-weight: 400; }
   .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 999px; line-height: 1.6; vertical-align: middle; }
@@ -601,7 +742,9 @@
   .st-archived { color: var(--text-3); background: var(--surface-2); }
   .num { display: flex; flex-direction: column; align-items: flex-end; font-variant-numeric: tabular-nums; font-size: 16px; font-weight: 700; color: var(--text-2); }
   .num small { color: var(--text-3); font-size: 10.5px; font-weight: 400; }
-  .num.pending.hot { color: var(--pj-sun); }
+  .num.pending.hot { color: var(--pj-sun); cursor: pointer; border-radius: 8px; transition: background 150ms; }
+  .num.pending.hot:hover { background: color-mix(in srgb, var(--pj-sun) 14%, transparent); }
+  .num.pending.hot:hover small { text-decoration: underline; }
   .num.leads { color: var(--pj-sky); }
   .cdot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); display: inline-block; }
   .cdot.ok { background: var(--pj-life); } .cdot.warn { background: var(--pj-sun); } .cdot.bad { background: var(--pj-coral); } .cdot.off { display: none; }
@@ -619,12 +762,11 @@
   .btn:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
   .link { background: none; border: 0; padding: 0; color: var(--pj-life); font: inherit; font-size: 12.5px; cursor: pointer; }
   .link:hover { text-decoration: underline; }
-  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
   .field.grow { flex: 1; }
   label { font-size: 14px; font-weight: 600; color: var(--text-1); }
   .req { color: var(--pj-coral); }
-  input, select { background: var(--bg); border: 1px solid var(--border-h); border-radius: 9px; color: var(--text-1); padding: 9px 11px; font: inherit; font-size: 14px; min-height: 40px; transition: border-color 150ms ease-out, box-shadow 150ms ease-out; }
-  input:focus, select:focus { outline: none; border-color: var(--pj-life); box-shadow: 0 0 0 3px color-mix(in srgb, var(--pj-life) 22%, transparent); }
+  /* Fields take the shared .k-form look (app.css), the same one the account forms inside use. */
   button:focus-visible, summary:focus-visible { outline: 2px solid var(--pj-life); outline-offset: 2px; }
   input[aria-invalid='true'] { border-color: var(--pj-coral); }
   .help { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--text-2); }
@@ -639,31 +781,52 @@
   .slug-edit label { font-size: 12.5px; font-weight: 500; color: var(--text-2); }
   .slug-edit input { flex: 1; min-height: 34px; padding: 6px 9px; font-family: var(--font-mono); font-size: 13px; }
   .actions { display: flex; justify-content: flex-end; gap: 10px; }
-  .stack { display: flex; flex-direction: column; gap: 16px; max-width: 760px; }
-  .dhead { display: flex; align-items: center; gap: 14px; margin: -20px -24px 16px; padding: 18px 24px; background: linear-gradient(120deg, color-mix(in srgb, var(--hue) 16%, transparent), transparent 70%); border-bottom: 1px solid color-mix(in srgb, var(--hue) 25%, var(--border)); }
+  .stack { display: flex; flex-direction: column; gap: 8px; max-width: 760px; }
+  .dhead { display: flex; align-items: center; gap: 10px; margin: -10px -12px 6px; padding: 6px 12px; background: linear-gradient(120deg, color-mix(in srgb, var(--hue) 16%, transparent), transparent 70%); border-bottom: 1px solid color-mix(in srgb, var(--hue) 25%, var(--border)); }
   .dtitle { flex: 1; min-width: 0; }
-  .dtitle h2 { display: flex; align-items: center; gap: 10px; font-size: 20px; }
+  .dtitle h2 { display: flex; align-items: center; gap: 10px; font-size: 18px; }
+  .dtitle .small { margin-top: 2px; }
   .notice { color: var(--pj-life); font-size: 13px; font-weight: 600; background: color-mix(in srgb, var(--pj-life) 12%, transparent); padding: 4px 10px; border-radius: 999px; }
-  .steps { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; padding: 8px; margin: 0 0 14px; background: color-mix(in srgb, var(--pj-sun) 6%, var(--surface-1)); border: 1px solid color-mix(in srgb, var(--pj-sun) 25%, var(--border)); border-radius: 12px; }
+  .steps { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; padding: 4px; margin: 0 0 8px; background: color-mix(in srgb, var(--pj-sun) 6%, var(--surface-1)); border: 1px solid color-mix(in srgb, var(--pj-sun) 25%, var(--border)); border-radius: 12px; }
   .steps button { display: flex; align-items: center; gap: 8px; background: none; border: 0; color: var(--text-1); font: inherit; font-size: 13.5px; cursor: pointer; padding: 6px 10px; border-radius: 8px; }
   .steps button:hover:not(:disabled) { background: color-mix(in srgb, var(--pj-sun) 12%, transparent); }
   .steps em { color: var(--text-3); font-style: normal; font-size: 12px; }
   .mark { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--pj-sun); color: var(--pj-sun); font-size: 12px; font-weight: 700; }
   .steps li.is-done .mark { background: var(--pj-life); border-color: var(--pj-life); color: var(--pj-on-life); }
-  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 18px; }
-  .tabs button { position: relative; background: none; border: 0; color: var(--text-2); padding: 10px 14px; cursor: pointer; font: inherit; font-size: 14px; border-radius: 8px 8px 0 0; transition: color 150ms ease-out, background 150ms ease-out; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+  .tabs button { position: relative; background: none; border: 0; color: var(--text-2); padding: 7px 10px; cursor: pointer; font: inherit; font-size: 13.5px; border-radius: 8px 8px 0 0; white-space: nowrap; transition: color 150ms ease-out, background 150ms ease-out; }
   .tabs button:hover { color: var(--text-1); background: var(--surface-2); }
   .tabs button.on { color: var(--text-1); font-weight: 600; }
   .tabs button.on::after { content: ''; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 3px; border-radius: 3px 3px 0 0; background: var(--pj-grad); }
   .tabs small { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 4px; border-radius: 999px; background: var(--surface-3); color: var(--text-2); font-size: 11px; font-weight: 600; }
   .tabs button.on small { background: color-mix(in srgb, var(--pj-life) 18%, transparent); color: var(--pj-life); }
-  .link-form { display: flex; gap: 10px; align-items: flex-end; margin: 12px 0 6px; max-width: 760px; }
+  .link-form { display: flex; gap: 8px; align-items: flex-end; margin: 8px 0 4px; max-width: 760px; }
   .link-form select { min-width: 170px; }
-  .links { margin-top: 12px; max-width: 760px; display: flex; flex-direction: column; gap: 6px; }
-  .links li { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1); }
+  .res-group { margin-top: 0; padding: 8px 10px; max-width: none; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-1); overflow: visible; }
+  .res-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+  .res-head .help { max-width: 760px; }
+  /* Code: the repos on the left, the forge account and the commit author on the right. */
+  .code-side { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+  @media (min-width: 1280px) {
+    .res-group.dense { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 10px; align-items: start; }
+    .res-group.dense > * { grid-column: 1; }
+    .res-group.dense > .res-head { grid-column: 1 / -1; }
+    .res-group.dense > .code-side { grid-column: 2; grid-row: 2 / span 4; margin-top: 4px; }
+  }
+  .btn.sm { min-height: 30px; padding: 4px 12px; font-size: 12.5px; }
+  .res-group .links { margin-top: 6px; }
+  a.ref { color: var(--pj-sky); text-decoration: none; }
+  a.ref:hover { text-decoration: underline; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .links { margin-top: 8px; max-width: 760px; display: flex; flex-direction: column; gap: 4px; }
+  .links li { display: flex; align-items: center; gap: 8px; padding: 3px 4px 3px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1); }
   .links .no-links { color: var(--text-2); font-size: 13.5px; border-style: dashed; padding: 14px; background: none; }
   .chip { font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; color: var(--pj-sky); background: color-mix(in srgb, var(--pj-sky) 14%, transparent); white-space: nowrap; }
   .ref { flex: 1; font-size: 14px; color: var(--text-1); }
+  /* Repos: one line each (name · remote), the full text on hover. */
+  .res-group.dense .links { gap: 4px; }
+  .res-group.dense .links li { padding: 3px 4px 3px 10px; min-height: 32px; }
+  .res-group.dense .ref { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .no-acc { margin: 0; min-height: 40px; display: flex; align-items: center; font-size: 13px; color: var(--text-2); }
   .x { background: none; border: 0; color: var(--text-3); cursor: pointer; font-size: 18px; width: 36px; height: 36px; border-radius: 8px; }
   .x:hover { color: var(--pj-coral); background: color-mix(in srgb, var(--pj-coral) 10%, transparent); }
@@ -695,6 +858,6 @@
   .how { list-style: none; padding: 0; margin: 6px 0; display: flex; flex-direction: column; gap: 10px; text-align: left; width: 100%; }
   .how li { display: flex; gap: 12px; align-items: center; font-size: 14px; color: var(--text-1); background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
   .how span { display: inline-grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 50%; background: var(--pj-grad); color: var(--pj-on-life); font-weight: 700; font-size: 13px; }
-  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; height: auto; } .link-form { flex-wrap: wrap; } }
+  @media (max-width: 900px) { .pj { flex: none; } .layout { grid-template-columns: 1fr; } .link-form { flex-wrap: wrap; } }
   @media (prefers-reduced-motion: reduce) { .btn, .list li, .tabs button, .toggle, input, select { transition: none; } .btn:active:not(:disabled) { transform: none; } }
 </style>

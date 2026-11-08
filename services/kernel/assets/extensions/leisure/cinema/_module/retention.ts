@@ -43,7 +43,7 @@ function urlIdentifier(col: string): string {
  * belong to. Malformed directory JSON contributes nothing instead of failing
  * the whole run.
  */
-const PROTECTED_CTE = `
+export const PROTECTED_CTE = `
   WITH touched(identifier) AS (
     SELECT identifier FROM cinema_titles
      WHERE watchlist <> 0 OR watched_at IS NOT NULL OR user_rating <> 0

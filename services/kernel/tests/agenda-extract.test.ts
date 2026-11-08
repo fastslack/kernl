@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { parseAgendaItems } from "../assets/extensions/people/comms/_module/agenda-extract.js";
+import { parseAgendaItems, agendaPromptRules } from "../assets/extensions/people/comms/_module/agenda-extract.js";
 
 const NOW = "2026-09-25T23:50:00"; // viernes
 
@@ -70,5 +70,22 @@ describe("parseAgendaItems", () => {
     const out = parseAgendaItems([{ kind: "event", title: "Day Off", start_at: "2026-10-02T10:00", all_day: true, confidence: "high", evidence: "x" }], NOW);
     expect(out[0].start_at).toBe("2026-10-02");
     expect(out[0].all_day).toBe(true);
+  });
+});
+
+// 07/11: titles came out in Dutch («Controleer je pensioenoverzicht»), a SafeKey code became an overdue task,
+// and a ferry booking whose date was in the attached e-ticket never made it to the calendar.
+describe("agendaPromptRules", () => {
+  it("asks for titles in the operator's language, translated when the mail is in another one", () => {
+    const r = agendaPromptRules("español");
+    expect(r).toContain("written in español");
+    expect(r).toMatch(/translate/i);
+    expect(r).not.toContain("in the mail's language");
+  });
+  it("rules out verification codes and keeps bookings with an attachment", () => {
+    const r = agendaPromptRules("español");
+    expect(r).toMatch(/verification codes|one-time/i);
+    expect(r).toMatch(/booking|ticket/i);
+    expect(r).toMatch(/attach/i);
   });
 });

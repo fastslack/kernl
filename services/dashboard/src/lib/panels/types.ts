@@ -22,5 +22,5 @@ export interface PanelView {
   card?: { title: string; subtitle?: string; badges?: string[]; links?: Array<{ label: Text; href: string }> };
   detail?: string; sections?: string[]; actions?: string[]; action?: string; time?: string; text?: string;
 }
-export interface PanelAction { type: 'letter' | 'run' | 'record' | 'schedule'; label: Text; input?: LiteSchema; confirm?: Text }
+export interface PanelAction { type: 'letter' | 'run' | 'record' | 'schedule'; label: Text; input?: LiteSchema; confirm?: Text; /** record: the key template ("up:{{key}}"). */ key?: string }
 export interface PanelSpec { version: 1; sources: Record<string, { type: string }>; views: PanelView[]; anchors?: Array<{ object: string; view: string }>; actions?: Record<string, PanelAction> }

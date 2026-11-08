@@ -9,6 +9,8 @@
   import { groupProviders, pick, type CatalogProvider } from '$lib/llm-connect.js';
 
   export let providers: CatalogProvider[] = [];
+  /** Claude Code is connected and the kernel keeps several accounts: its tile adds one more. */
+  export let anotherClaude = false;
 
   const dispatch = createEventDispatcher<{ select: string }>();
   $: groups = groupProviders(providers);
@@ -39,10 +41,10 @@
                 >
                   <img class="pg-logo" src={p.logo} alt="" width="32" height="32" loading="lazy" />
                   <span class="pg-text">
-                    <span class="pg-name">{p.name}</span>
+                    <span class="pg-name">{anotherClaude && p.slug === 'claude-code' ? $t('llm.acc.another') : p.name}</span>
                     <span class="pg-tag">{pick(p.tag, $locale)}</span>
                   </span>
-                  {#if p.connected}
+                  {#if p.connected && !(anotherClaude && p.slug === 'claude-code')}
                     <span class="pg-badge on">
                       <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                       {$t('llm.connected')}

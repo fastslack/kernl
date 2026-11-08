@@ -339,6 +339,7 @@ const worksProjector: Projector = {
                 downloads, week_downloads, num_reviews, avg_rating
            FROM cinema_works
           WHERE work_key > ?
+            AND primary_identifier NOT IN (SELECT identifier FROM cinema_graph_out)
        ORDER BY work_key
           LIMIT ?`,
       )
@@ -408,6 +409,7 @@ const membersProjector: Projector = {
            LEFT JOIN cinema_titles t
              ON t.identifier = m.identifier AND t.deleted_at IS NULL
           WHERE m.identifier > ?
+            AND m.identifier NOT IN (SELECT identifier FROM cinema_graph_out)
        ORDER BY m.identifier
           LIMIT ?`,
       )
@@ -457,6 +459,7 @@ const facetsProjector: Projector = {
         `SELECT identifier, creator, subject_json, collection_json
            FROM cinema_titles
           WHERE identifier > ? AND deleted_at IS NULL
+            AND identifier NOT IN (SELECT identifier FROM cinema_graph_out)
        ORDER BY identifier
           LIMIT ?`,
       )
@@ -558,6 +561,7 @@ const matchesProjector: Projector = {
             AND m.state IN ('auto','confirmed')
             AND m.qid <> ''
             AND t.deleted_at IS NULL
+            AND m.identifier NOT IN (SELECT identifier FROM cinema_graph_out)
        ORDER BY m.identifier
           LIMIT ?`,
       )

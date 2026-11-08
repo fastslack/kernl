@@ -32,6 +32,7 @@ import {
   type SqliteDb,
   type AgentDriver,
   type RetentionPolicy,
+  type GraphBudget,
   log,
 } from "@kernl/extension-sdk";
 import { cinemaMigrations } from "./migrations/001_cinema_titles.js";
@@ -59,6 +60,7 @@ import { MediaProbeRunner } from "./media-runner.js";
 import { ingestNextChunk } from "./ingester.js";
 import { cinemaAgentDrivers } from "./agent-drivers.js";
 import { cinemaRetentionPolicies } from "./retention.js";
+import { cinemaGraphBudget } from "./graph-budget.js";
 import path from "node:path";
 
 export interface CinemaModule extends ExtensibleModule {
@@ -329,6 +331,11 @@ export function createCinemaModule(): CinemaModule {
     /** Catalogue retention (opt-in): untouched archive.org titles. */
     getRetentionPolicies(): RetentionPolicy[] {
       return cinemaRetentionPolicies();
+    },
+
+    /** Its share of the graph, bounded on System › Storage (graph-budget.ts). */
+    getGraphBudgets(): GraphBudget[] {
+      return [cinemaGraphBudget()];
     },
 
     getAgentDrivers(): AgentDriver[] {

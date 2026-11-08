@@ -4,6 +4,7 @@ import { textResult, errorResult } from "../../core/helpers.js";
 import { getRequestContext } from "../../core/request-context.js";
 import type { ToolDefinition } from "../../core/types.js";
 import type { OutboxService } from "./outbox-service.js";
+import { PROJECT_LINK_KINDS } from "./types.js";
 
 /** How the projects module sees a run — injected, it never imports agents. */
 export type RunLookup = (runId: string) => { project_id: string | null; agent_id: string } | undefined;
@@ -78,7 +79,7 @@ export function projectTools(
   outbox: OutboxService,
   connector: import("./connector-service.js").ConnectorService,
 ): ToolDefinition[] {
-  const LinkKind = z.enum(["repo", "social_account", "email_account", "task_project", "workspace"]);
+  const LinkKind = z.enum(PROJECT_LINK_KINDS);
   const fail = (err: unknown) => errorResult(err instanceof Error ? err.message : String(err));
   return [
     defineTool({
@@ -138,7 +139,8 @@ export function projectTools(
     }),
     defineTool({
       name: "kernel_projects_link",
-      description: "Link an existing resource (social/email account, repo, task project, workspace) to a project.",
+      description: "Link an existing resource (social/email account, repo, task project, workspace, GitHub or GitLab connection) to a project. " +
+        "A GitHub/GitLab connection linked to a project is reserved for it: its repos use that one, and no other project's repo can.",
       schema: z.object({ project: z.string(), kind: LinkKind, ref_id: z.string() }),
       handler: async (input) => {
         const p = projects.get(input.project);

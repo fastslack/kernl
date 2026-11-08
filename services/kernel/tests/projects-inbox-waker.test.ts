@@ -43,6 +43,21 @@ describe("inbox waker and projects", () => {
   });
   afterEach(() => { db.close(); rmSync(root, { recursive: true, force: true }); });
 
+  // 20/10: switching the Acme office off left host-ops' letters waking its agents: the switch must hold them.
+  it("an office switched off is not woken by its letters, which wait for it to come back on", async () => {
+    const flowId = agents.getAgent(to)!.flow_id;
+    agents.setFlowPaused(flowId, true);
+    letter("held", null, 30);
+    await (waker as unknown as { onInboxPost(p: unknown): Promise<void> }).onInboxPost({
+      message_id: "m-held", to_agent_id: to, from_agent_id: from, subject: "held", project_id: null,
+    });
+    expect(await waker.sweep()).toBe(0);
+    expect(agents.listRuns({ agent_id: to })).toHaveLength(0);
+    expect(db.prepare("SELECT status, wake_attempts FROM agent_office_inbox WHERE id = 'm-held'").get()).toMatchObject({ status: "unread", wake_attempts: 0 });
+    agents.setFlowPaused(flowId, false);
+    expect(await waker.sweep()).toBe(1);
+  });
+
   it("a post-triggered wake runs for the letter's project", async () => {
     letter("lead", acme, 0);
     await (waker as unknown as { onInboxPost(p: unknown): Promise<void> }).onInboxPost({

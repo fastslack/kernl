@@ -1,5 +1,6 @@
 import { log } from "../../../core/logger.js";
 import * as providerHealth from "../../../core/llm/provider-health.js";
+import { getCatalogEntry } from "../../../core/llm/provider-catalog.js";
 import type { ChatLlmProvider } from "../../../core/llm/chat-adapters.js";
 
 /**
@@ -52,6 +53,8 @@ export interface ModelChainInput {
   defaultProvider: string;
   /** How many tools this run will send — gates tool-incapable providers. */
   toolCount: number;
+  /** No last-resort provider: the chain given is the only place the run may go. */
+  strict?: boolean;
 }
 
 /**
@@ -72,7 +75,7 @@ export interface ModelChainInput {
  * gets the exact error message to fail the run with.
  */
 export function buildModelChain(input: ModelChainInput): ModelChainResolution {
-  const { agentName, agentChain, globalChain, providers, defaultProvider, toolCount } = input;
+  const { agentName, agentChain, globalChain, providers, defaultProvider, toolCount, strict } = input;
   const seen = new Set<string>();
   const rawChain: Array<{ provider: string; model: string }> = [];
   for (const e of [...agentChain, ...globalChain]) {
@@ -85,7 +88,7 @@ export function buildModelChain(input: ModelChainInput): ModelChainResolution {
   // Last-resort safety net: if after the drop the chain is empty (no agent
   // chain, no global chain configured), keep one entry so at least one
   // attempt happens — using the configured default provider.
-  if (rawChain.length === 0) {
+  if (rawChain.length === 0 && !strict) {
     rawChain.push({ provider: defaultProvider, model: "" });
   }
   const effectiveChain: ModelChainEntry[] = [];
@@ -102,7 +105,7 @@ export function buildModelChain(input: ModelChainInput): ModelChainResolution {
     if (!desired || !desired.available()) continue; // skip — next entry handles it
     effectiveChain.push({
       provider: desired,
-      model: entry.model,
+      model: entry.model || desired.getDefaultModel?.() || "",
       configProvider: entry.provider,
     });
   }
@@ -111,7 +114,7 @@ export function buildModelChain(input: ModelChainInput): ModelChainResolution {
   // alive at all so the agent doesn't dead-end on config mistakes.
   // Tool-capable only — grabbing "anything alive" is how a single-turn
   // provider ended up being handed an agent's whole tool catalogue.
-  if (effectiveChain.length === 0) {
+  if (effectiveChain.length === 0 && !strict) {
     for (const [name, p] of providers) {
       if (!p.available()) continue;
       if (toolCount > 0 && p.supportsToolLoop === false) continue;
@@ -150,10 +153,10 @@ export function buildModelChain(input: ModelChainInput): ModelChainResolution {
   // every agent run even when provider-health knows it's been 403ing
   // for the last hour. Stable within each bucket so the user's chain
   // order still wins among healthy candidates.
-  effectiveChain.sort((a, b) => {
-    const ab = providerHealth.isBlocked(a.provider.name) ? 1 : 0;
-    const bb = providerHealth.isBlocked(b.provider.name) ? 1 : 0;
-    return ab - bb;
-  });
+  // A model its provider stopped serving goes after them too (provider-health's isModelDead).
+  const sidelined = (e: ModelChainEntry) =>
+    providerHealth.isBlocked(e.provider.name)
+    || providerHealth.isModelDead(getCatalogEntry(e.provider.name)?.slug ?? e.provider.name, e.model || e.provider.getDefaultModel?.() || "");
+  effectiveChain.sort((a, b) => (sidelined(a) ? 1 : 0) - (sidelined(b) ? 1 : 0));
   return { ok: true, chain: effectiveChain };
 }
