@@ -202,6 +202,7 @@ export function skillSuggesterHandler(ctx: BuiltinHandlerContext): BuiltinHandle
 
     const scorableSkills = skills.map((s) => ({ slug: s.slug, text: skillRowText(s) }));
 
+    const agentCorpus = agents.map((a) => agentRowText(a));
     const results: AgentSuggestion[] = [];
     for (const a of windowAgents) {
       const blob = agentRowText(a);
@@ -210,7 +211,7 @@ export function skillSuggesterHandler(ctx: BuiltinHandlerContext): BuiltinHandle
       const scored = rankSkillsForAgent(
         { text: blob, attached: getAttachedSlugs(a) },
         scorableSkills,
-        { minScore: vars.minScore, topN: vars.topNPerAgent },
+        { minScore: vars.minScore, topN: vars.topNPerAgent, agentCorpus },
       );
 
       if (scored.length > 0) {

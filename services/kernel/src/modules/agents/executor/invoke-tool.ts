@@ -27,7 +27,7 @@ export const invokeToolDef = (): LlmLoopTool => ({
   input_schema: {
     type: "object",
     properties: {
-      agent_id: { type: "string", description: "UUID of the target AI agent (not a tool name)" },
+      agent_id: { type: "string", description: "UUID or exact name of the target AI agent (not a tool name)" },
       goal: { type: "string", description: "Goal/instruction for the target agent" },
     },
     required: ["agent_id", "goal"],
@@ -58,7 +58,9 @@ export function createInvokeHandler(deps: InvokeHandlerDeps): (args: unknown) =>
   const { agent, run, service, events, depth } = deps;
   return async (args: unknown) => {
     const input = args as { agent_id: string; goal: string };
-    const targetAgent = service.getAgent(input.agent_id);
+    // The fleet directory names other offices' agents without their UUIDs,
+    // so an exact, unique name is accepted too.
+    const targetAgent = service.getAgent(input.agent_id) ?? service.findAgentByUniqueName(input.agent_id ?? "");
     if (!targetAgent) {
       return { content: [{ type: "text" as const, text: `Agent not found: ${input.agent_id}` }], isError: true };
     }

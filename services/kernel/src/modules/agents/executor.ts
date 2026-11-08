@@ -818,6 +818,9 @@ export class AgentExecutor {
       maxTokens: agent.max_tokens ?? 150_000,
       maxErrors: agent.max_errors ?? 3,
       timeoutMs: agent.timeout_ms || 300_000,
+      // Clamp: a negative or absurd value from a hand-edited row must not
+      // disable the loop's safety or trim the current turn.
+      keepFullToolTurns: Math.min(Math.max(Math.trunc(agent.keep_full_tool_turns ?? 3), 0), 50),
     };
   }
 

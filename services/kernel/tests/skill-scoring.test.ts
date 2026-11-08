@@ -114,6 +114,53 @@ describe("rankSkillsForAgent", () => {
   });
 });
 
+describe("rankSkillsForAgent — what the agent does, not how its prompt is written", () => {
+  it("does not match on Spanish function words, which a mostly-English catalogue rates as rare", () => {
+    // Regression: "cada", "siempre", "antes" appear only in the few Spanish
+    // skills, so IDF scored them as strong matches and the same legal
+    // playbooks topped every Spanish-prompted agent's list.
+    expect(tokenize("cada pedido siempre antes después solo sin nunca")).toEqual(["pedido"]);
+  });
+
+  it("does not let a long manual outrank a short on-topic skill", () => {
+    const filler = Array.from({ length: 400 }, (_, i) => `word${i}`).join(" ");
+    const out = rankSkillsForAgent(
+      { text: "Audits sitemap coverage and broken links", attached: new Set() },
+      [
+        { slug: "manual", text: `manual sitemap links ${filler}` },
+        { slug: "seo-audit", text: "seo-audit sitemap coverage broken links" },
+      ],
+    );
+    expect(out[0].slug).toBe("seo-audit");
+  });
+
+  it("gives no slug bonus to a one-word slug hiding inside another word", () => {
+    const out = rankSkillsForAgent(
+      { text: "Guarda la memoria del proyecto", attached: new Set() },
+      [{ slug: "memo", text: "memo quick notes" }],
+    );
+    expect(out.find((m) => m.matches.includes("slug:memo"))).toBeUndefined();
+  });
+
+  it("weighs down words that every agent prompt shares", () => {
+    const corpus = [
+      "Revisa el sitemap. Respuesta corta, máximo tres líneas.",
+      "Escribe mails. Respuesta corta, máximo tres líneas.",
+      "Arma reportes. Respuesta corta, máximo tres líneas.",
+    ];
+    const skills = [
+      { slug: "terse", text: "terse respuesta corta máximo líneas" },
+      { slug: "seo-audit", text: "seo-audit sitemap crawl" },
+    ];
+    const ratio = (out: { slug: string; score: number }[]) =>
+      out.find((m) => m.slug === "seo-audit")!.score / out.find((m) => m.slug === "terse")!.score;
+    const agent = { text: corpus[0], attached: new Set<string>() };
+    const plain = rankSkillsForAgent(agent, skills);
+    const weighed = rankSkillsForAgent(agent, skills, { agentCorpus: corpus });
+    expect(ratio(weighed)).toBeGreaterThan(ratio(plain) * 1.5);
+  });
+});
+
 describe("row text builders", () => {
   it("folds slug, name, description and long_description into the skill blob", () => {
     const text = skillRowText({

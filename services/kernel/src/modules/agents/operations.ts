@@ -50,6 +50,7 @@ const AGENT_FIELDS = {
   timeout_ms: "number",
   max_tokens: "number",
   max_errors: "number",
+  keep_full_tool_turns: "number",
   variables: "object",
   show_on_dashboard: "boolean",
   builtin_handler: "string",

@@ -3,6 +3,7 @@
  * REST endpoints for the Agent Composer (dashboard)
  */
 
+import { SkillVectorIndex, type SemanticScores } from "./skill-vectors.js";
 import { HttpError, type KernelHttpServer, type RouteMethod } from "../../core/http-server.js";
 import { agentOperations } from "./operations.js";
 import type { AgentService, QuestionOption, QuestionStatus } from "./service.js";
@@ -639,6 +640,9 @@ export function registerAgentRoutes(
   // instead of a note nobody reads. A skill not yet installed is included
   // flagged `installed: false` — that is what turns a recommendation into an
   // installer.
+  // Meaning-based scores for the route below; built once, cached in SQLite.
+  const skillVectors = new SkillVectorIndex(service.getDb(), () => service.getEmbeddingsClient());
+
   server.route("GET", "/api/agents/:id/skill-suggestions", async ({ params: { id }, query }) => {
     const agent = requireAgent(id, "agent not found");
 
@@ -679,23 +683,43 @@ export function registerAgentRoutes(
     if (candidates.length === 0) return { suggestions: [] };
 
     const attached = agentSkills(agent);
+    const agentText = agentRowText({
+      name: agent.name,
+      description: agent.description ?? "",
+      system_prompt: agent.system_prompt ?? "",
+      flow_name: null,
+    });
+
+    // Never fatal: no embeddings client, a dead provider or a catalogue
+    // still being embedded all degrade to the keyword ranking.
+    let semantic: SemanticScores = { state: "off", scores: new Map() };
+    try {
+      semantic = await skillVectors.score({ id: agent.id, text: agentText }, candidates);
+    } catch (e) {
+      log.warn(`skill-suggestions: semantic scoring failed — ${String(e)}`);
+    }
 
     const ranked = rankSkillsForAgent(
-      {
-        text: agentRowText({
-          name: agent.name,
-          description: agent.description ?? "",
-          system_prompt: agent.system_prompt ?? "",
-          flow_name: null,
-        }),
-        attached: new Set(attached.map(String)),
-      },
+      { text: agentText, attached: new Set(attached.map(String)) },
       candidates.map((c) => ({ slug: c.slug, text: c.text })),
-      { minScore, topN },
+      {
+        minScore,
+        topN,
+        agentCorpus: service.listAgents({}).map((a) =>
+          agentRowText({
+            name: a.name,
+            description: a.description ?? "",
+            system_prompt: a.system_prompt ?? "",
+            flow_name: null,
+          }),
+        ),
+        semantic: semantic.state === "on" ? semantic.scores : undefined,
+      },
     );
 
     const byslug = new Map(candidates.map((c) => [c.slug, c]));
     return {
+      semantic: semantic.state,
       suggestions: ranked.map((m) => {
         const c = byslug.get(m.slug);
         return {

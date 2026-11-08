@@ -81,6 +81,7 @@ const AGENT_PATCH: Record<string, PatchColumn> = {
   active: "bool",
   max_tokens: "text",
   max_errors: "text",
+  keep_full_tool_turns: "text",
   variables: "json",
   show_on_dashboard: "bool",
   builtin_handler: "text",
@@ -477,16 +478,21 @@ export class AgentService {
   }
 
   /**
-   * Build a compact directory of every active agent in the fleet, grouped by
-   * office (flow). Injected into every run's system prompt so every agent
-   * knows who exists and how to reach them — no need to call directory first.
+   * The fleet directory injected into every native run's system prompt, so
+   * an agent knows who exists and how to reach them without a tool call.
    *
-   * Rendered fresh on each run; ~100 tokens per 30 agents. Callers can pass
-   * the current agent's id to exclude it from the listing.
+   * It is re-sent on every turn of every run, so its size is paid many times
+   * over: listing every agent with rank, UUID and description had grown to
+   * ~23 KB (~6k tokens a turn) at 120 agents. The agent's own office keeps
+   * the full detail it works with; every other office is one line of names.
+   * Names are enough to reach anyone — post_to_colleague and invoke resolve
+   * an exact name fleet-wide when it is unique — and kernel_agents_directory
+   * still returns the full listing on demand.
    */
   buildDirectoryBlock(currentAgentId: string): string {
     const agents = this.listAgents({ active: true }).filter(a => a.id !== currentAgentId);
     if (agents.length === 0) return "";
+    const myFlow = this.getAgent(currentAgentId)?.flow_id ?? null;
 
     const flows = this.listFlows();
     const flowById = new Map(flows.map(f => [f.id, f]));
@@ -502,38 +508,41 @@ export class AgentService {
       }
     }
 
-    const lines: string[] = [
-      "## Fleet directory — who else exists",
-      "Every agent below can be reached through the social tools. You do NOT need to call kernel_agents_directory first for names listed here — IDs are only required if you need the exact UUID.",
-      "",
-    ];
-    for (const flow of flows) {
-      const list = byFlow.get(flow.id);
-      if (!list || list.length === 0) continue;
-      lines.push(`### ${flow.name}`);
-      for (const a of list) {
-        const rank = this.getRank(a.rank_id);
-        const rankTag = rank ? ` ${rank.insignia || ""} ${rank.name}`.trim() : "";
-        const desc = a.description ? ` — ${a.description.slice(0, 120)}` : "";
-        lines.push(`- **${a.name}**${rankTag ? ` (${rankTag})` : ""} \`${a.id}\`${desc}`);
-      }
-      lines.push("");
+    const detailed = (a: Agent) => {
+      const rank = this.getRank(a.rank_id);
+      const rankTag = rank ? ` ${rank.insignia || ""} ${rank.name}`.trim() : "";
+      const desc = a.description ? ` — ${a.description.slice(0, 120)}` : "";
+      return `- **${a.name}**${rankTag ? ` (${rankTag})` : ""} \`${a.id}\`${desc}`;
+    };
+
+    // A name that repeats in the fleet (every office may have a "Lead") does
+    // not resolve on its own, so it keeps its UUID in the short listing.
+    const nameCount = new Map<string, number>();
+    for (const a of this.listAgents({ active: true })) {
+      const k = a.name.toLowerCase();
+      nameCount.set(k, (nameCount.get(k) ?? 0) + 1);
     }
-    if (unassigned.length > 0) {
-      lines.push("### Unassigned");
-      for (const a of unassigned) {
-        const desc = a.description ? ` — ${a.description.slice(0, 120)}` : "";
-        lines.push(`- **${a.name}** \`${a.id}\`${desc}`);
-      }
-      lines.push("");
+    const short = (a: Agent) => ((nameCount.get(a.name.toLowerCase()) ?? 0) > 1 ? `${a.name} \`${a.id}\`` : a.name);
+
+    const lines: string[] = ["## Fleet directory — who else exists"];
+    const mine = myFlow ? byFlow.get(myFlow) : undefined;
+    if (mine && mine.length > 0) {
+      lines.push("", `### Your office: ${flowById.get(myFlow!)!.name}`);
+      for (const a of mine) lines.push(detailed(a));
+    }
+    const others = flows.filter(f => f.id !== myFlow && (byFlow.get(f.id)?.length ?? 0) > 0);
+    if (others.length > 0 || unassigned.length > 0) {
+      lines.push("", "### Other offices (names; a repeated name carries its ID; `kernel_agents_directory` gives roles)");
+      for (const f of others) lines.push(`- ${f.name}: ${byFlow.get(f.id)!.map(short).join(" · ")}`);
+      if (unassigned.length > 0) lines.push(`- No office: ${unassigned.map(short).join(" · ")}`);
     }
 
-    lines.push("## How to reach anyone above");
-    lines.push("- `kernel_agents_ask_supervisor({ question, context, options })` — when you are in doubt (unclear requirements, priorities, or a decision you are not authorized to make), ask the chief instead of guessing. Exactly 4 concrete options, your preferred one first. Keep working on what doesn't depend on it; the answer comes back on its own. Never re-ask an answered question.");
-    lines.push("- `kernel_agents_post_to_colleague({ to_agent_id, subject, body })` — async, non-blocking. They read it on their next run and reply through their own outbox. Use for clarifications and back-and-forth threads between agents. Works ACROSS offices.");
-    lines.push("- `kernel_agents_invoke({ agent_id, goal })` — blocking. You wait for their result. Use for single pointed questions that must be resolved before you continue.");
-    lines.push("- `kernel_agents_call_meeting({ topic, attendee_ids })` — group deliberation. Use when 2+ other agents need to converge on an answer and you want their input recorded. You become moderator (or the highest-ranked attendee takes over).");
-    lines.push("- When replying to another agent, wrap your output like `<msg role=\"answer\" replies_to=\"<their-message-id>\">...</msg>`. Valid roles: `answer` (agreeing/informing), `counter` (disagreeing — triggers debate if 2+ of you disagree), `question`, `stmt`, `summary`, `vote`. If you skip the wrapper your reply defaults to `answer`.");
+    lines.push("", "## How to reach anyone above");
+    lines.push("- `kernel_agents_ask_supervisor({ question, context, options })` — in doubt (unclear requirements, priorities, a decision you may not make), ask the chief instead of guessing. Exactly 4 concrete options, preferred first. Keep working on what doesn't depend on it; the answer comes back on its own. Never re-ask an answered question.");
+    lines.push("- `kernel_agents_post_to_colleague({ to_agent_name, subject, body })` — async; they read it on their next run. Any agent's exact name works, in any office (or pass `to_agent_id`).");
+    lines.push("- `kernel_agents_invoke({ agent_id, goal })` — blocking; `agent_id` takes the UUID or the exact name. For single questions that must be resolved before you continue.");
+    lines.push("- `kernel_agents_call_meeting({ topic, attendee_ids })` — group deliberation when 2+ agents must converge; you moderate (or the highest-ranked attendee does).");
+    lines.push("- Replying to another agent: wrap it as `<msg role=\"answer\" replies_to=\"<their-message-id>\">...</msg>`. Roles: `answer`, `counter` (disagree; 2+ counters start a debate), `question`, `stmt`, `summary`, `vote`. Default `answer`.");
     return lines.join("\n");
   }
 
@@ -754,6 +763,7 @@ export class AgentService {
       active: boolean;
       max_tokens: number;
       max_errors: number;
+      keep_full_tool_turns: number;
       variables: Record<string, string>;
       show_on_dashboard: boolean;
       builtin_handler: string;
@@ -1731,6 +1741,19 @@ export class AgentService {
 
   /** Find an agent by exact name within a specific flow. Used to resolve
    *  `to_agent_name` into a UUID when posting to the office inbox. */
+  /**
+   * The one active agent with this exact name (case-insensitive) anywhere in
+   * the fleet, or undefined when there is none or more than one. Lets an
+   * agent address a colleague in another office by name, which is all the
+   * fleet directory lists for other offices.
+   */
+  findAgentByUniqueName(name: string): Agent | undefined {
+    const rows = this.db
+      .prepare("SELECT * FROM agents WHERE active = 1 AND lower(name) = lower(?) LIMIT 2")
+      .all(name.trim()) as Agent[];
+    return rows.length === 1 ? rows[0] : undefined;
+  }
+
   findAgentByNameInFlow(flowId: string, name: string): Agent | undefined {
     return this.db
       .prepare("SELECT * FROM agents WHERE flow_id = ? AND name = ? LIMIT 1")

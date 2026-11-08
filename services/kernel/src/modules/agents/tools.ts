@@ -1399,7 +1399,7 @@ export function agentsTools(
         "`role: \"counter\"` — 2+ counters from different agents on the same conversation auto-opens a debate.",
       schema: z.object({
         to_agent_id: z.string().optional().describe("UUID of the recipient. Preferred."),
-        to_agent_name: z.string().optional().describe("Exact agent name (within your own office for name-only lookups). Use UUID across offices."),
+        to_agent_name: z.string().optional().describe("Exact agent name. Your own office is searched first, then the whole fleet (the name must be unique there)."),
         subject: z.string().describe("One-line subject. Max 300 chars."),
         body: z.string().describe("Message body (markdown OK). Include context and what action you want."),
         role: z.enum(["stmt","question","answer","counter","vote","summary"]).optional().describe("Semantic role of this turn. Default 'stmt'. Use 'counter' to disagree."),
@@ -1431,14 +1431,14 @@ export function agentsTools(
         let toId = input.to_agent_id?.trim() ?? "";
         const toName = input.to_agent_name?.trim() ?? "";
         if (!toId && toName) {
-          // Name-only resolution is scoped to the caller's office to stay
-          // unambiguous. Cross-office calls must supply the UUID.
-          if (!caller.flow_id) {
-            return errorResult(`Cannot resolve agent name "${toName}" without an office context — supply to_agent_id instead.`);
-          }
-          const resolved = service.findAgentByNameInFlow(caller.flow_id, toName);
+          // Own office first (names repeat across offices: every office has
+          // a "Lead"), then the whole fleet when the name is unique there —
+          // the fleet directory lists other offices by name only.
+          const resolved =
+            (caller.flow_id ? service.findAgentByNameInFlow(caller.flow_id, toName) : undefined) ??
+            service.findAgentByUniqueName(toName);
           if (!resolved) {
-            return errorResult(`No agent named "${toName}" found in your office. Use kernel_agents_directory or supply to_agent_id.`);
+            return errorResult(`No single agent named "${toName}" (none, or several in different offices). Use kernel_agents_directory and pass to_agent_id.`);
           }
           toId = resolved.id;
         }
