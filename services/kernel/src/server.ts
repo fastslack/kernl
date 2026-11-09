@@ -22,6 +22,7 @@ import type { EventBus } from "./core/event-bus.js";
 import { errorResult, stripInternalArgs } from "./core/helpers.js";
 import { isAuthenticated } from "./core/auth.js";
 import { log } from "./core/logger.js";
+import { currentVersion } from "./core/update/version.js";
 import { runWithContext, type KernelRequestContext } from "./core/request-context.js";
 import type { SkillRegistry } from "./skills/registry.js";
 import { TaskRegistry } from "./core/task-registry.js";
@@ -193,7 +194,7 @@ export function createMcpServer(
   }
 
   const server = new Server(
-    { name: "kernl", version: "0.1.0" },
+    { name: "kernl", version: currentVersion() ?? "0.0.0" },
     { capabilities },
   );
 
