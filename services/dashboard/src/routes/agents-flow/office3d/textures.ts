@@ -431,3 +431,56 @@ export function getWhiteboardTexture(variant: number): any {
   uiCache.set(key, tex);
   return tex;
 }
+
+/** World size of one tile of the offices' plank floor. */
+export const PLANK_TILE = 6;
+
+/** The offices' floor: oak planks in staggered lengths, tiling both ways. One texture for every office. */
+export function getPlankFloorTexture(): any {
+  const key = 'planks';
+  if (uiCache.has(key)) return uiCache.get(key);
+  const THREE = rt.THREE;
+  const SIZE_PX = 512, ROWS = 8, rowH = SIZE_PX / ROWS;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = SIZE_PX;
+  const ctx = cv.getContext('2d')!;
+  const rand = mulberry32(4242);
+  for (let row = 0; row < ROWS; row++) {
+    const y = row * rowH;
+    // Whole planks across one tile, so the row closes on itself when it wraps.
+    const n = 2 + Math.floor(rand() * 2);
+    const weights = Array.from({ length: n }, () => 0.7 + rand() * 0.6);
+    const sum = weights.reduce((a, b) => a + b, 0);
+    let x = rand() * SIZE_PX;
+    for (const weight of weights) {
+      const len = (weight / sum) * SIZE_PX;
+      const tone = (rand() - 0.5) * 24;
+      const fill = `rgb(${Math.round(136 + tone)},${Math.round(100 + tone * 0.85)},${Math.round(68 + tone * 0.7)})`;
+      const grain: Array<[number, number]> = Array.from({ length: 6 }, () => [rand() * rowH, (rand() - 0.5) * 5]);
+      for (const wrap of [0, -SIZE_PX]) {
+        const px = x + wrap;
+        ctx.fillStyle = fill;
+        ctx.fillRect(px, y, len, rowH);
+        ctx.strokeStyle = 'rgba(60,38,20,0.18)';
+        ctx.lineWidth = 1;
+        for (const [gy, bend] of grain) {
+          ctx.beginPath();
+          ctx.moveTo(px, y + gy);
+          ctx.bezierCurveTo(px + len * 0.3, y + gy + bend, px + len * 0.7, y + gy - bend, px + len, y + gy);
+          ctx.stroke();
+        }
+        ctx.fillStyle = 'rgba(40,25,14,0.6)';
+        ctx.fillRect(px + len - 1, y, 1.5, rowH);
+      }
+      x += len;
+    }
+    ctx.fillStyle = 'rgba(40,25,14,0.55)';
+    ctx.fillRect(0, y + rowH - 1.5, SIZE_PX, 1.5);
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 4;
+  uiCache.set(key, tex);
+  return tex;
+}

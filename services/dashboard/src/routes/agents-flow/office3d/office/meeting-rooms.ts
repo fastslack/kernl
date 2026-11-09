@@ -4,7 +4,8 @@ import {
   makeSignClickable, addWall, addWallWithDoor,
 } from './_shared.js';
 import { applyPBR } from './_materials.js';
-import { applyWorldTexture, scaleUV } from '../textures.js';
+import { applyWorldTexture } from '../textures.js';
+import { plankFloorMaterial, shadedFloor } from './room-decor.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 
 /** Build meeting rooms in empty grid cells — conference table, chairs, whiteboard.
@@ -28,6 +29,7 @@ export function buildMeetingRooms(
   const screens: MeetingScreenHandle[] = [];
   const names = ['MEETING ROOM A', 'MEETING ROOM B', 'MEETING ROOM C', 'MEETING ROOM D', 'WAR ROOM', 'STRATEGY'];
 
+  const floorMat = plankFloorMaterial();
   for (let i = 0; i < meetingRooms.length; i++) {
     const { cx, cz, w, d } = meetingRooms[i];
     const roomName = names[i % names.length];
@@ -50,11 +52,7 @@ export function buildMeetingRooms(
     }
 
     // Floor
-    const mFloorMat = new rt.THREE.MeshStandardMaterial({ color: 0x181e2e, roughness: 0.9, metalness: 0 });
-    applyWorldTexture(mFloorMat, 'carpet');
-    const mFloorGeo = new rt.THREE.PlaneGeometry(w, d);
-    scaleUV(mFloorGeo, w / 6, d / 6);
-    const rf = new rt.THREE.Mesh(mFloorGeo, mFloorMat);
+    const rf = new rt.THREE.Mesh(shadedFloor(w, d), floorMat);
     rf.rotation.x = -Math.PI / 2; rf.position.set(cx, 0.02, cz);
     rf.receiveShadow = true;
     scene.add(rf);

@@ -1,11 +1,11 @@
 import type { RoomInfo } from '../types.js';
 import { rt } from '../runtime.js';
 import {
-  WALL, WALL_BRIGHT, WALL_DARK, FLOOR_CARPET, WALL_H, WALL_T,
+  WALL, WALL_BRIGHT, WALL_DARK, WALL_H, WALL_T,
   makeSignClickable, addOfficeOffLine, paintOfficePower, addWall, addWallWithDoor,
 } from './_shared.js';
-import { applyPBR } from './_materials.js';
-import { applyWorldTexture, scaleUV, getWhiteboardTexture } from '../textures.js';
+import { applyWorldTexture, getWhiteboardTexture } from '../textures.js';
+import { furnishRoom, plankFloorMaterial, RoomPieces, shadedFloor, type DoorDir } from './room-decor.js';
 
 /** Build rooms — 4 walls with door on the wall facing the corridor.
  *  `counts` (keyed like `rooms`, i.e. flow id) enriches the door sign with
@@ -19,8 +19,6 @@ export function buildRooms(
 ): void {
   const doorW = 2.5;
   // Whiteboard materials — shared across every room (textures are cached).
-  const boardFrameMat = new rt.THREE.MeshStandardMaterial({ color: 0x9aa3b2, roughness: 0.4, metalness: 0.5 });
-  applyPBR(boardFrameMat, 'metal');
   const boardMats = [0, 1].map(v => new rt.THREE.MeshStandardMaterial({
     map: getWhiteboardTexture(v), roughness: 0.35, metalness: 0,
   }));
@@ -29,6 +27,16 @@ export function buildRooms(
   applyWorldTexture(wallMat, 'wall');
   const wallBright = new rt.THREE.MeshStandardMaterial({ color: WALL_BRIGHT, roughness: 0.7, metalness: 0 });
   const wallDark = new rt.THREE.MeshStandardMaterial({ color: WALL_DARK, roughness: 0.85, metalness: 0 });
+  // One floor and one furnishing material for every office: the rug carries each office's colour.
+  const floorMat = plankFloorMaterial();
+  const decorMat = new rt.THREE.MeshStandardMaterial({
+    roughness: 0.75, metalness: 0, vertexColors: true, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+  });
+  const shadeMat = new rt.THREE.MeshStandardMaterial({
+    color: 0xffeedd, emissive: new rt.THREE.Color(0xffeedd), emissiveIntensity: 0.5,
+    roughness: 0.4, transparent: true, opacity: 0.85,
+  });
+  const glowMat = new rt.THREE.MeshBasicMaterial({ color: 0xffeedd, transparent: true, opacity: 0.04, side: 2 });
 
   for (const [roomKey, room] of rooms) {
     const { cx, cz, w, d, color, name } = room;
@@ -44,18 +52,11 @@ export function buildRooms(
     let mark = 0;
     const dd = (room as any).doorDir || (room.side === 1 ? 'top' : 'bottom');
     const col = new rt.THREE.Color(color);
+    const pieces = new RoomPieces();
+    const variant = roomIdx;
 
-    // ── Room carpet ──
-    const floorCol = new rt.THREE.Color(FLOOR_CARPET).lerp(col.clone().multiplyScalar(0.08), 0.3);
-    const floorMat = new rt.THREE.MeshStandardMaterial({ color: floorCol, roughness: 0.95, metalness: 0 });
-    applyPBR(floorMat, 'carpet');
-    applyWorldTexture(floorMat, 'carpet');
-    const carpetGeo = new rt.THREE.PlaneGeometry(w, d);
-    scaleUV(carpetGeo, w / 6, d / 6); // 1 tile ≈ 6u — large enough that the repeat never reads as a grid
-    const rf = new rt.THREE.Mesh(
-      carpetGeo,
-      floorMat,
-    );
+    // ── Plank floor, darker along the walls (vertex shade: no texture per office, no extra draw) ──
+    const rf = new rt.THREE.Mesh(shadedFloor(w, d), floorMat);
     rf.rotation.x = -Math.PI / 2; rf.position.set(cx, 0.02, cz); rf.receiveShadow = true;
     g.add(rf);
     tag(mark, 'floor'); mark = g.children.length;
@@ -95,17 +96,14 @@ export function buildRooms(
       board.rotation.y = rotY;
       g.add(board);
       board.userData.wallBoard = true; // anchor "wall-board" of office panels
-      const frame = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(BW + 0.12, BH + 0.12, 0.03), boardFrameMat);
-      frame.position.set(bx, 1.75, bz);
-      frame.rotation.y = rotY;
-      frame.translateZ(-0.02); // behind the board face
-      g.add(frame);
-      // Marker tray
-      const tray = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(BW * 0.5, 0.04, 0.08), boardFrameMat);
-      tray.position.set(bx, 1.75 - BH / 2 - 0.06, bz);
-      tray.rotation.y = rotY;
-      tray.translateZ(0.05);
-      g.add(tray);
+      // Its frame and marker tray go with the furnishings; offsets along the board's facing.
+      const boardGrey = new rt.THREE.Color(0x9aa3b2);
+      const atFace = (geo: any, y: number, out: number) => {
+        geo.rotateY(rotY);
+        pieces.add(boardGrey, geo, bx - cx + Math.sin(rotY) * out, y, bz - cz + Math.cos(rotY) * out);
+      };
+      atFace(new rt.THREE.BoxGeometry(BW + 0.12, BH + 0.12, 0.03), 1.75, -0.02);
+      atFace(new rt.THREE.BoxGeometry(BW * 0.5, 0.04, 0.08), 1.75 - BH / 2 - 0.06, 0.05);
     }
     roomIdx++;
 
@@ -125,28 +123,21 @@ export function buildRooms(
     const lz = dd === 'bottom'
       ? cz + d / 2 - cornerInset
       : cz - d / 2 + cornerInset;
-    const baseLampMat = new rt.THREE.MeshStandardMaterial({ color: 0x1a1d2a, roughness: 0.4, metalness: 0.5 });
-    const poleMat = new rt.THREE.MeshStandardMaterial({ color: 0x2a2d3a, roughness: 0.3, metalness: 0.6 });
-    const shadeMat = new rt.THREE.MeshStandardMaterial({
-      color: 0xffeedd, emissive: new rt.THREE.Color(0xffeedd), emissiveIntensity: 0.5,
-      roughness: 0.4, transparent: true, opacity: 0.85,
-    });
-    const lampBase = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.25, 0.28, 0.06, 12), baseLampMat);
-    lampBase.position.set(lx, 0.03, lz);
-    g.add(lampBase);
-    const lampPole = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.03, 0.03, 1.6, 8), poleMat);
-    lampPole.position.set(lx, 0.83, lz);
-    g.add(lampPole);
+    pieces.cyl(new rt.THREE.Color(0x1a1d2a), 0.25, 0.28, 0.06, 12, lx - cx, 0.03, lz - cz);
+    pieces.cyl(new rt.THREE.Color(0x2a2d3a), 0.03, 0.03, 1.6, 8, lx - cx, 0.83, lz - cz);
     const lampShade = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.15, 0.18, 0.3, 12), shadeMat);
     lampShade.position.set(lx, 1.78, lz);
     g.add(lampShade);
-    const lampGlowDisc = new rt.THREE.Mesh(
-      new rt.THREE.CircleGeometry(1.2, 12),
-      new rt.THREE.MeshBasicMaterial({ color: 0xffeedd, transparent: true, opacity: 0.04, side: 2 }),
-    );
+    const lampGlowDisc = new rt.THREE.Mesh(new rt.THREE.CircleGeometry(1.2, 12), glowMat);
     lampGlowDisc.rotation.x = -Math.PI / 2;
     lampGlowDisc.position.set(lx, 0.015, lz);
     g.add(lampGlowDisc);
+
+    // ── Rug, plants, the piece against the side wall: one mesh with the frame and the lamp above ──
+    furnishRoom(pieces, w, d, dd as DoorDir, color, variant);
+    const furnishings = pieces.mesh(decorMat);
+    furnishings.position.set(cx, 0, cz);
+    g.add(furnishings);
 
     // ── Room sign (above door wall) — name + live headcount subline ──
     const dw = roomWalls.find(rw => rw.id === dd)!;
