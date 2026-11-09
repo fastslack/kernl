@@ -152,6 +152,9 @@
   $: projectName = (id: string) => projects.find((p) => p.id === id)?.name ?? 'Proyecto';
   $: currentTab = TABS.find((t) => t.id === tab) ?? TABS[0];
 
+  /** A draft whose payload carries its own text; a request with none (a publish) shows its preview instead of an empty box. */
+  const hasOwnText = (it: Item) => typeof it.payload.text === 'string' || typeof it.payload.body === 'string';
+
   /** The payload field the operator edits: `text`, else `body`. */
   function textKey(it: Item): 'text' | 'body' {
     return typeof it.payload.text === 'string' || typeof it.payload.body !== 'string' ? 'text' : 'body';
@@ -521,7 +524,7 @@
           {#if isTemplated(selected) && view !== 'text'}
             <!-- sandbox="" : no scripts, forms or navigation inside the mail -->
             <iframe title="El email como lo va a ver el destinatario" sandbox="" class="mailframe" class:phone={view === 'phone'} srcdoc={previewDoc(selected, 'design')}></iframe>
-          {:else if selected.status === 'draft'}
+          {:else if selected.status === 'draft' && hasOwnText(selected)}
             <textarea bind:value={text} on:input={() => selected && onEdit(selected)} aria-label="Texto del borrador"></textarea>
             <div class="foot-line">
               <small class="muted">{dirty ? 'Editado: se guarda al aprobar o programar.' : 'Podés editar el texto antes de aprobarlo.'}</small>

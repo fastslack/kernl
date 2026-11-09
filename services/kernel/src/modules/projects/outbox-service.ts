@@ -154,6 +154,11 @@ export class OutboxService {
     }
     const v = h.validate(input.payload, accountRef);
     if (!v.ok) throw new Error(v.error);
+    const waiting = this.waitingCopy(h, input.channel, projectId, input.payload);
+    if (waiting) {
+      throw new Error(`Already waiting for the operator: ${waiting.id} («${this.preview(waiting.id).title}», ${waiting.status}). ` +
+        "Do not propose it again: the operator decides in Approvals, and you hear back when it is decided.");
+    }
     const now = isoNow();
     const id = newId();
     this.db.prepare(
@@ -165,6 +170,20 @@ export class OutboxService {
     this.changed(item);
     this.applyPolicies(item);
     return item;
+  }
+
+  /** A draft of the same project and channel, not yet decided, that the channel calls the same request. */
+  private waitingCopy(h: OutboxChannelHandler, channel: string, projectId: string | null, payload: unknown): OutboxItem | null {
+    let key: string | null = null;
+    try { key = h.dedupeKey?.(payload) ?? null; } catch { key = null; }
+    if (!key) return null;
+    const rows = this.db.prepare(
+      "SELECT * FROM outbox_items WHERE channel = ? AND status IN ('draft', 'approved', 'sending') AND project_id IS ?",
+    ).all(channel, projectId) as Row[];
+    for (const it of rows.map(toItem)) {
+      try { if (h.dedupeKey!(it.payload) === key) return it; } catch { /* a payload the channel cannot read is not a copy */ }
+    }
+    return null;
   }
 
   list(f: { project_id?: string; flow_id?: string; channel?: string; status?: OutboxStatus; limit?: number } = {}): OutboxItem[] {
