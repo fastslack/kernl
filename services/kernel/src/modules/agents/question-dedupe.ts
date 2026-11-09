@@ -14,6 +14,8 @@ import { log } from "../../core/logger.js";
 import type { AgentQuestion } from "./service.js";
 
 export const DUPLICATE_WINDOW_DAYS = 21;
+const JUDGE_MAX_TOKENS = 2000;
+const JUDGE_ATTEMPTS = 2;
 
 export type QuestionJudge = (opts: { system: string; user: string; maxTokens: number; caller: string }) => Promise<unknown>;
 
@@ -50,15 +52,21 @@ export async function findDuplicateQuestion(
   const same = candidates.find((q) => norm(q.question) === n);
   if (same) return same;
   if (!judge) return null;
-  try {
-    const raw = (await judge({ system: SYSTEM, user: buildJudgePrompt(input, candidates), maxTokens: 200, caller: "agents:question-dedupe" })) as
-      { duplicate_of?: unknown } | null;
-    const id = typeof raw?.duplicate_of === "string" ? raw.duplicate_of.trim() : "";
-    return id ? candidates.find((q) => q.id === id) ?? null : null;
-  } catch (err) {
-    log.warn(`question-dedupe: judge failed, filing the question: ${err instanceof Error ? err.message : String(err)}`);
-    return null;
+  // A reasoning model spends its budget thinking: with 200 tokens MiniMax replied nothing and three copies of one
+  // question reached the operator in two minutes (08/11). Room to answer, and one more try before giving up.
+  let last: unknown = null;
+  for (let attempt = 1; attempt <= JUDGE_ATTEMPTS; attempt++) {
+    try {
+      const raw = (await judge({ system: SYSTEM, user: buildJudgePrompt(input, candidates), maxTokens: JUDGE_MAX_TOKENS, caller: "agents:question-dedupe" })) as
+        { duplicate_of?: unknown } | null;
+      const id = typeof raw?.duplicate_of === "string" ? raw.duplicate_of.trim() : "";
+      return id ? candidates.find((q) => q.id === id) ?? null : null;
+    } catch (err) {
+      last = err;
+    }
   }
+  log.warn(`question-dedupe: judge failed ${JUDGE_ATTEMPTS} times, filing the question: ${last instanceof Error ? last.message : String(last)}`);
+  return null;
 }
 
 /** What the asking agent reads instead of a new question id. */

@@ -37,6 +37,21 @@ describe("findDuplicateQuestion", () => {
     expect(await findDuplicateQuestion(ask, cands, async () => ({ duplicate_of: null }))).toBeNull();
   });
 
+  // 08/11: MiniMax spent the 200 tokens thinking and replied nothing; the same question reached the operator three
+  // times in two minutes. The judge gets room to answer and a second try before the question is filed.
+  test("an empty first reply is tried again, with room for a reasoning model to answer", async () => {
+    const seen: number[] = [];
+    let n = 0;
+    const dup = await findDuplicateQuestion({ question: "¿Qué versión publicamos?", context: "" }, [q({})], async (o) => {
+      seen.push(o.maxTokens);
+      if (n++ === 0) throw new Error("the model did not return JSON. It replied: (nothing)");
+      return { duplicate_of: "q1" };
+    });
+    expect(dup?.id).toBe("q1");
+    expect(seen).toHaveLength(2);
+    expect(Math.min(...seen)).toBeGreaterThanOrEqual(1500);
+  });
+
   test("a judge that fails files the question", async () => {
     const dup = await findDuplicateQuestion({ question: "otra cosa", context: "" }, [q({})], async () => { throw new Error("429"); });
     expect(dup).toBeNull();

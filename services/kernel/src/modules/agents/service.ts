@@ -192,6 +192,20 @@ export class AgentService {
    * Looks across the whole office: the same blocker gets asked by every agent
    * it stops, not only by one.
    */
+  /** Titles of an agent's drafts still waiting in Approvals; [] when the outbox is not installed. */
+  pendingDrafts(agentId: string): string[] {
+    try {
+      const rows = this.db.prepare("SELECT channel, payload FROM outbox_items WHERE agent_id = ? AND status = 'draft' ORDER BY created_at DESC LIMIT 20")
+        .all(agentId) as Array<{ channel: string; payload: string }>;
+      return rows.map((r) => {
+        let p: Record<string, unknown> = {};
+        try { p = JSON.parse(r.payload) as Record<string, unknown>; } catch { /* unreadable payload: channel only */ }
+        const what = [p.title, p.subject, p.branch, p.summary, p.text].find((v) => typeof v === "string" && v.trim()) as string | undefined;
+        return `${r.channel}: ${(what ?? "").slice(0, 160)}`;
+      });
+    } catch { return []; }
+  }
+
   async findDuplicateQuestion(input: { from_agent_id: string; flow_id: string; question: string; context?: string }): Promise<AgentQuestion | null> {
     const candidates = this.duplicateCandidates(input.from_agent_id, input.flow_id);
     return findDuplicateQuestion({ question: input.question, context: input.context ?? "" }, candidates, this.questionJudge);

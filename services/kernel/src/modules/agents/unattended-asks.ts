@@ -48,18 +48,21 @@ const SYSTEM =
   "so your job is to catch what the agent left for the human operator to do or decide: an approval, a review, " +
   "a decision, an account/permission/connector to set up, information only the operator has. " +
   "Ignore what the agent did itself, notes like 'no action required', and things it delegated to other agents. " +
-  "Ignore anything already covered by one of the operator's OPEN QUESTIONS listed in the input. " +
+  "Ignore anything already covered by one of the operator's OPEN QUESTIONS listed in the input, and anything already " +
+  "WAITING IN APPROVALS (a draft the operator approves or rejects there: a publish, a post, an email) — that draft is the question. " +
   "If something is left for the operator, turn it into ONE question for them (the most important one), with context " +
   "(2-4 sentences: what happened, what is blocked, where to look — file paths, ids) and exactly 4 short options, " +
   "the recommended one first. Write in the same language as the report. " +
   'Return ONLY JSON: {"needs_operator": boolean, "question": string, "context": string, "options": [string, string, string, string]}.';
 
-export function buildAskPrompt(input: { agentName: string; goal: string; result: string; openQuestions: string[] }): string {
+export function buildAskPrompt(input: { agentName: string; goal: string; result: string; openQuestions: string[]; drafts?: string[] }): string {
   return [
     `AGENT: ${input.agentName}`,
     `GOAL (what the run was asked): ${input.goal.replace(UNATTENDED_NOTE, "").slice(0, 1500)}`,
     `OPEN QUESTIONS already waiting for the operator from this agent:`,
     input.openQuestions.length ? input.openQuestions.map((q) => `- ${q}`).join("\n") : "- (none)",
+    `WAITING IN APPROVALS (this agent's drafts the operator decides there):`,
+    input.drafts?.length ? input.drafts.map((d) => `- ${d}`).join("\n") : "- (none)",
     `REPORT:`,
     input.result.slice(-8000),
   ].join("\n");
@@ -67,7 +70,7 @@ export function buildAskPrompt(input: { agentName: string; goal: string; result:
 
 /** What the report leaves for the operator, as a question — or null when nothing. */
 export async function detectOperatorAsk(
-  input: { agentName: string; goal: string; result: string; openQuestions: string[] },
+  input: { agentName: string; goal: string; result: string; openQuestions: string[]; drafts?: string[] },
   chatJson: ChatJson,
 ): Promise<OperatorAsk | null> {
   const raw = (await chatJson({
@@ -113,6 +116,8 @@ export interface UnattendedAskService {
   }): { id: string; status: "triage" | "pending" };
   /** The office's question for the same decision, open or recently answered (question-dedupe.ts). */
   findDuplicateQuestion?(input: { from_agent_id: string; flow_id: string; question: string; context?: string }): Promise<AgentQuestion | null>;
+  /** Titles of this agent's drafts still waiting in Approvals (outbox). */
+  pendingDrafts?(agentId: string): string[];
 }
 
 export class UnattendedAskWatcher {
@@ -151,11 +156,12 @@ export class UnattendedAskWatcher {
     if (!agent || agent.builtin_handler || unattendedAskDisabled(agent)) return null;
     const result = (run.result ?? "").trim();
     if (result.length < 40) return null;
-    if (this.service.getSteps(runId).some((s) => /ask_supervisor/.test(s.tool_name ?? ""))) return null;
+    // Asked, or put a draft in Approvals: the operator has it already (08/11: «do you publish draft 7c1bca49?»).
+    if (this.service.getSteps(runId).some((s) => /ask_supervisor|outbox_propose/.test(s.tool_name ?? ""))) return null;
 
     const open = this.openQuestions(agent.id);
     const ask = await detectOperatorAsk(
-      { agentName: agent.name, goal: run.goal ?? "", result, openQuestions: open.map((q) => q.question) },
+      { agentName: agent.name, goal: run.goal ?? "", result, openQuestions: open.map((q) => q.question), drafts: this.service.pendingDrafts?.(agent.id) ?? [] },
       this.chatJson,
     );
     if (!ask) return null;
