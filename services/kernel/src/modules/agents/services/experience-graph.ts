@@ -393,8 +393,19 @@ export class AgentExperienceGraph {
         q.goalVector.length === EMBEDDING_DIM &&
         g.capabilities.vectorSimilarity &&
         (!q.embeddingModel || q.embeddingModel === (this.getEmbeddingModel() ?? q.embeddingModel));
-      const candidates = useVector ? await this.byVector(g, q) : await this.byText(g, q);
-      return candidates
+      // Vectors only compare within one model, so learnings embedded with
+      // another one (or not yet embedded) are reached by their words instead.
+      // A learning found both ways keeps its better relevance.
+      const merged = new Map<string, Omit<SharedLearning, "score">>();
+      const found = [
+        ...(useVector ? await this.byVector(g, q) : []),
+        ...(await this.byText(g, q)),
+      ];
+      for (const c of found) {
+        const prev = merged.get(c.id);
+        if (!prev || c.relevance > prev.relevance) merged.set(c.id, c);
+      }
+      return [...merged.values()]
         .filter((c) => c.relevance >= 0.3)
         .map((c) => ({ ...c, score: scoreSharedLearning(c) }))
         .filter((c) => c.score >= MIN_SCORE)
@@ -408,6 +419,7 @@ export class AgentExperienceGraph {
 
   private static readonly CANDIDATE_TAIL = `
     WHERE l.active = true AND l.agent_id <> $agentId AND l.confidence >= 0.3
+      AND ($model IS NULL OR l.embedding_model = $model)
       AND (l.project_id IS NULL OR l.project_id = $projectId)
     OPTIONAL MATCH (src:Agent)-[:LEARNED]->(l)
     OPTIONAL MATCH (l)-[:DERIVED_FROM]->(:AgentRun)-[:USED]->(t:AgentTool)
@@ -445,6 +457,7 @@ export class AgentExperienceGraph {
         index: LEARNING_VECTOR_INDEX,
         k: 40,
         vector: q.goalVector,
+        model: q.embeddingModel,
         agentId: q.agentId,
         projectId: q.projectId,
         tools: q.tools,
@@ -461,7 +474,7 @@ export class AgentExperienceGraph {
     const r = await g.run(
       `CALL db.index.fulltext.queryNodes($index, $terms) YIELD node AS l, score
        ${AgentExperienceGraph.CANDIDATE_TAIL}`,
-      { index: LEARNING_TEXT_INDEX, terms, agentId: q.agentId, projectId: q.projectId, tools: q.tools },
+      { index: LEARNING_TEXT_INDEX, terms, model: null, agentId: q.agentId, projectId: q.projectId, tools: q.tools },
     );
     // Full-text scores are unbounded, so they are read relative to the best
     // hit — which would make the best hit a perfect match by definition.

@@ -152,8 +152,18 @@ describe.skipIf(!process.env.RELATE_CLIENT_MODULE)("AgentExperienceGraph on Rela
 
   it("ignores learnings that do not fit the goal", async () => {
     await xp.sync();
-    const ids = (await query({ goalVector: vec(999) })).map((h) => h.id);
+    const ids = (await query({ goalVector: vec(999), goal: "rotate the quarterly backup keys" })).map((h) => h.id);
     expect(ids).toEqual([]);
+  });
+
+  it("does not compare vectors across embedding models, but still finds by words", async () => {
+    await xp.sync();
+    // Same direction, different model: the vector leg must not match it…
+    const byVectorOnly = await query({ embeddingModel: "other-model", goal: "zzz unrelated words" });
+    expect(byVectorOnly).toEqual([]);
+    // …while the words of the goal still reach it.
+    const byWords = await query({ embeddingModel: "other-model" });
+    expect(byWords.map((h) => h.id)).toContain("l-mail");
   });
 
   it("falls back to full-text search without a goal vector", async () => {
