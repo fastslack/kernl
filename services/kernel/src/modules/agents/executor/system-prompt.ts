@@ -30,6 +30,7 @@ import {
   promptDefaultAgent,
   promptInboxBlock,
   promptLearningsBlock,
+  promptSharedLearningsBlock,
   promptPerformanceBlock,
   promptSimilarRunsBlock,
   promptMemorySummaryBlock,
@@ -191,6 +192,55 @@ const learnings: SystemPromptStep = (ctx) => {
   return promptLearningsBlock(ctx.lang, items) || null;
 };
 
+// Inject what OTHER agents learned in situations like this one (shared
+// experience graph). Uses the goal embedding when the semantic gate made one,
+// embeds the goal itself otherwise, and falls back to full-text search when no
+// embeddings client is wired. Never blocks a run: any failure contributes
+// nothing. The injected ids are logged so their effect can be measured.
+const sharedLearnings: SystemPromptStep = (ctx) => {
+  if (ctx.config?.agents?.sharedLearnings === false) return null;
+  const graph = ctx.service.getExperienceGraph();
+  if (!graph?.available) return null;
+  return (async () => {
+    try {
+      const client = ctx.service.getEmbeddingsClient();
+      let vector = ctx.goalVector;
+      if (!vector && client) {
+        try {
+          [vector] = await client.embed([ctx.effectiveGoal]);
+        } catch (err) {
+          log.debug(`Shared learnings: goal embed failed, using full-text — ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      const items = await graph.findSharedLearnings({
+        agentId: ctx.agent.id,
+        flowId: ctx.agent.flow_id ?? "",
+        projectId: ctx.projectId,
+        goal: ctx.effectiveGoal,
+        goalVector: vector ?? null,
+        embeddingModel: client?.model ?? null,
+        tools: agentAllowedTools(ctx.agent),
+      });
+      if (items.length === 0) return null;
+      ctx.recorder.logEvent({
+        event_type: "run", event_subtype: "shared_learnings_injected",
+        detail: `${items.length} learning(s) from other agents`,
+        raw_data: {
+          items: items.map((i) => ({
+            id: i.id, agent_id: i.agentId, score: Number(i.score.toFixed(3)),
+            relevance: Number(i.relevance.toFixed(3)), tool_overlap: i.toolOverlap, same_office: i.sameOffice,
+          })),
+          mode: vector ? "vector" : "fulltext",
+        },
+      });
+      return promptSharedLearningsBlock(ctx.lang, items) || null;
+    } catch (err) {
+      log.debug(`Shared learnings skipped: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+  })();
+};
+
 // Inject performance stats summary
 const performanceStats: SystemPromptStep = (ctx) =>
   promptPerformanceBlock(ctx.lang, ctx.service.getAgentStats(ctx.agent.id)) || null;
@@ -276,6 +326,7 @@ export const SYSTEM_PROMPT_STEPS: ReadonlyArray<SystemPromptStep> = [
   officeInbox,
   semanticRankingGate,
   learnings,
+  sharedLearnings,
   performanceStats,
   similarRuns,
   conversationalMemory,

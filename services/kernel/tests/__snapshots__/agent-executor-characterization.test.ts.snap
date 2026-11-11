@@ -200,6 +200,11 @@ exports[`AgentExecutor.execute — characterization assembles every system-promp
   ],
   [
     "svc",
+    "getExperienceGraph",
+    [],
+  ],
+  [
+    "svc",
     "getAgentStats",
     [
       "agent-1",
@@ -738,6 +743,11 @@ Nobody is watching this run: a schedule or an event started it, and nobody reads
   ],
   [
     "svc",
+    "getExperienceGraph",
+    [],
+  ],
+  [
+    "svc",
     "getAgentStats",
     [
       "agent-1",
@@ -1045,6 +1055,11 @@ exports[`AgentExecutor.execute — characterization orders the model chain: dedu
       15,
       null,
     ],
+  ],
+  [
+    "svc",
+    "getExperienceGraph",
+    [],
   ],
   [
     "svc",
@@ -1539,6 +1554,11 @@ exports[`AgentExecutor.execute — characterization falls back to any alive tool
   ],
   [
     "svc",
+    "getExperienceGraph",
+    [],
+  ],
+  [
+    "svc",
     "getAgentStats",
     [
       "agent-1",
@@ -2023,6 +2043,11 @@ exports[`AgentExecutor.execute — characterization records a safety abort as an
   ],
   [
     "svc",
+    "getExperienceGraph",
+    [],
+  ],
+  [
+    "svc",
     "getAgentStats",
     [
       "agent-1",
@@ -2490,6 +2515,11 @@ exports[`AgentExecutor.execute — characterization cycles through other provide
   ],
   [
     "svc",
+    "getExperienceGraph",
+    [],
+  ],
+  [
+    "svc",
     "getAgentStats",
     [
       "agent-1",
@@ -2793,6 +2823,11 @@ exports[`AgentExecutor.execute — characterization records a non-retryable erro
       15,
       null,
     ],
+  ],
+  [
+    "svc",
+    "getExperienceGraph",
+    [],
   ],
   [
     "svc",
@@ -3206,6 +3241,11 @@ exports[`AgentExecutor.execute — characterization wires kernel_agents_invoke p
       15,
       null,
     ],
+  ],
+  [
+    "svc",
+    "getExperienceGraph",
+    [],
   ],
   [
     "svc",
@@ -4174,6 +4214,11 @@ exports[`AgentExecutor.execute — characterization stops on cancellation and un
       15,
       null,
     ],
+  ],
+  [
+    "svc",
+    "getExperienceGraph",
+    [],
   ],
   [
     "svc",

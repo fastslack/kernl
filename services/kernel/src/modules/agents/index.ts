@@ -24,6 +24,7 @@ import { kernlBugTools } from "./kernl-bugs-tools.js";
 import { commentOnRepeat } from "./kernl-bugs-github.js";
 import { auditHostPaths } from "./host-path-audit.js";
 import { agentsTools } from "./tools.js";
+import { AgentExperienceGraph } from "./services/experience-graph.js";
 import { auditTools } from "./audit-tools.js";
 import { createAnalysisResourceProvider, createSkillResourceProvider } from "./resources.js";
 import { log } from "../../core/logger.js";
@@ -106,6 +107,9 @@ export function createAgentsModule(): AgentsModule {
   let answerSweepTimer: ReturnType<typeof setTimeout> | null = null;
   let kernlBugs: KernlBugService | null = null;
   let hostPathAuditTimer: ReturnType<typeof setTimeout> | null = null;
+  let experienceSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  let experienceSyncHandler: ((payload: unknown) => void) | null = null;
+  let eventsRef: ModuleContext["events"] | null = null;
 
   // Advanced-capability slots — populated when `ext:agent-advanced` registers.
   const altExecutors = new Map<string, AltExecutorLike>();
@@ -133,6 +137,35 @@ export function createAgentsModule(): AgentsModule {
       runMigrations(ctx.sqlite, "agents", agentsMigrations);
 
       agentService = new AgentService(ctx.sqlite, ctx.events, ctx.config);
+
+      // Shared experience graph: runs, tools and learnings projected into the
+      // active graph driver so one agent's learnings can reach the others. The
+      // db drivers start after core modules initialize, so the first sync is
+      // deferred; after that, every finished run brings the graph up to date
+      // (coalesced, since offices finish runs in bursts).
+      if (ctx.config.agents?.sharedLearnings !== false) {
+        const service = agentService;
+        const experience = new AgentExperienceGraph(
+          ctx.sqlite,
+          () => ctx.graph,
+          () => service.getEmbeddingsClient()?.model ?? null,
+        );
+        service.setExperienceGraph(experience);
+        const scheduleSync = (delayMs: number) => {
+          if (experienceSyncTimer) return;
+          experienceSyncTimer = setTimeout(() => {
+            experienceSyncTimer = null;
+            experience.sync().catch((err) =>
+              log.warn(`Agent experience graph: sync failed — ${err instanceof Error ? err.message : String(err)}`),
+            );
+          }, delayMs);
+          experienceSyncTimer.unref?.();
+        };
+        experienceSyncHandler = () => scheduleSync(5_000);
+        eventsRef = ctx.events;
+        ctx.events.on("agent:flow:run_completed", experienceSyncHandler);
+        scheduleSync(15_000);
+      }
       // Offices that predate lots (migration 50) get theirs now, biggest first.
       try {
         agentService.syncLots();
@@ -366,6 +399,8 @@ export function createAgentsModule(): AgentsModule {
 
     async shutdown() {
       if (hostPathAuditTimer) clearTimeout(hostPathAuditTimer);
+      if (experienceSyncTimer) clearTimeout(experienceSyncTimer);
+      if (experienceSyncHandler) eventsRef?.off("agent:flow:run_completed", experienceSyncHandler);
       agentScheduler?.stop();
       questionTriager?.stop();
       answerQueue?.stop();

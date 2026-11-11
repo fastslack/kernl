@@ -32,6 +32,7 @@ import { AgentPromptVersionsService } from "./services/prompt-versions-service.j
 import { AgentSubscriptionsService } from "./services/subscriptions-service.js";
 import { AgentConversationsService } from "./services/conversations-service.js";
 import { AgentMemoryService } from "./services/memory-service.js";
+import type { AgentExperienceGraph } from "./services/experience-graph.js";
 import { AgentFlowsService } from "./services/flows-service.js";
 import { AgentRanksService } from "./services/ranks-service.js";
 import { AgentRunsService } from "./services/runs-service.js";
@@ -160,6 +161,11 @@ export class AgentService {
 
   setProjectGate(gate: ProjectGateLike | null): void { this.projectGate = gate; }
   getProjectGate(): ProjectGateLike | null { return this.projectGate; }
+
+  /** Shared experience graph (services/experience-graph.ts) — null until the agents module wires it. */
+  private experienceGraph: AgentExperienceGraph | null = null;
+  setExperienceGraph(graph: AgentExperienceGraph | null): void { this.experienceGraph = graph; }
+  getExperienceGraph(): AgentExperienceGraph | null { return this.experienceGraph; }
 
   /** Per-flow say on scheduled slots (SchedulePrecheck). Extensions register theirs on init. */
   private schedulePrechecks = new Map<string, SchedulePrecheck>();

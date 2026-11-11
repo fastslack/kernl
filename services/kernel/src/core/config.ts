@@ -141,6 +141,12 @@ export interface KernelConfig {
     semanticRankingCosineWeight: number;
     /** Items below this hybrid score are deprioritised; tuned in scripts/demo-embedding-ranking.ts. */
     semanticRankingMinScore: number;
+    /**
+     * Shared experience graph — inject other agents' learnings that fit the
+     * goal (modules/agents/services/experience-graph.ts). Needs a graph
+     * driver; without one it does nothing. ON by default, AGENTS_SHARED_LEARNINGS=0 turns it off.
+     */
+    sharedLearnings?: boolean;
   };
   telegram: {
     enabled: boolean;
@@ -438,6 +444,7 @@ export function loadConfig(): KernelConfig {
       useSemanticRanking: process.env.AGENTS_SEMANTIC_RANKING === "1",
       semanticRankingCosineWeight: parseFloat(process.env.AGENTS_SEMANTIC_COSINE_WEIGHT ?? "0.7"),
       semanticRankingMinScore: parseFloat(process.env.AGENTS_SEMANTIC_MIN_SCORE ?? "0.30"),
+      sharedLearnings: process.env.AGENTS_SHARED_LEARNINGS !== "0",
     },
     telegram: {
       enabled: process.env.TELEGRAM_ENABLED === "true",

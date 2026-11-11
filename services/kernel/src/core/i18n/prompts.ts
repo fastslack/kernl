@@ -147,6 +147,27 @@ export function promptLearningsBlock(lang: KernelLanguage, items: LearningItem[]
   return lines.join("\n");
 }
 
+export interface SharedLearningItem extends LearningItem {
+  agentName: string;
+}
+
+/** Learnings of other agents (shared experience graph), labelled with who learned them. */
+export function promptSharedLearningsBlock(lang: KernelLanguage, items: SharedLearningItem[]): string {
+  if (items.length === 0) return "";
+  const header = lang === "es"
+    ? "## Aprendizajes de otros agentes en situaciones parecidas (verificalos antes de confiar en ellos)"
+    : "## Learnings from other agents in similar situations (check them before relying on them)";
+  const lines = [header];
+  const confLabel = lang === "es" ? "confianza" : "confidence";
+  const fromLabel = lang === "es" ? "de" : "from";
+  for (const l of items) {
+    lines.push(
+      `- [${learningPrefix(l.type)}] (${fromLabel} ${l.agentName}, ${confLabel}: ${l.confidence.toFixed(2)}) ${l.content}`,
+    );
+  }
+  return lines.join("\n");
+}
+
 // ── Performance stats ───────────────────────────────────────────────────
 
 export interface AgentStatsBlock {
