@@ -52,7 +52,7 @@ chmod 600 "$envfile"
 source_count() {
   curl -fsS -u "$SRC_USER:$NEO4J_PASSWORD" -H 'Content-Type: application/json' \
     -d "{\"statement\": \"$1\"}" "$SRC_URI/db/$SRC_DB/query/v2" |
-    sed -E 's/.*"values":\[\[([0-9]+)\]\].*/\1/'
+    sed -E 's/.*"values":\[\[?([0-9]+)\]?\].*/\1/'
 }
 
 dest_count() {

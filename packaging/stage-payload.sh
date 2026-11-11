@@ -567,6 +567,59 @@ else
   rm -rf "$NATIVE_TMP"
 fi
 
+# Relate — the embedded graph engine behind the `relate` graph driver. Not a
+# kernel dependency (the driver imports it at start), so it is staged here on
+# its own: the client and the target's native engine from the signed GitHub
+# release (SHA-256 as GitHub records each asset), and koffi, which the client
+# loads the engine through, from npm (SHA-256 of the registry tarball, checked
+# against its sha512 integrity when pinned). koffi ships a binary for every
+# platform; only the target's is kept.
+echo "▶ staging Relate client for $NPM_PLATFORM-$NPM_ARCH"
+RELATE_VERSION=0.1.3
+RELATE_SHA256_CLIENT=c6b140dab1b5440ee309d535d83725c00dd914f031738e96d5c40a2f71195dca
+KOFFI_VERSION=2.16.3
+KOFFI_SHA256=c36416e8e02e6075d90a3fc607f44dc05993aabbb9d00968cb77b545d88c0959
+case "$NPM_PLATFORM-$NPM_ARCH" in
+  darwin-arm64) RELATE_SHA256_NATIVE=468a9c4468c72db47b6cd56369d21830a1bb8027f93687d57eee188139b7177d ;;
+  darwin-x64)   RELATE_SHA256_NATIVE=2d3e801435672a4ee4155ac38f5684d91dcf34522696b3b87f577c8d6f631843 ;;
+  linux-x64)    RELATE_SHA256_NATIVE=05562d4bb51036599acfec3a84b7d183d587fb3e0bedc3c59df5dfeec2b7cc6c ;;
+  win32-x64)    RELATE_SHA256_NATIVE=616c6035682bdfece770d718aee55b7534ad5ef5b6e191a737880d25e325ebbd ;;
+esac
+RELATE_TMP="$(mktemp -d)"
+RELATE_BASE="https://github.com/relatedb/relate/releases/download/v${RELATE_VERSION}"
+RELATE_NATIVE_PKG="relate-${NPM_PLATFORM}-${NPM_ARCH}"
+curl -fsSL "$RELATE_BASE/relate-relate-${RELATE_VERSION}.tgz" -o "$RELATE_TMP/client.tgz"
+curl -fsSL "$RELATE_BASE/relate-${RELATE_NATIVE_PKG}-${RELATE_VERSION}.tgz" -o "$RELATE_TMP/native.tgz"
+curl -fsSL "https://registry.npmjs.org/koffi/-/koffi-${KOFFI_VERSION}.tgz" -o "$RELATE_TMP/koffi.tgz"
+check_sha256() {
+  local got
+  got="$(shasum -a 256 "$1" 2>/dev/null || sha256sum "$1")"
+  if [ "${got%% *}" != "$2" ]; then
+    echo "ERROR: $1 does not match its pinned SHA-256" >&2
+    exit 1
+  fi
+}
+check_sha256 "$RELATE_TMP/client.tgz" "$RELATE_SHA256_CLIENT"
+check_sha256 "$RELATE_TMP/native.tgz" "$RELATE_SHA256_NATIVE"
+check_sha256 "$RELATE_TMP/koffi.tgz" "$KOFFI_SHA256"
+mkdir -p "$SRC_TREE/node_modules/@relate"
+for pkg in client:@relate/relate native:@relate/$RELATE_NATIVE_PKG koffi:koffi; do
+  src="${pkg%%:*}"; dst="$SRC_TREE/node_modules/${pkg#*:}"
+  rm -rf "$dst" "$RELATE_TMP/package"
+  tar -xzf "$RELATE_TMP/$src.tgz" -C "$RELATE_TMP"
+  mv "$RELATE_TMP/package" "$dst"
+done
+KOFFI_DIR="$SRC_TREE/node_modules/koffi"
+rm -rf "$KOFFI_DIR/src" "$KOFFI_DIR/vendor" "$KOFFI_DIR/doc"
+for d in "$KOFFI_DIR"/build/koffi/*; do
+  [ "$(basename "$d")" = "${NPM_PLATFORM}_${NPM_ARCH}" ] || rm -rf "$d"
+done
+ls "$SRC_TREE/node_modules/@relate/$RELATE_NATIVE_PKG/lib/" | grep -q relate_ffi || {
+  echo "ERROR: Relate native library missing from the staged payload" >&2
+  exit 1
+}
+rm -rf "$RELATE_TMP"
+
 # The agent SDK's native CLI for the target platform.
 #
 # The SDK ships `claude` in a per-platform optional package, and the lockfile
