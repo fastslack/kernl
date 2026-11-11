@@ -155,9 +155,16 @@ export function createAgentsModule(): AgentsModule {
           if (experienceSyncTimer) return;
           experienceSyncTimer = setTimeout(() => {
             experienceSyncTimer = null;
-            experience.sync().catch((err) =>
-              log.warn(`Agent experience graph: sync failed — ${err instanceof Error ? err.message : String(err)}`),
-            );
+            experience
+              .sync()
+              .then(() => {
+                // An embedded graph loading a large store can still be coming
+                // up; try again rather than wait for the next finished run.
+                if (!experience.available) scheduleSync(30_000);
+              })
+              .catch((err) =>
+                log.warn(`Agent experience graph: sync failed — ${err instanceof Error ? err.message : String(err)}`),
+              );
           }, delayMs);
           experienceSyncTimer.unref?.();
         };
