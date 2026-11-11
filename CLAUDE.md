@@ -94,6 +94,19 @@ config is stored, the Neo4j driver falls back to `NEO4J_URI`/`NEO4J_USER`/
 `NEO4J_PASSWORD`. Exactly one graph driver carries `status='active'`; if it is
 `noop`, `capabilities.cypher` is false and every graph write silently no-ops.
 
+**Relate is the embedded alternative to Neo4j (driver `relate`):**
+`core/db-drivers/builtins/relate-graph-driver.ts` runs the same Cypher in-process
+against a store file (`data/graph.rl` by default, `RELATE_DATABASE` to override;
+setting it also makes a fresh install start on Relate). It has no GDS, so `gds`
+and `mlPipelines` stay false — gate GDS work on those, never on `cypher`. The
+client `@relate/relate` is not a kernel dependency: the driver loads it at start
+from `RELATE_CLIENT_MODULE` (the image installs it in `/opt/relate`) and stays
+not-ready with an error if it is missing. Write Cypher that runs on both: no
+`apoc.*`, no options map on `db.index.fulltext.queryNodes` (use `LIMIT`), and
+read counts with `Number(v)` or `.toNumber()` — the driver returns
+neo4j-style integers. `scripts/relate-migrate.sh` copies a Neo4j graph into a
+store; vector and full-text indexes are recreated by the kernel on start.
+
 **LifeService created in bootstrap:**
 `LifeService` is created in `bootstrap()` (services/kernel/src/index.ts), not inside a module — passed to `registerDashboardRoutes()`.
 

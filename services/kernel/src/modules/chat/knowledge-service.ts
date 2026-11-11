@@ -245,11 +245,12 @@ export class KnowledgeService {
         `CALL db.index.vector.queryNodes($indexName, $k, $vector)
          YIELD node, score
          WHERE node.module = 'chat'
+           AND ($excludeEpisodeId IS NULL OR node.episode_id <> $excludeEpisodeId)
          RETURN node.id AS id, node.role AS role, node.content AS content,
                 node.strength AS strength, node.reinforcements AS reinforcements,
                 node.last_recalled_at AS last_recalled_at, node.episode_id AS episode_id,
                 score`,
-        { indexName: MEMORY_INDEX, k, vector },
+        { indexName: MEMORY_INDEX, k, vector, excludeEpisodeId: excludeEpisodeId ?? null },
       );
 
       return result.records.map((r) => ({
@@ -288,6 +289,7 @@ export class KnowledgeService {
                 target.email AS email,
                 target.company AS company,
                 target.status AS status,
+                target.label AS conceptLabel,
                 type(r) AS relType`,
         { ids: memoryIds },
       );
@@ -322,7 +324,8 @@ export class KnowledgeService {
         } else if (label === "Concept") {
           concepts.push({
             id,
-            label: (r.get("name") as string) ?? "",
+            // Concepts keep their text in `label` (see upsertConcept), not `name`.
+            label: (r.get("conceptLabel") as string) ?? "",
             description: "",
             gravity: 0,
             mention_count: 0,

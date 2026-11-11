@@ -140,10 +140,15 @@ export async function proposeBatch(
     let hits: Array<{ qid: string; label: string; year: number; aliases: string[] }> = [];
     try {
       const result = await graph.run(
-        `CALL db.index.fulltext.queryNodes($index, $query, {limit: $k})
-         YIELD node
+        // LIMIT rather than the procedure's `{limit}` option: Relate's
+        // queryNodes takes two arguments only, and the clause means the same
+        // on Neo4j. toInteger() because the JS driver sends numbers as FLOAT.
+        `CALL db.index.fulltext.queryNodes($index, $query)
+         YIELD node, score
          RETURN node.qid AS qid, node.label AS label, node.year AS year,
-                coalesce(node.aliases, []) AS aliases`,
+                coalesce(node.aliases, []) AS aliases
+         ORDER BY score DESC
+         LIMIT toInteger($k)`,
         { index: ALIAS_INDEX, query, k: CANDIDATES_PER_TITLE },
       );
       hits = result.records.map((r) => ({

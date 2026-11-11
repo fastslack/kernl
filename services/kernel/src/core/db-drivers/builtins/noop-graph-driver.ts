@@ -72,7 +72,7 @@ export class NoopGraphDriver implements GraphDriver {
       ready: this.started,
       source: "builtin",
       capabilities: this.capabilities,
-      info: { reason: "Graph backend disabled — enable Neo4j or Kùzu in /extensions" },
+      info: { reason: "Graph backend disabled — enable Relate or Neo4j in /extensions" },
     };
   }
 
