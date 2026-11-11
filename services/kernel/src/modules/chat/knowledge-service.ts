@@ -66,8 +66,33 @@ export class KnowledgeService {
 
   // ── Initialization ────────────────────────────────
 
+  /** The driver instance whose schema is in place, and an in-flight attempt. */
+  private schemaFor: GraphDriver | null = null;
+  private schemaPending: Promise<void> | null = null;
+
+  /**
+   * Make sure the constraints and vector indexes exist on the active driver.
+   *
+   * The chat module initializes before bootstrap starts the db drivers, so the
+   * call in `initialize()` meets the no-op driver and creates nothing; a
+   * backend switched on later from /extensions is a new driver instance with
+   * an empty schema too. Every entry point that writes or searches therefore
+   * calls this first: it runs once per driver instance and is cheap after.
+   */
+  private async ensureSchema(): Promise<void> {
+    const g = this.getReadyGraph();
+    if (!g || this.schemaFor === g) return;
+    if (!this.schemaPending) {
+      this.schemaPending = this.createConstraintsAndIndexes().finally(() => {
+        this.schemaPending = null;
+      });
+    }
+    await this.schemaPending;
+  }
+
   async createConstraintsAndIndexes(): Promise<void> {
-    if (!this.available) return;
+    const graph = this.getReadyGraph();
+    if (!graph) return;
 
     const statements = [
       "CREATE CONSTRAINT episode_id IF NOT EXISTS FOR (e:Episode) REQUIRE e.id IS UNIQUE",
@@ -103,6 +128,8 @@ export class KnowledgeService {
           log.warn(`Vector index ${idx.name} creation skipped: ${err}`);
         });
     }
+    this.schemaFor = graph;
+    log.info(`Chat knowledge graph: constraints and vector indexes ensured on "${graph.slug}"`);
   }
 
   // ── Memory CRUD ───────────────────────────────────
@@ -116,6 +143,7 @@ export class KnowledgeService {
     created_at: string;
   }): Promise<void> {
     if (!this.available) return;
+    await this.ensureSchema();
 
     await this.getReadyGraph()!.run(
       `CREATE (m:Memory {
@@ -183,6 +211,7 @@ export class KnowledgeService {
     started_at: string;
   }): Promise<void> {
     if (!this.available) return;
+    await this.ensureSchema();
 
     await this.getReadyGraph()!
       .run(
@@ -239,6 +268,7 @@ export class KnowledgeService {
     excludeEpisodeId?: string,
   ): Promise<MemoryNode[]> {
     if (!this.available) return [];
+    await this.ensureSchema();
 
     try {
       const result = await this.getReadyGraph()!.run(
@@ -379,6 +409,7 @@ export class KnowledgeService {
     memoryId?: string;
   }): Promise<string> {
     if (!this.available) return "";
+    await this.ensureSchema();
 
     const id = newId();
     const now = isoNow();
@@ -542,6 +573,7 @@ export class KnowledgeService {
     k: number = 10,
   ): Promise<ConceptNode[]> {
     if (!this.available) return [];
+    await this.ensureSchema();
 
     try {
       const result = await this.getReadyGraph()!.run(
@@ -629,6 +661,7 @@ export class KnowledgeService {
     conceptIds?: string[];
   }): Promise<string> {
     if (!this.available) return "";
+    await this.ensureSchema();
 
     const id = newId();
 

@@ -239,6 +239,27 @@ describe.skipIf(!clientModule)("RelateGraphDriver against the real engine", () =
     expect((r.records[0].get("c") as RelateInteger).toNumber()).toBe(2);
   });
 
+  it("creates the chat schema on first use when the graph came up after init", async () => {
+    // Bootstrap order: the chat module initializes against the no-op driver,
+    // and the real driver starts afterwards.
+    let active: RelateGraphDriver | null = null;
+    const ks = new KnowledgeService(() => active);
+    await ks.createConstraintsAndIndexes();
+    active = await startMemory();
+    const before = await active.run("SHOW INDEXES YIELD type WHERE type = 'VECTOR' RETURN count(*) AS n");
+    expect(Number(before.records[0].get("n"))).toBe(0);
+
+    await ks.createEpisodeNode({ id: "ep", title: "t", started_at: "2026-11-11T10:00:00Z" });
+    const r = await active.run(
+      "SHOW INDEXES YIELD name, type WHERE type = 'VECTOR' RETURN name ORDER BY name",
+    );
+    expect(r.records.map((x) => x.get("name"))).toEqual([
+      "concept-embeddings",
+      "episode-embeddings",
+      "memory-embeddings",
+    ]);
+  });
+
   it("runs the chat memory graph end to end", async () => {
     const driver = await startMemory();
     const ks = new KnowledgeService(() => driver);
