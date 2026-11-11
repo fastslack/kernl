@@ -1049,6 +1049,21 @@ export const agentsMigrations: Migration[] = [
     version: 59,
     sql: `ALTER TABLE agents ADD COLUMN keep_full_tool_turns INTEGER NOT NULL DEFAULT 3;`,
   },
+  {
+    // Which learnings a run's prompt actually carried (its own and other
+    // agents' — shared = 1). Grading credits or blames exactly these instead
+    // of every learning the agent had active. A row with learning_id = ''
+    // marks a run whose prompt was recorded and carried none.
+    version: 60,
+    sql: `
+      CREATE TABLE IF NOT EXISTS agent_run_learnings (
+        run_id      TEXT NOT NULL,
+        learning_id TEXT NOT NULL,
+        shared      INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (run_id, learning_id)
+      ) WITHOUT ROWID;
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is

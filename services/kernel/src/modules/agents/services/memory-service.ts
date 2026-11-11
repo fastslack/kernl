@@ -385,6 +385,7 @@ export class AgentMemoryService {
     agentId: string,
     runCreatedAt: string,
     outcome: "success" | "partial" | "failure" | "neutral",
+    runId?: string,
   ): { updated: number; deactivated: number } {
     const delta =
       outcome === "success" ? 0.08
@@ -393,7 +394,14 @@ export class AgentMemoryService {
       : 0;
     if (delta === 0) return { updated: 0, deactivated: 0 };
 
-    const learnings = this.getLearningsActiveAt(agentId, runCreatedAt);
+    // When the run's prompt was recorded, only what it carried is credited or
+    // blamed — and a failure never weakens an `avoid` learning: a failure is
+    // what that learning warned about, not evidence against it. Runs recorded
+    // before that existed fall back to every learning active at the time.
+    const injected = runId ? this.getInjectedLearnings(runId) : null;
+    const learnings: Array<Pick<AgentLearning, "id" | "type">> = injected
+      ? injected.filter((l) => !(delta < 0 && l.type === "avoid"))
+      : this.getLearningsActiveAt(agentId, runCreatedAt);
     let updated = 0;
     let deactivated = 0;
     for (const l of learnings) {
@@ -409,6 +417,37 @@ export class AgentMemoryService {
       }
     }
     return { updated, deactivated };
+  }
+
+  /**
+   * Record which learnings a run's prompt carried. Called once per prompt
+   * assembly per kind (own / shared); an empty list still marks the run as
+   * recorded, so grading knows it carried nothing rather than "unknown".
+   */
+  recordInjectedLearnings(runId: string, learningIds: string[], shared: boolean): void {
+    const stmt = this.db.prepare(
+      "INSERT OR IGNORE INTO agent_run_learnings (run_id, learning_id, shared) VALUES (?, ?, ?)",
+    );
+    stmt.run(runId, "", 0);
+    for (const id of learningIds) stmt.run(runId, id, shared ? 1 : 0);
+  }
+
+  /**
+   * The learnings a run's prompt carried, still active, with their type —
+   * null when the run's prompt was never recorded.
+   */
+  getInjectedLearnings(runId: string): Array<Pick<AgentLearning, "id" | "type">> | null {
+    const marked = this.db
+      .prepare("SELECT 1 FROM agent_run_learnings WHERE run_id = ? LIMIT 1")
+      .get(runId);
+    if (!marked) return null;
+    return this.db
+      .prepare(
+        `SELECT l.id, l.type FROM agent_run_learnings rl
+           JOIN agent_learnings l ON l.id = rl.learning_id
+          WHERE rl.run_id = ? AND l.active = 1`,
+      )
+      .all(runId) as Array<Pick<AgentLearning, "id" | "type">>;
   }
 
   /**

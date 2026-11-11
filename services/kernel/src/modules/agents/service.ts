@@ -107,7 +107,7 @@ const AGENT_PATCH: Record<string, PatchColumn> = {
  * logic of its own stays written out in the class.
  */
 const DELEGATED = {
-  memory: ["setEmbeddingsClient", "getEmbeddingsClient", "addLearning", "getLearnings", "addMemory", "getMemory", "clearMemory", "getRelevantMemory", "getRelevantMemoryByEmbedding", "findSimilarPastRuns", "findSimilarPastRunsByEmbedding", "getRelevantLearnings", "getRelevantLearningsByEmbedding", "updateLearningConfidence", "deactivateLearning", "getLearningsActiveAt", "reinforceLearningsForRun", "cleanupLowConfidenceLearnings"],
+  memory: ["setEmbeddingsClient", "getEmbeddingsClient", "addLearning", "getLearnings", "addMemory", "getMemory", "clearMemory", "getRelevantMemory", "getRelevantMemoryByEmbedding", "findSimilarPastRuns", "findSimilarPastRunsByEmbedding", "getRelevantLearnings", "getRelevantLearningsByEmbedding", "updateLearningConfidence", "deactivateLearning", "getLearningsActiveAt", "reinforceLearningsForRun", "cleanupLowConfidenceLearnings", "recordInjectedLearnings", "getInjectedLearnings"],
   flows: ["createFlow", "ensureOfficeHome", "resolveFlowHome", "getFlowWorkspace", "setFlowWorkspaceSpec", "prepareFlowWorkspace", "setFlowRepo", "listFlows", "getFlow", "updateFlow", "deleteFlow", "setFlowPaused", "isFlowPaused", "isAgentOfficePaused", "assignAgentToFlow", "syncLots"],
   ranks: ["createRank", "listRanks", "getRank", "getTopAgent", "updateRank", "deleteRank", "assignRankToAgent"],
   runs: ["createRun", "getRun", "listRuns", "cancelRun", "cleanupStaleRuns", "recoverStaleRuns", "addStep", "getSteps", "getRunEvents", "saveCheckpoint", "getCheckpoint", "reopenRun", "markCheckpointResumed", "deleteCheckpoint", "getRunConditions", "setRunCondition"],
@@ -272,8 +272,8 @@ export class AgentService {
       db,
       events,
       (id) => this.getRun(id),
-      (agentId, runCreatedAt, outcome) =>
-        this.reinforceLearningsForRun(agentId, runCreatedAt, outcome),
+      (agentId, runCreatedAt, outcome, runId) =>
+        this.reinforceLearningsForRun(agentId, runCreatedAt, outcome, runId),
     );
 
     // Bind the pass-through methods listed in DELEGATED (see above).

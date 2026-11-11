@@ -37,6 +37,10 @@ export class RunRecorder {
     private readonly events?: EventBus,
   ) {}
 
+  get runId(): string {
+    return this.run.id;
+  }
+
   /** Emit a flow event carrying this run's agent_id / agent_name / run_id. */
   emit(event: string, fields: Record<string, unknown>): void {
     this.events?.emit(event, {

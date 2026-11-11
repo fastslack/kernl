@@ -109,6 +109,7 @@ export function createAgentsModule(): AgentsModule {
   let hostPathAuditTimer: ReturnType<typeof setTimeout> | null = null;
   let experienceSyncTimer: ReturnType<typeof setTimeout> | null = null;
   let experienceSyncHandler: ((payload: unknown) => void) | null = null;
+  let evalFailingHandler: ((payload: unknown) => void) | null = null;
   let eventsRef: ModuleContext["events"] | null = null;
 
   // Advanced-capability slots — populated when `ext:agent-advanced` registers.
@@ -173,6 +174,27 @@ export function createAgentsModule(): AgentsModule {
         ctx.events.on("agent:flow:run_completed", experienceSyncHandler);
         scheduleSync(15_000);
       }
+
+      // Self-evaluation is where learnings come from; when it keeps failing,
+      // agents silently stop learning. Tell the user on their channels.
+      evalFailingHandler = (payload: unknown) => {
+        const p = (payload ?? {}) as { streak?: number; last_error?: string };
+        const es = ctx.config.language !== "en";
+        ctx.notifier
+          .send({
+            title: es
+              ? "Kernl: la autoevaluación de agentes está fallando"
+              : "Kernl: agent self-evaluation is failing",
+            body: es
+              ? `${p.streak ?? "Varios"} intentos seguidos fallaron, así que los agentes no están aprendiendo. Último error: ${p.last_error ?? "desconocido"}. Revisá el proveedor de AGENTS_EVAL_PROVIDER.`
+              : `${p.streak ?? "Several"} attempts in a row failed, so agents are not learning. Last error: ${p.last_error ?? "unknown"}. Check the AGENTS_EVAL_PROVIDER provider.`,
+            priority: "high",
+            source: "agents",
+          })
+          .catch((err: unknown) => log.warn(`Eval-failing notification not sent: ${String(err)}`));
+      };
+      eventsRef = ctx.events;
+      ctx.events.on("agent:eval:failing", evalFailingHandler);
       // Offices that predate lots (migration 50) get theirs now, biggest first.
       try {
         agentService.syncLots();
@@ -408,6 +430,7 @@ export function createAgentsModule(): AgentsModule {
       if (hostPathAuditTimer) clearTimeout(hostPathAuditTimer);
       if (experienceSyncTimer) clearTimeout(experienceSyncTimer);
       if (experienceSyncHandler) eventsRef?.off("agent:flow:run_completed", experienceSyncHandler);
+      if (evalFailingHandler) eventsRef?.off("agent:eval:failing", evalFailingHandler);
       agentScheduler?.stop();
       questionTriager?.stop();
       answerQueue?.stop();

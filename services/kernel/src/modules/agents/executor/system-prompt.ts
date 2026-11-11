@@ -189,6 +189,12 @@ const learnings: SystemPromptStep = (ctx) => {
   const items = goalVector
     ? service.getRelevantLearningsByEmbedding(agent.id, effectiveGoal, goalVector, 15, cosW, minS, ctx.projectId)
     : service.getRelevantLearnings(agent.id, effectiveGoal, 15, ctx.projectId);
+  // What this prompt carries is what grading credits or blames (memory-service).
+  try {
+    service.recordInjectedLearnings(ctx.recorder.runId, items.map((l) => l.id), false);
+  } catch (err) {
+    log.debug(`Recording injected learnings failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
   return promptLearningsBlock(ctx.lang, items) || null;
 };
 
@@ -222,6 +228,7 @@ const sharedLearnings: SystemPromptStep = (ctx) => {
         tools: agentAllowedTools(ctx.agent),
       });
       if (items.length === 0) return null;
+      ctx.service.recordInjectedLearnings(ctx.recorder.runId, items.map((i) => i.id), true);
       ctx.recorder.logEvent({
         event_type: "run", event_subtype: "shared_learnings_injected",
         detail: `${items.length} learning(s) from other agents`,

@@ -200,6 +200,18 @@ exports[`AgentExecutor.execute — characterization assembles every system-promp
   ],
   [
     "svc",
+    "recordInjectedLearnings",
+    [
+      "run-1",
+      [
+        null,
+        null,
+      ],
+      false,
+    ],
+  ],
+  [
+    "svc",
     "getExperienceGraph",
     [],
   ],
@@ -743,6 +755,15 @@ Nobody is watching this run: a schedule or an event started it, and nobody reads
   ],
   [
     "svc",
+    "recordInjectedLearnings",
+    [
+      "run-1",
+      [],
+      false,
+    ],
+  ],
+  [
+    "svc",
     "getExperienceGraph",
     [],
   ],
@@ -1054,6 +1075,15 @@ exports[`AgentExecutor.execute — characterization orders the model chain: dedu
       "go",
       15,
       null,
+    ],
+  ],
+  [
+    "svc",
+    "recordInjectedLearnings",
+    [
+      "run-1",
+      [],
+      false,
     ],
   ],
   [
@@ -1554,6 +1584,15 @@ exports[`AgentExecutor.execute — characterization falls back to any alive tool
   ],
   [
     "svc",
+    "recordInjectedLearnings",
+    [
+      "run-1",
+      [],
+      false,
+    ],
+  ],
+  [
+    "svc",
     "getExperienceGraph",
     [],
   ],
@@ -2043,6 +2082,15 @@ exports[`AgentExecutor.execute — characterization records a safety abort as an
   ],
   [
     "svc",
+    "recordInjectedLearnings",
+    [
+      "run-1",
+      [],
+      false,
+    ],
+  ],
+  [
+    "svc",
     "getExperienceGraph",
     [],
   ],
@@ -2515,6 +2563,15 @@ exports[`AgentExecutor.execute — characterization cycles through other provide
   ],
   [
     "svc",
+    "recordInjectedLearnings",
+    [
+      "run-1",
+      [],
+      false,
+    ],
+  ],
+  [
+    "svc",
     "getExperienceGraph",
     [],
   ],
@@ -2822,6 +2879,15 @@ exports[`AgentExecutor.execute — characterization records a non-retryable erro
       "go",
       15,
       null,
+    ],
+  ],
+  [
+    "svc",
+    "recordInjectedLearnings",
+    [
+      "run-1",
+      [],
+      false,
     ],
   ],
   [
@@ -3240,6 +3306,15 @@ exports[`AgentExecutor.execute — characterization wires kernel_agents_invoke p
       "go",
       15,
       null,
+    ],
+  ],
+  [
+    "svc",
+    "recordInjectedLearnings",
+    [
+      "run-1",
+      [],
+      false,
     ],
   ],
   [
@@ -4213,6 +4288,15 @@ exports[`AgentExecutor.execute — characterization stops on cancellation and un
       "go",
       15,
       null,
+    ],
+  ],
+  [
+    "svc",
+    "recordInjectedLearnings",
+    [
+      "run-1",
+      [],
+      false,
     ],
   ],
   [

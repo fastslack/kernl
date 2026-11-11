@@ -26,6 +26,13 @@ export class AgentEvalService {
   private configRef: KernelConfig | null = null;
   /** agent id → when one of its runs was last graded. */
   private lastGraded = new Map<string, number>();
+  /** Grading attempts that failed in a row, and why the last one did. */
+  private failureStreak = 0;
+  private lastError = "";
+
+  getFailureState(): { streak: number; lastError: string } {
+    return { streak: this.failureStreak, lastError: this.lastError };
+  }
 
   setProviders(providers: Map<string, ChatLlmProvider>, providerName: string, model: string): void {
     this.providers = providers;
@@ -113,7 +120,7 @@ export class AgentEvalService {
       : (this.configRef?.language ?? "es");
 
     try {
-      return await runWithChain(candidates, "AgentEvalService", async (cand) => {
+      const graded = await runWithChain(candidates, "AgentEvalService", async (cand) => {
         const completion = await cand.provider.chatCompletion(messages, {
           model: cand.model || undefined,
           system: promptEvalSystem(evalLang),
@@ -136,8 +143,13 @@ export class AgentEvalService {
         }
         return { ...parsed, tokens_used: completion.tokens_used };
       });
+      this.failureStreak = 0;
+      this.lastError = "";
+      return graded;
     } catch (err) {
-      log.warn(`AgentEvalService: ${err instanceof Error ? err.message : String(err)}`);
+      this.failureStreak++;
+      this.lastError = err instanceof Error ? err.message : String(err);
+      log.warn(`AgentEvalService: ${this.lastError} (${this.failureStreak} failed in a row)`);
       return null;
     }
   }

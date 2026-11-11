@@ -21,6 +21,7 @@ export class AgentFeedbackService {
       agentId: string,
       runCreatedAt: string,
       outcome: "success" | "partial" | "failure" | "neutral",
+      runId?: string,
     ) => { updated: number; deactivated: number },
   ) {}
 
@@ -57,7 +58,7 @@ export class AgentFeedbackService {
     // learnings that guided failures get downweighted and eventually deactivated.
     const run = this.getRun(input.run_id);
     if (run) {
-      this.reinforceLearningsForRun(input.agent_id, run.created_at, feedback.outcome);
+      this.reinforceLearningsForRun(input.agent_id, run.created_at, feedback.outcome, run.id);
     }
 
     this.events.emit("data.changed", { module: "agents", action: "feedback_added" });
