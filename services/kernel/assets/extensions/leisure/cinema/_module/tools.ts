@@ -85,15 +85,11 @@ export function cinemaTools(deps: CinemaToolDeps): ToolDefinition[] {
       }),
       handler: async (a) => {
         try {
-          const graph = deps.graph();
           const embedder = deps.embedder();
-          if (!graph?.capabilities.cypher) {
-            return errorResult("semantic search unavailable: activate a graph driver with cypher support in /extensions");
-          }
           if (!embedder) {
             return errorResult("semantic search unavailable: embeddings client not initialised");
           }
-          const hits = await searchSimilar(embedder, graph, a.query, a.limit ?? 10);
+          const hits = await searchSimilar(embedder, deps.service.vectorStore(), deps.service, a.query, a.limit ?? 10);
           if (hits.length === 0) {
             return textResult(`no hits for "${a.query}"`);
           }

@@ -175,11 +175,10 @@ export function registerCinemaRoutes(
     // is no query at all.
     if (filter.query && filter.query.trim()) {
       const embedder = embedderRef();
-      const graph = graphRef();
       // Cap the candidate set generously so the post-filter survives
       // even if most candidates fail the year/lang/tag check.
       const candidates = (embedder)
-        ? await hybridSearch(embedder, graph, service, filter.query, 500)
+        ? await hybridSearch(embedder, service.vectorStore(), service, filter.query, 500)
         : service.fullTextSearch(filter.query, 500).map((id) => ({ identifier: id }));
       const ids = candidates.map((c) => c.identifier);
       const filtered = service.filterByIds(ids, filter);
@@ -250,7 +249,6 @@ export function registerCinemaRoutes(
       modeRaw === "semantic" ? "semantic" :
       modeRaw === "fts" ? "fts" : "hybrid";
 
-    const graph = graphRef();
     const embedder = embedderRef();
 
     let hits: Array<{ identifier: string; score: number; source?: string }> = [];
@@ -259,10 +257,10 @@ export function registerCinemaRoutes(
       const ids = service.fullTextSearch(q, limit);
       hits = ids.map((id, i) => ({ identifier: id, score: 1 / (i + 1), source: "fts" }));
     } else if (mode === "semantic") {
-      if (!graph?.capabilities.cypher || !embedder) {
-        throw new HttpError(503, "semantic search unavailable — graph driver or embedder not ready");
+      if (!embedder) {
+        throw new HttpError(503, "semantic search unavailable — embedder not ready");
       }
-      const sem = await searchSimilar(embedder, graph, q, limit);
+      const sem = await searchSimilar(embedder, service.vectorStore(), service, q, limit);
       hits = sem.map((h) => ({ identifier: h.identifier, score: h.score, source: h.source }));
     } else {
       // hybrid — embedder may be null (semantic leg falls through)
@@ -271,7 +269,7 @@ export function registerCinemaRoutes(
         const ids = service.fullTextSearch(q, limit);
         hits = ids.map((id, i) => ({ identifier: id, score: 1 / (i + 1), source: "fts" }));
       } else {
-        const fused = await hybridSearch(embedder, graph, service, q, limit);
+        const fused = await hybridSearch(embedder, service.vectorStore(), service, q, limit);
         hits = fused.map((h) => ({ identifier: h.identifier, score: h.score, source: h.source }));
       }
     }
@@ -354,17 +352,15 @@ export function registerCinemaRoutes(
   // the catalog much faster than the cron's 5-minute tick. Body:
   //   { batch_size?: number }   default 96, max 256
   server.route<{ batch_size?: number }>("POST", "/api/cinema/embed/run", async ({ body }) => {
-    const graph = graphRef();
     const embedder = embedderRef();
-    if (!graph?.capabilities.cypher) throw new HttpError(503, "graph driver unavailable — neo4j down");
     if (!embedder) throw new HttpError(503, "embeddings client not initialised");
     const batchSize = Math.max(1, Math.min(body?.batch_size ?? 96, 256));
     const { embedPending } = await import("./embeddings.js");
-    const result = await embedPending(service, embedder, graph, batchSize);
+    const result = await embedPending(service, embedder, service.vectorStore(), batchSize);
     const pending = service.pendingEmbeddingIds(embedder.model, embedder.dim, 99999).length;
     return {
       embedded: result.embedded,
-      graph_writes: result.graphWrites,
+      stored: result.stored,
       duration_ms: result.durationMs,
       pending,
       model: embedder.model,
@@ -464,7 +460,7 @@ export function registerCinemaRoutes(
   server.route("GET", "/api/cinema/similar/:identifier", async ({ params: { identifier }, query }) => {
     const embedder = wired(embedderRef(), "embeddings client");
     const limit = clampInt(query.get("limit"), 12, 1, 60);
-    const hits = await similarTo(embedder, graphRef(), identifier, limit);
+    const hits = await similarTo(embedder, service.vectorStore(), identifier, limit);
     // filterByIds preserves the caller's order, so cosine ranking survives.
     const items = service.filterByIds(hits.map((h) => h.identifier), {});
     return { items, total: items.length };
@@ -474,7 +470,7 @@ export function registerCinemaRoutes(
     const db = wired(sqliteRef(), "database");
     const embedder = wired(embedderRef(), "embeddings client");
     const limit = clampInt(query.get("limit"), 24, 1, 60);
-    const result = await forYou(db, embedder, graphRef(), limit);
+    const result = await forYou(db, embedder, service.vectorStore(), limit);
     const items = service.filterByIds(result.hits.map((h) => h.identifier), {});
     // `reason` is passed through rather than collapsed into an empty list:
     // "save a few films first" and "run the embed runner" are different

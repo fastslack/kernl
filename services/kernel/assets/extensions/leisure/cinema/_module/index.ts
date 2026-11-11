@@ -50,6 +50,7 @@ import { TranscribeJobService } from "./transcribe-jobs.js";
 import { ConvertJobService } from "./convert-jobs.js";
 import { cinemaTools } from "./tools.js";
 import { EmbedRunner } from "./embed-runner.js";
+import { migrateGraphVectors, bulkEmbeddingAllowed } from "./embeddings.js";
 import { GraphProjectionRunner } from "./graph-projection-runner.js";
 import { GraphResolveRunner } from "./graph-resolve-runner.js";
 import { TranslateRunner } from "./translate-runner.js";
@@ -147,7 +148,7 @@ export function createCinemaModule(): CinemaModule {
       // EmbedRunner — singleton per kernel; the API endpoints (start /
       // stop / status) drive it. Lazy-resolves embedder + graph at run
       // time so it picks up post-bootstrap wiring.
-      embedRunner = new EmbedRunner(service, () => embeddingsRef, () => graphRef);
+      embedRunner = new EmbedRunner(service, () => embeddingsRef);
       // GraphProjectionRunner — projects the catalogue's structure (release
       // groups, canonical identities, people, genres, subjects) into Neo4j as
       // nodes and edges. Independent of the embedder: it MERGEs onto the same
@@ -225,18 +226,43 @@ export function createCinemaModule(): CinemaModule {
       // Guarded so we only auto-resume when the run got interrupted,
       // never on a fresh install (countAll === 0 will be handled by
       // maybeFirstRunIngest which seeds the catalog first).
-      if (embedRunner && embeddings && graph?.capabilities.cypher) {
-        try {
-          const total = service?.countAll() ?? 0;
-          const pending = service?.pendingEmbeddingIds(embeddings.model, embeddings.dim, 1)
-            .length ?? 0;
-          if (total > 0 && pending > 0) {
+      // Vectors live in SQLite now; an install that kept them on graph nodes
+      // moves them over once (and frees the graph of them). Before resuming
+      // the embedder, so titles whose vector moved are not queued again.
+      const svc = service;
+      const db = sqliteRef;
+      const migrate = svc && db
+        ? migrateGraphVectors(graph, svc.vectorStore(), db)
+            .then((r) => {
+              if (r) {
+                log.info(
+                  `cinema: moved ${r.moved} title vectors from the graph to SQLite ` +
+                  `(${r.stripped} nodes stripped, ${r.indexesDropped} vector index(es) dropped, ${r.requeued} title(s) queued to re-embed)`,
+                );
+              }
+            })
+            .catch((err) => log.warn("cinema: moving vectors out of the graph failed — will retry on next start", err))
+        : Promise.resolve();
+      if (embedRunner && embeddings) {
+        const runner = embedRunner;
+        void migrate.then(() => {
+          try {
+            const total = svc?.countAll() ?? 0;
+            const pending = svc?.pendingEmbeddingIds(embeddings.model, embeddings.dim, 1).length ?? 0;
+            if (total === 0 || pending === 0) return;
+            if (!bulkEmbeddingAllowed(embeddings)) {
+              log.info(
+                "cinema: catalog has titles to embed, but only the in-process MiniLM fallback is up — " +
+                "not resuming on CPU (start it from the UI, or set CINEMA_EMBED_LOCAL=1)",
+              );
+              return;
+            }
             log.info(`cinema: auto-resuming embed runner (catalog has pending rows)`);
-            embedRunner.start({ batchSize: 128 });
+            runner.start({ batchSize: 128 });
+          } catch (err) {
+            log.warn("cinema: embed runner auto-resume check failed", err);
           }
-        } catch (err) {
-          log.warn("cinema: embed runner auto-resume check failed", err);
-        }
+        });
       }
     },
 

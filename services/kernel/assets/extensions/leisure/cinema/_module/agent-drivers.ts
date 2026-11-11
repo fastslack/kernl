@@ -33,7 +33,7 @@ import type { DiscoveryRegistry } from "./discovery/registry.js";
 import type { NostrDirectoriesProvider } from "./discovery/nostr-directories-provider.js";
 import { ingestNextChunk } from "./ingester.js";
 import { watchRssFeeds } from "./rss-watcher.js";
-import { embedPending } from "./embeddings.js";
+import { embedPending, bulkEmbeddingAllowed } from "./embeddings.js";
 
 export interface CinemaDriverDeps {
   /** Live getters — all of these can be rebound after module init. */
@@ -223,33 +223,31 @@ export function cinemaAgentDrivers(deps: CinemaDriverDeps): AgentDriver[] {
     {
       handler: "cinema:embed-pending",
       name: "Cinema Embeddings Worker",
-      description: "Embeds pending cinema_titles via LMStudio bge-m3 (or local MiniLM fallback) and stores vectors as (:CinemaTitle) nodes in Neo4j. Up to 96 titles per tick. No-ops gracefully if Neo4j/embeddings unavailable.",
+      description: "Embeds pending cinema_titles via LMStudio bge-m3 and stores the vectors in SQLite. Up to 96 titles per tick. Skips the in-process MiniLM fallback (CPU-heavy, replaced once a real embedder is back) unless CINEMA_EMBED_LOCAL=1.",
       cron: "*/5 * * * *",
       flow: "Automations",
       timeout_ms: 180_000,
       run: async () => {
         const svc = deps.service();
         const client = deps.embedder();
-        const graph = deps.graph();
         if (!svc) return "Cinema embedder skipped: cinema service not wired.";
         if (!client) return "Cinema embedder skipped: embeddings client not wired.";
-        if (!graph?.capabilities.cypher) {
-          return "Cinema embedder: skipped — no graph driver active with cypher support. Activate one in /extensions.";
+        if (!bulkEmbeddingAllowed(client)) {
+          return "Cinema embedder: skipped — only the in-process MiniLM fallback is available (set CINEMA_EMBED_LOCAL=1 to embed the catalogue on CPU anyway).";
         }
-        if (svc.graphFrozen()) return "Cinema embedder: skipped — the graph is at its size ceiling (System › Storage).";
 
         // 96 rows ≈ 3 batches of 32 ≈ ~6 sec on LMStudio bge-m3. Good per-tick
         // budget when running every few minutes; tune via cron frequency, not
         // here — bigger per-tick batches just make logs noisier.
         const batchTarget = 96;
         let totalEmbedded = 0;
-        let totalGraph = 0;
+        let totalStored = 0;
         let totalMs = 0;
         while (totalEmbedded < batchTarget) {
-          const r = await embedPending(svc, client, graph, Math.min(32, batchTarget - totalEmbedded));
+          const r = await embedPending(svc, client, svc.vectorStore(), Math.min(32, batchTarget - totalEmbedded));
           if (r.embedded === 0) break;
           totalEmbedded += r.embedded;
-          totalGraph += r.graphWrites;
+          totalStored += r.stored;
           totalMs += r.durationMs;
         }
         if (totalEmbedded === 0) {
@@ -257,7 +255,7 @@ export function cinemaAgentDrivers(deps: CinemaDriverDeps): AgentDriver[] {
         }
         const stillPending = svc.pendingEmbeddingIds(client.model, client.dim, 99999).length;
         return [
-          `🎬 Cinema embed · ${totalEmbedded} titles · ${totalGraph} graph writes · ${totalMs} ms (${(totalMs / Math.max(1, totalEmbedded)).toFixed(0)} ms/title)`,
+          `🎬 Cinema embed · ${totalEmbedded} titles · ${totalStored} vectors stored · ${totalMs} ms (${(totalMs / Math.max(1, totalEmbedded)).toFixed(0)} ms/title)`,
           `model=${client.model} dim=${client.dim} provider=${client.provider}`,
           `pending after batch: ${stillPending}`,
         ].join("\n");
