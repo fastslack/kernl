@@ -62,3 +62,27 @@ describe("workspace tools resolve the office from the caller's identity", () => 
     expect(await listWorkspaces({ flow_id: bobFlow })).toContain("not assigned to an office");
   });
 });
+
+// A model that writes the workspace's name in workspace_id («office-home») read «Workspace not found» and stopped
+// its run: a workspace_id that is not an id is the name, in the caller's own office.
+describe("workspace_id holding a name", () => {
+  it("reads the caller's workspace of that name", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db, "agents", agentsMigrations);
+    const agents = new AgentService(db, new EventBus());
+    const ws = new WorkspaceService(db);
+    const mine = agents.createFlow({ name: "Mine" }).id;
+    const other = agents.createFlow({ name: "Other" }).id;
+    const me = agents.createAgent({ name: "Me", flow_id: mine }).id;
+    // Every office gets its own «office-home» when created: two of the same name, one per office.
+    const home = ws.getByOwnerName(mine, "office-home") ?? ws.create({ owner_flow_id: mine, name: "office-home" });
+    if (!ws.getByOwnerName(other, "office-home")) ws.create({ owner_flow_id: other, name: "office-home" });
+    const tools = workspaceTools(agents, ws);
+    const write = tools.find((t) => t.name === "kernel_workspace_write")!;
+    const read = tools.find((t) => t.name === "kernel_workspace_read")!;
+    await write.handler({ __caller_agent_id: me, workspace_id: home.id, path: "estado.md", content: "mío" });
+    const out = (await read.handler({ __caller_agent_id: me, workspace_id: "office-home", path: "estado.md" })).content[0].text;
+    expect(out).toContain("mío");
+    db.close();
+  });
+});

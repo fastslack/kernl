@@ -88,6 +88,8 @@ function resolveCallerFlowId(
   return null;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Pull workspace-selector fields out of the generic args bag. */
 function extractWorkspaceRef(args: Record<string, unknown>): {
   workspace_id?: string;
@@ -95,7 +97,12 @@ function extractWorkspaceRef(args: Record<string, unknown>): {
   workspace_owner_flow_id?: string;
 } {
   const ref: ReturnType<typeof extractWorkspaceRef> = {};
-  if (typeof args.workspace_id === "string" && args.workspace_id) ref.workspace_id = args.workspace_id;
+  if (typeof args.workspace_id === "string" && args.workspace_id) {
+    // A name written in workspace_id («office-home») is the name: models mix the two fields and stopped their
+    // run on «Workspace not found».
+    if (UUID_RE.test(args.workspace_id)) ref.workspace_id = args.workspace_id;
+    else ref.workspace_name = args.workspace_id;
+  }
   if (typeof args.workspace === "string" && args.workspace) ref.workspace_name = args.workspace;
   if (typeof args.workspace_owner_flow_id === "string" && args.workspace_owner_flow_id) {
     ref.workspace_owner_flow_id = args.workspace_owner_flow_id;
