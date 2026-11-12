@@ -108,6 +108,24 @@ export function createGoogleSyncModule(): GoogleSyncModule {
         ctx: () => s.ctx,
       }),
 
+    /**
+     * Emails, threads and calendar events already in SQLite reach a new graph
+     * store; runs after crm (order 10) so the Person links resolve.
+     */
+    graphBackfill: (s) => ({
+      name: "google-sync",
+      version: 1,
+      order: 30,
+      run: async () => {
+        await s.syncService.createConstraints();
+        const r = await s.syncService.enrichGraph();
+        return {
+          nodes: r.emailNodes + r.threadNodes + r.calendarNodes,
+          relationships: r.sentRels + r.receivedRels + r.partOfRels + r.attendsRels + r.organizedRels + r.emailedRels + r.metWithRels,
+        };
+      },
+    }),
+
     dashboardRpc: (s) => googleSyncDashboardRpcActions({ db: s.ctx.sqlite, config: s.ctx.config }),
 
     dashboard: (s) =>

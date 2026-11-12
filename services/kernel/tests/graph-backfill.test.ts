@@ -15,6 +15,11 @@ import { CrmService } from "../assets/extensions/people/crm/_module/service.js";
 import { GoalsService } from "../assets/extensions/productivity/goals/_module/service.js";
 import { NotesService } from "../assets/extensions/productivity/notes/_module/service.js";
 import { ReminderService } from "../assets/extensions/productivity/reminders/_module/service.js";
+import { shoppingMigrations } from "../assets/extensions/home/shopping/_module/migrations/001_shopping.js";
+import { ShoppingService } from "../assets/extensions/home/shopping/_module/service.js";
+import { googleSyncMigrations } from "../assets/extensions/integration/google-sync/_module/migrations/001_google_sync.js";
+import { fullSyncMigrations } from "../assets/extensions/integration/google-sync/_module/migrations/002_full_sync.js";
+import { GoogleGraphSync } from "../assets/extensions/integration/google-sync/_module/graph-sync.js";
 
 async function memoryGraph(): Promise<GraphDriver> {
   const g = new RelateGraphDriver();
@@ -105,5 +110,53 @@ describe.skipIf(!relateClientInstalled())("graph backfill on Relate", () => {
     const again = await runGraphBackfills(collectGraphBackfills(mods), g);
     expect(again.every((o) => o.status === "skipped")).toBe(true);
     expect(await count(g, "MATCH (n) WHERE NOT n:KernlGraphBackfill RETURN count(n) AS n")).toBe(6);
+  });
+  it("projects shopping and Google mail and calendar rows", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db as never, "shopping", shoppingMigrations);
+    runMigrations(db as never, "crm", crmMigrations);
+    runMigrations(db as never, "google-sync", googleSyncMigrations);
+    runMigrations(db as never, "google-sync-full", fullSyncMigrations);
+    const off = () => null;
+    const shop = new ShoppingService(db as never, off);
+    const crm = new CrmService(db as never, off);
+
+    const food = shop.createCategory({ name: "Food" });
+    const dairy = shop.createCategory({ name: "Dairy", parent_id: food.id });
+    const store = shop.createStore({ name: "Corner shop" });
+    const milk = shop.createProduct({ name: "Milk", category_id: dairy.id })!;
+    shop.logPurchase({ product_id: milk.id, store_id: store.id, quantity: 1, unit_price: 1.1, purchased_at: "2026-11-01" });
+    shop.logPurchase({ product_id: milk.id, store_id: store.id, quantity: 2, unit_price: 1.3, purchased_at: "2026-11-09" });
+
+    crm.addContact({ name: "Ada", email: "ada@example.com", relationship: "personal" });
+    const now = "2026-11-10T10:00:00Z";
+    db.prepare(`INSERT INTO google_emails (id, gmail_id, thread_id, from_email, to_emails, subject, date, created_at)
+                VALUES ('e1', 'g1', 't1', 'Ada@example.com', 'me@example.com', 'Hello', ?, ?)`).run(now, now);
+    db.prepare(`INSERT INTO google_email_threads (id, gmail_thread_id, subject, message_count, created_at, updated_at)
+                VALUES ('th1', 't1', 'Hello', 1, ?, ?)`).run(now, now);
+    db.prepare(`INSERT INTO google_calendar_events (id, google_event_id, title, start_at, organizer_email, attendees, created_at, updated_at)
+                VALUES ('c1', 'ev1', 'Coffee', ?, 'ada@example.com', '[]', ?, ?)`).run(now, now, now);
+
+    const g = await memoryGraph();
+    const sync = new GoogleGraphSync(db as never, () => g);
+    const mods = [
+      { name: "crm", getGraphBackfill: () => ({ name: "crm", version: 1, order: 10, run: (x: GraphDriver) => crm.graphBackfill(x) }) },
+      { name: "shopping", getGraphBackfill: () => ({ name: "shopping", version: 1, order: 20, run: (x: GraphDriver) => shop.graphBackfill(x) }) },
+      { name: "google-sync", getGraphBackfill: () => ({ name: "google-sync", version: 1, order: 30, run: async () => {
+        await sync.createConstraints();
+        const r = await sync.syncAll();
+        return { nodes: r.emailNodes + r.threadNodes + r.calendarNodes, relationships: r.sentRels + r.partOfRels + r.organizedRels };
+      } }) },
+    ] as unknown as KernelModule[];
+    const out = await runGraphBackfills(collectGraphBackfills(mods), g);
+    expect(out.map((o) => `${o.name}:${o.status}`)).toEqual(["crm:done", "shopping:done", "google-sync:done"]);
+
+    expect(await count(g, "MATCH (:Category {name: 'Dairy'})-[:CHILD_OF]->(:Category {name: 'Food'}) RETURN count(*) AS n")).toBe(1);
+    expect(await count(g, "MATCH (:Product {name: 'Milk'})-[:IN_CATEGORY]->(:Category {name: 'Dairy'}) RETURN count(*) AS n")).toBe(1);
+    const bought = (await g.run("MATCH (:Product)-[r:BOUGHT_AT]->(:Store) RETURN r.purchase_count AS c, r.last_price AS p, r.last_date AS d")).records[0].toObject();
+    expect({ c: Number(bought.c), p: bought.p, d: bought.d }).toEqual({ c: 2, p: 1.3, d: "2026-11-09" });
+
+    expect(await count(g, "MATCH (:Person {name: 'Ada'})-[:SENT]->(:Email {subject: 'Hello'})-[:PART_OF]->(:EmailThread) RETURN count(*) AS n")).toBe(1);
+    expect(await count(g, "MATCH (:Person {name: 'Ada'})-[:ORGANIZED]->(:CalendarEvent {title: 'Coffee'}) RETURN count(*) AS n")).toBe(1);
   });
 });

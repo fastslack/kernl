@@ -32,6 +32,7 @@ export function createShoppingModule() {
       return service;
     },
     tools: shoppingTools,
+    graphBackfill: (s) => ({ name: "shopping", version: 1, order: 20, run: (g) => s.graphBackfill(g) }),
     rpc: (s) => shoppingRpcActions({ service: s, events }),
     dashboard: {
       channels: [{ name: "shopping", query: (db) => queryShopping(db) }],
