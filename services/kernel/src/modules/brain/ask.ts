@@ -28,6 +28,7 @@ import type { EmbeddingsClient } from "../../core/embeddings/index.js";
 import type { GraphDriver } from "../../core/db-drivers/graph-driver.js";
 import { log } from "../../core/logger.js";
 import type { BrainService } from "./service.js";
+import { runVectorSearch } from "../../sdk/graph-vectors.js";
 
 export const ENTITY_TEXT_INDEX = "kernl_entity_text";
 const MEMORY_VECTOR_INDEX = "memory-embeddings";
@@ -222,12 +223,13 @@ export async function askMemory(
     const chatClient = deps.chatEmbeddings();
     if (!chatClient) return "no chat embeddings";
     const [v] = await chatClient.embed([args.query], { inputType: "query" });
-    const r = await g.run(
-      `CALL db.index.vector.queryNodes($index, $k, $vector) YIELD node, score
-       WHERE node.module = 'chat'
+    const r = await runVectorSearch(g, {
+        index: MEMORY_VECTOR_INDEX, label: "Memory", alias: "node", k: "$k", vector: "$vector",
+        filters: { module: "'chat'" },
+      }, (clause) => `${clause}
        RETURN node.id AS id, node.episode_id AS episode_id, node.role AS role,
               node.content AS content, node.created_at AS created_at, elementId(node) AS el, score`,
-      { index: MEMORY_VECTOR_INDEX, k: LEG_SIZE, vector: v },
+      { k: LEG_SIZE, vector: v },
     );
     // queryNodes reports 0.5 for orthogonal vectors: below that is unrelated.
     return r.records
@@ -238,11 +240,13 @@ export async function askMemory(
   await leg("learning-vector", async () => {
     if (!g) return "graph off";
     if (!queryVector || !client) return "embeddings offline";
-    const r = await g.run(
-      `CALL db.index.vector.queryNodes($index, $k, $vector) YIELD node AS l, score
-       WHERE l.active = true AND l.embedding_model = $model AND score > 0.6
+    const r = await runVectorSearch(g, {
+        index: LEARNING_VECTOR_INDEX, label: "AgentLearning", alias: "l", k: "$k", vector: "$vector",
+        filters: { active: "true", embedding_model: "$model" },
+        where: "score > 0.6",
+      }, (clause) => `${clause}
        RETURN l.id AS id, l.type AS type, l.content AS content, l.agent_id AS agent_id, elementId(l) AS el`,
-      { index: LEARNING_VECTOR_INDEX, k: LEG_SIZE, vector: queryVector, model: client.model },
+      { k: LEG_SIZE, vector: queryVector, model: client.model },
     );
     return r.records.map((x) => learningCandidate(x.toObject()));
   });

@@ -243,10 +243,16 @@ function isPlainObject(v: object): boolean {
   return proto === Object.prototype || proto === null;
 }
 
+/** A `VECTOR` value comes back as `{dtype, values}`; callers get the list of floats they always got. */
+function isCypherVector(v: unknown): v is { dtype: string; values: ArrayLike<number> } {
+  return v !== null && typeof v === "object" && v.constructor?.name === "CypherVector" && "values" in v;
+}
+
 export function adaptValue(v: unknown): unknown {
   if (typeof v === "bigint") return new RelateInteger(Number(v));
   if (typeof v === "number") return Number.isInteger(v) ? new RelateInteger(v) : v;
   if (Array.isArray(v)) return v.map(adaptValue);
+  if (isCypherVector(v)) return Array.from(v.values as ArrayLike<number>, Number);
   if (v === null || typeof v !== "object" || !isPlainObject(v)) return v;
 
   const obj = v as Record<string, unknown>;
@@ -334,6 +340,7 @@ export class RelateGraphDriver implements GraphDriver {
   private writeTail: Promise<unknown> = Promise.resolve();
   private ready = false;
   private vectorIndex = false;
+  private vectorSearch = false;
   private fulltextIndex = false;
   private cypherVersion: string | null = null;
   private lastError: string | null = null;
@@ -346,6 +353,7 @@ export class RelateGraphDriver implements GraphDriver {
       cypher,
       gds: false,
       vectorSimilarity: cypher && this.vectorIndex,
+      vectorSearch: cypher && this.vectorIndex && this.vectorSearch,
       mlPipelines: false,
       embedded: true,
       parameterised: cypher,
@@ -460,7 +468,7 @@ export class RelateGraphDriver implements GraphDriver {
       this.writeTail = Promise.resolve();
       this.ready = true;
       log.info(
-        `RelateGraphDriver ready: ${path} (Cypher ${this.cypherVersion ?? "?"}, vector=${this.vectorIndex}, ` +
+        `RelateGraphDriver ready: ${path} (Cypher ${this.cypherVersion ?? "?"}, vector=${this.vectorIndex}, search=${this.vectorSearch}, ` +
           `fulltext=${this.fulltextIndex}, readers=${this.readers.length})`,
       );
     } catch (err) {
@@ -504,6 +512,7 @@ export class RelateGraphDriver implements GraphDriver {
   /** Ask the engine what it supports instead of assuming it from a version. */
   private async probeCapabilities(): Promise<void> {
     this.vectorIndex = false;
+    this.vectorSearch = false;
     this.fulltextIndex = false;
     this.cypherVersion = null;
     try {
@@ -514,6 +523,11 @@ export class RelateGraphDriver implements GraphDriver {
         if (row.name === "vector.index") this.vectorIndex = row.value === true;
         else if (row.name === "fulltext.index") this.fulltextIndex = row.value === true;
         else if (row.name === "cypher.version") this.cypherVersion = String(row.value);
+      }
+      // Vector values and SEARCH came with Cypher 25; ask for the value itself.
+      if (this.vectorIndex && Number.parseInt(this.cypherVersion ?? "", 10) >= 25) {
+        const v = await this.conn!.queryAsync("RETURN vector([1.0, 0.0], 2, FLOAT32) IS NOT NULL AS ok").catch(() => null);
+        this.vectorSearch = v?.rows?.[0]?.ok === true;
       }
     } catch {
       // Older engines lack the procedure; fall back to the vector function.

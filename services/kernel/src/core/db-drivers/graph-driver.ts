@@ -35,6 +35,12 @@ export interface GraphCapabilities {
    * these in the core product, so a server without GDS can still satisfy it.
    */
   vectorSimilarity: boolean;
+  /**
+   * Native `VECTOR` values, vector indexes with filter properties
+   * (`… ON n.embedding WITH [n.x]`) and the `SEARCH` clause — Cypher 25.
+   * Optional: absent means false. Write through `sdk/graph-vectors.ts`.
+   */
+  vectorSearch?: boolean;
   /** GDS ML pipelines (nodeClassification, linkPrediction, …). */
   mlPipelines: boolean;
   /** Driver runs in-process — no external server, no separate port. */

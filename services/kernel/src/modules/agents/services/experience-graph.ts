@@ -32,6 +32,7 @@ import type { GraphDriver } from "../../../core/db-drivers/graph-driver.js";
 import { log } from "../../../core/logger.js";
 import { blobToVector } from "../../../core/ranking/relevance.js";
 import { type GraphRunner, inGraphTransaction } from "../../../sdk/graph-batch.js";
+import { asVector, ensureVectorIndex, runVectorSearch } from "../../../sdk/graph-vectors.js";
 
 export const LEARNING_VECTOR_INDEX = "agent-learning-embeddings";
 export const LEARNING_TEXT_INDEX = "agent-learning-text";
@@ -171,19 +172,16 @@ export class AgentExperienceGraph {
       "CREATE CONSTRAINT agent_learning_id IF NOT EXISTS FOR (l:AgentLearning) REQUIRE l.id IS UNIQUE",
       `CREATE FULLTEXT INDEX \`${LEARNING_TEXT_INDEX}\` IF NOT EXISTS FOR (l:AgentLearning) ON EACH [l.content]`,
     ];
-    if (g.capabilities.vectorSimilarity) {
-      statements.push(
-        `CREATE VECTOR INDEX \`${LEARNING_VECTOR_INDEX}\` IF NOT EXISTS
-         FOR (l:AgentLearning) ON (l.embedding)
-         OPTIONS { indexConfig: {
-           \`vector.dimensions\`: ${EMBEDDING_DIM},
-           \`vector.similarity_function\`: 'cosine'
-         }}`,
-      );
-    }
     for (const s of statements) {
       await g.run(s).catch((err) => log.warn(`Agent experience graph: schema statement skipped — ${err}`));
     }
+    // Searches filter on these inside the index where the engine can (SEARCH).
+    await ensureVectorIndex(g, {
+      name: LEARNING_VECTOR_INDEX,
+      label: "AgentLearning",
+      dimensions: EMBEDDING_DIM,
+      filters: ["active", "embedding_model"],
+    }).catch((err) => log.warn(`Agent experience graph: vector index skipped — ${err}`));
     this.schemaFor = g;
   }
 
@@ -383,7 +381,7 @@ export class AgentExperienceGraph {
            MERGE (l:AgentLearning {id: row.id})
            SET l.agent_id = row.agent_id, l.type = row.type, l.content = row.content,
                l.confidence = row.confidence, l.active = row.active,
-               l.project_id = row.project_id, l.embedding = row.embedding,
+               l.project_id = row.project_id, l.embedding = ${asVector(g, "row.embedding")},
                l.embedding_model = row.embedding_model
            MERGE (a)-[:LEARNED]->(l)
            WITH l, row
@@ -439,16 +437,21 @@ export class AgentExperienceGraph {
     }
   }
 
-  private static readonly CANDIDATE_TAIL = `
-    WHERE l.active = true AND l.agent_id <> $agentId AND l.confidence >= 0.3
+  /** Applies to every candidate; `active` and the model also filter the vector search inside its index. */
+  private static readonly CANDIDATE_WHERE = `l.active = true AND l.agent_id <> $agentId AND l.confidence >= 0.3
       AND ($model IS NULL OR l.embedding_model = $model)
-      AND (l.project_id IS NULL OR l.project_id = $projectId)
+      AND (l.project_id IS NULL OR l.project_id = $projectId)`;
+
+  /** The candidate rows found by `head`, which binds `l` and `score`. */
+  private static candidates(head: string): string {
+    return `${head}
     OPTIONAL MATCH (src:Agent)-[:LEARNED]->(l)
     OPTIONAL MATCH (l)-[:DERIVED_FROM]->(:AgentRun)-[:USED]->(t:AgentTool)
       WHERE t.name IN $tools
     RETURN l.id AS id, l.type AS type, l.content AS content, l.confidence AS confidence,
            l.agent_id AS agentId, src.name AS agentName, src.flow_id AS flowId,
            score, count(DISTINCT t) AS toolOverlap`;
+  }
 
   private toCandidates(
     records: Array<{ get(k: string): unknown }>,
@@ -472,11 +475,15 @@ export class AgentExperienceGraph {
   }
 
   private async byVector(g: GraphDriver, q: SharedLearningQuery): Promise<Omit<SharedLearning, "score">[]> {
-    const r = await g.run(
-      `CALL db.index.vector.queryNodes($index, $k, $vector) YIELD node AS l, score
-       ${AgentExperienceGraph.CANDIDATE_TAIL}`,
+    const r = await runVectorSearch(
+      g,
       {
-        index: LEARNING_VECTOR_INDEX,
+        index: LEARNING_VECTOR_INDEX, label: "AgentLearning", alias: "l", k: "$k", vector: "$vector",
+        filters: q.embeddingModel ? { active: "true", embedding_model: "$model" } : { active: "true" },
+        where: AgentExperienceGraph.CANDIDATE_WHERE,
+      },
+      AgentExperienceGraph.candidates,
+      {
         k: 40,
         vector: q.goalVector,
         model: q.embeddingModel,
@@ -494,8 +501,9 @@ export class AgentExperienceGraph {
     const terms = luceneTerms(q.goal);
     if (!terms) return [];
     const r = await g.run(
-      `CALL db.index.fulltext.queryNodes($index, $terms) YIELD node AS l, score
-       ${AgentExperienceGraph.CANDIDATE_TAIL}`,
+      AgentExperienceGraph.candidates(
+        `CALL db.index.fulltext.queryNodes($index, $terms) YIELD node AS l, score WHERE ${AgentExperienceGraph.CANDIDATE_WHERE}`,
+      ),
       { index: LEARNING_TEXT_INDEX, terms, model: null, agentId: q.agentId, projectId: q.projectId, tools: q.tools },
     );
     // Full-text scores are unbounded, so they are read relative to the best

@@ -2,6 +2,7 @@ import type { GraphDriver } from "../../core/db-drivers/graph-driver.js";
 import { log } from "../../core/logger.js";
 import { newId, isoNow } from "../../core/helpers.js";
 import { computeStrength, daysBetween } from "./memory-decay.js";
+import { asVector, ensureVectorIndex, runVectorSearch } from "../../sdk/graph-vectors.js";
 
 const MEMORY_INDEX = "memory-embeddings";
 const CONCEPT_INDEX = "concept-embeddings";
@@ -108,25 +109,17 @@ export class KnowledgeService {
     }
 
     // Vector indexes
+    // `module` filters inside the index where the engine can (SEARCH).
     const vectorIndexes = [
-      { name: MEMORY_INDEX, label: "Memory" },
-      { name: CONCEPT_INDEX, label: "Concept" },
+      { name: MEMORY_INDEX, label: "Memory", filters: ["module"] },
+      { name: CONCEPT_INDEX, label: "Concept", filters: ["module"] },
       { name: EPISODE_INDEX, label: "Episode" },
     ];
 
     for (const idx of vectorIndexes) {
-      await this.getReadyGraph()!
-        .run(
-          `CREATE VECTOR INDEX \`${idx.name}\` IF NOT EXISTS
-           FOR (n:${idx.label}) ON (n.embedding)
-           OPTIONS { indexConfig: {
-             \`vector.dimensions\`: ${EMBEDDING_DIM},
-             \`vector.similarity_function\`: 'cosine'
-           }}`,
-        )
-        .catch((err) => {
-          log.warn(`Vector index ${idx.name} creation skipped: ${err}`);
-        });
+      await ensureVectorIndex(graph, { ...idx, dimensions: EMBEDDING_DIM }).catch((err) => {
+        log.warn(`Vector index ${idx.name} creation skipped: ${err}`);
+      });
     }
     this.schemaFor = graph;
     log.info(`Chat knowledge graph: constraints and vector indexes ensured on "${graph.slug}"`);
@@ -145,19 +138,20 @@ export class KnowledgeService {
     if (!this.available) return;
     await this.ensureSchema();
 
-    await this.getReadyGraph()!.run(
+    const g = this.getReadyGraph()!;
+    await g.run(
       `CREATE (m:Memory {
         id: $id,
         module: 'chat',
         episode_id: $episodeId,
         role: $role,
         content: $content,
-        embedding: $embedding,
         strength: 1.0,
         reinforcements: 0,
         last_recalled_at: $createdAt,
         created_at: $createdAt
-      })`,
+      })
+      SET m.embedding = ${asVector(g, "$embedding")}`,
       {
         id: input.id,
         episodeId: input.episode_id,
@@ -242,7 +236,7 @@ export class KnowledgeService {
       params.summary = updates.summary;
     }
     if (updates.embedding) {
-      setClauses.push("e.embedding = $embedding");
+      setClauses.push(`e.embedding = ${asVector(this.getReadyGraph()!, "$embedding")}`);
       params.embedding = updates.embedding;
     }
     if (updates.message_count !== undefined) {
@@ -271,16 +265,17 @@ export class KnowledgeService {
     await this.ensureSchema();
 
     try {
-      const result = await this.getReadyGraph()!.run(
-        `CALL db.index.vector.queryNodes($indexName, $k, $vector)
-         YIELD node, score
-         WHERE node.module = 'chat'
-           AND ($excludeEpisodeId IS NULL OR node.episode_id <> $excludeEpisodeId)
+      const g = this.getReadyGraph()!;
+      const result = await runVectorSearch(g, {
+          index: MEMORY_INDEX, label: "Memory", alias: "node", k: "$k", vector: "$vector",
+          filters: { module: "'chat'" },
+          where: "$excludeEpisodeId IS NULL OR node.episode_id <> $excludeEpisodeId",
+        }, (clause) => `${clause}
          RETURN node.id AS id, node.role AS role, node.content AS content,
                 node.strength AS strength, node.reinforcements AS reinforcements,
                 node.last_recalled_at AS last_recalled_at, node.episode_id AS episode_id,
                 score`,
-        { indexName: MEMORY_INDEX, k, vector, excludeEpisodeId: excludeEpisodeId ?? null },
+        { k, vector, excludeEpisodeId: excludeEpisodeId ?? null },
       );
 
       return result.records.map((r) => ({
@@ -445,7 +440,7 @@ export class KnowledgeService {
       if (input.embedding && conceptId) {
         await this.getReadyGraph()!
           .run(
-            `MATCH (c:Concept {id: $id}) SET c.embedding = $embedding`,
+            `MATCH (c:Concept {id: $id}) SET c.embedding = ${asVector(this.getReadyGraph()!, "$embedding")}`,
             { id: conceptId, embedding: input.embedding },
           )
           .catch(() => {});
@@ -576,15 +571,17 @@ export class KnowledgeService {
     await this.ensureSchema();
 
     try {
-      const result = await this.getReadyGraph()!.run(
-        `CALL db.index.vector.queryNodes($indexName, $k, $vector)
-         YIELD node, score
-         WHERE node.module = 'chat' AND node.gravity > 0.1
+      const g = this.getReadyGraph()!;
+      const result = await runVectorSearch(g, {
+          index: CONCEPT_INDEX, label: "Concept", alias: "node", k: "$k", vector: "$vector",
+          filters: { module: "'chat'" },
+          where: "node.gravity > 0.1",
+        }, (clause) => `${clause}
          RETURN node.id AS id, node.label AS label, node.description AS description,
                 node.gravity AS gravity, node.mention_count AS mention_count,
                 node.first_seen AS first_seen, node.last_seen AS last_seen,
                 score`,
-        { indexName: CONCEPT_INDEX, k, vector },
+        { k, vector },
       );
 
       return result.records.map((r) => ({
