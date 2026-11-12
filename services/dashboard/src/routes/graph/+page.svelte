@@ -7,6 +7,7 @@
   import { onMount, onDestroy, tick } from 'svelte';
   import ViewHeader from '$shared/components/ViewHeader.svelte';
   import { apiFetchRaw } from '$lib/api.js';
+  import { t } from '$lib/i18n/index.js';
 
   interface GNode { id: string; labels: string[]; name: string; props: Record<string, unknown>; x?: number; y?: number; z?: number }
   interface GLink { id: string; source: string | GNode; target: string | GNode; type: string }
@@ -104,17 +105,24 @@
   }
 
   onMount(async () => {
-    const schema = await run(() => getJson<{ labels: LabelInfo[] }>('/api/graph/schema'));
+    const schema = await run(() => getJson<{ labels: LabelInfo[]; relationships: Array<{ from: string; to: string; count: number }> }>('/api/graph/schema'));
     labels = (schema?.labels ?? []).filter((l) => l.count > 0);
+    // Start where there is something to see: the label with the most relationships.
+    const linked = new Map<string, number>();
+    for (const r of schema?.relationships ?? []) {
+      linked.set(r.from, (linked.get(r.from) ?? 0) + r.count);
+      linked.set(r.to, (linked.get(r.to) ?? 0) + r.count);
+    }
     await tick();
     // Loosely typed on purpose: the library's accessors take its own node type, ours carry more.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ForceGraph3D = (await import('3d-force-graph')).default as unknown as new (el: HTMLElement, cfg?: object) => any;
     fg = new ForceGraph3D(container, { controlType: 'orbit' })
+      .showNavInfo(false)
       .backgroundColor('#101113')
       .width(container.clientWidth)
       .height(container.clientHeight)
-      .nodeLabel((n: GNode) => `${n.name || '(no name)'} · ${n.labels.join(':')}`)
+      .nodeLabel((n: GNode) => `${n.name || $t('graph.no_name')} · ${n.labels.join(':')}`)
       .nodeColor((n: GNode) => (selected?.id === n.id ? '#ffffff' : color(mainLabel(n))))
       .nodeVal((n: GNode) => (selected?.id === n.id ? 6 : 2))
       .linkLabel((l: GLink) => l.type)
@@ -130,7 +138,8 @@
       .graphData({ nodes, links });
     resizeObs = new ResizeObserver(() => fg?.width(container.clientWidth).height(container.clientHeight));
     resizeObs.observe(container);
-    const first = labels.find((l) => l.label === 'Person') ?? labels[0];
+    const first = labels.find((l) => l.label === 'Person')
+      ?? [...labels].sort((a, b) => (linked.get(b.label) ?? 0) - (linked.get(a.label) ?? 0))[0];
     if (first) await showLabel(first.label);
   });
 
@@ -143,23 +152,23 @@
   $: shownLabels = [...new Set(nodes.map(mainLabel))];
 </script>
 
-<ViewHeader title="Graph" sub="Explore what Kernl's graph holds: pick a label or search, click a node to read it, right-click to expand it." />
+<ViewHeader title={$t('graph.title')} sub={$t('graph.sub')} />
 
 <div class="explorer">
   <aside class="side">
     <form class="search" on:submit|preventDefault={search}>
-      <input type="search" placeholder="Search a name or title…" bind:value={query} aria-label="Search the graph" />
-      <button type="submit" disabled={loading}>Search</button>
+      <input type="search" placeholder={$t('graph.search.placeholder')} bind:value={query} aria-label={$t('graph.search.aria')} />
+      <button type="submit" disabled={loading}>{$t('graph.search.button')}</button>
     </form>
 
     {#if results.length}
       <div class="block">
-        <div class="block-title">Results <button class="link" on:click={() => (results = [])}>clear</button></div>
+        <div class="block-title">{$t('graph.results')} <button class="link" on:click={() => (results = [])}>{$t('graph.clear')}</button></div>
         <ul class="list">
           {#each results as r (r.id)}
             <li><button class="row" on:click={() => expand(r, true)}>
               <span class="dot" style="background:{color(mainLabel(r))}"></span>
-              <span class="nm">{r.name || '(no name)'}</span><span class="lb">{mainLabel(r)}</span>
+              <span class="nm">{r.name || $t('graph.no_name')}</span><span class="lb">{mainLabel(r)}</span>
             </button></li>
           {/each}
         </ul>
@@ -167,7 +176,7 @@
     {/if}
 
     <div class="block">
-      <div class="block-title">Labels</div>
+      <div class="block-title">{$t('graph.labels')}</div>
       <ul class="list">
         {#each labels as l (l.label)}
           <li><button class="row" on:click={() => showLabel(l.label)}>
@@ -175,24 +184,26 @@
             <span class="nm">{l.label}</span><span class="lb">{l.count.toLocaleString()}</span>
           </button></li>
         {:else}
-          <li class="muted">{loading ? 'Loading…' : 'The graph is empty or off.'}</li>
+          <li class="muted">{loading ? $t('graph.loading') : $t('graph.labels.empty')}</li>
         {/each}
       </ul>
     </div>
 
     <div class="block controls">
-      <label>Expand depth
-        <select bind:value={depth}><option value={1}>1 hop</option><option value={2}>2 hops</option></select>
+      <label>{$t('graph.depth')}
+        <select bind:value={depth}><option value={1}>{$t('graph.depth.1')}</option><option value={2}>{$t('graph.depth.2')}</option></select>
       </label>
-      <button class="link" on:click={clear}>Clear view</button>
-      <span class="muted">{nodes.length} nodes · {links.length} links</span>
+      <button class="link" on:click={clear}>{$t('graph.clear_view')}</button>
+      <span class="muted">{$t('graph.counts', { nodes: nodes.length, links: links.length })}</span>
     </div>
   </aside>
 
   <div class="stage">
     <div class="canvas" bind:this={container}></div>
     {#if error}<div class="toast err">{error}</div>{/if}
-    {#if loading}<div class="toast">Loading…</div>{/if}
+    {#if loading}<div class="toast">{$t('graph.loading')}</div>{/if}
+    {#if !loading && !error && nodes.length > 1 && links.length === 0}<div class="toast">{$t('graph.loose')}</div>{/if}
+    <div class="help">{$t('graph.help')}</div>
     {#if shownLabels.length}
       <div class="legend">
         {#each shownLabels as l}<span><i style="background:{color(l)}"></i>{l}</span>{/each}
@@ -202,7 +213,7 @@
       <div class="detail">
         <div class="detail-head">
           <span class="dot" style="background:{color(mainLabel(selected))}"></span>
-          <strong>{selected.name || '(no name)'}</strong>
+          <strong>{selected.name || $t('graph.no_name')}</strong>
           <span class="lb">{selected.labels.join(' · ')}</span>
         </div>
         <dl>
@@ -211,8 +222,8 @@
           {/each}
         </dl>
         <div class="detail-actions">
-          <button on:click={() => selected && expand(selected)}>Expand</button>
-          <button on:click={() => selected && expand(selected, true)}>Focus here</button>
+          <button on:click={() => selected && expand(selected)}>{$t('graph.expand')}</button>
+          <button on:click={() => selected && expand(selected, true)}>{$t('graph.focus')}</button>
         </div>
       </div>
     {/if}
@@ -243,6 +254,7 @@
   .canvas { position: absolute; inset: 0; }
   .toast { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); background: var(--surface-2); border: 1px solid var(--border); padding: 6px 12px; border-radius: 8px; font-size: 13px; }
   .toast.err { border-color: var(--red); color: var(--red); }
+  .help { position: absolute; right: 10px; bottom: 10px; font-size: 11px; color: var(--text-3); }
   .legend { position: absolute; left: 10px; bottom: 10px; display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--text-2); background: rgba(16, 17, 19, 0.8); padding: 6px 10px; border-radius: 8px; max-width: 60%; }
   .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
   .detail { position: absolute; top: 10px; right: 10px; width: 320px; max-height: calc(100% - 20px); overflow: auto; background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
