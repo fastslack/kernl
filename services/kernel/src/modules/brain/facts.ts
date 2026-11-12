@@ -93,6 +93,22 @@ export function normTime(t: string): string {
 /** Lowercase, without accents: "Lucía" → "lucia". */
 const fold = (s: string) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().trim();
 
+/** Fact times stored in the graph as ZONED DATETIME, not text. */
+export const FACT_TIMES = ["valid_from", "valid_to", "recorded_at", "ended_at", "superseded_at"] as const;
+
+/**
+ * One node per fact, found by id through an index; every time a datetime; a
+ * fact always names its subject and predicate. Engines without property type
+ * or existence constraints (Neo4j Community) skip those and keep the rest.
+ */
+const FACT_SCHEMA = [
+  "CREATE CONSTRAINT fact_id IF NOT EXISTS FOR (f:Fact) REQUIRE f.id IS UNIQUE",
+  "CREATE INDEX fact_subject IF NOT EXISTS FOR (f:Fact) ON (f.subject)",
+  "CREATE CONSTRAINT fact_subject_required IF NOT EXISTS FOR (f:Fact) REQUIRE f.subject IS NOT NULL",
+  "CREATE CONSTRAINT fact_predicate_required IF NOT EXISTS FOR (f:Fact) REQUIRE f.predicate IS NOT NULL",
+  ...FACT_TIMES.map((t) => `CREATE CONSTRAINT fact_${t}_type IF NOT EXISTS FOR (f:Fact) REQUIRE f.${t} IS :: ZONED DATETIME`),
+];
+
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
 export class FactStore {
@@ -102,6 +118,52 @@ export class FactStore {
     /** Transaction-time clock; the demo seed replays a past timeline with it. */
     private now: () => string = isoNow,
   ) {}
+
+  /** Drivers whose Fact schema is in place, and attempts in flight. */
+  private schemaReady = new WeakSet<GraphDriver>();
+  private schemaPending = new WeakMap<GraphDriver, Promise<void>>();
+
+  /**
+   * Bring an existing graph to the schema, then create it: text times become
+   * datetimes and duplicate nodes of one fact (two projections racing before
+   * the id was unique) collapse to one, re-projected from SQLite with its
+   * links — else the constraints could not be created over the old data.
+   */
+  ensureGraphSchema(graph: GraphDriver): Promise<void> {
+    if (this.schemaReady.has(graph)) return Promise.resolve();
+    let p = this.schemaPending.get(graph);
+    if (!p) {
+      p = (async () => {
+        for (const t of FACT_TIMES) {
+          for (;;) {
+            const r = await graph.run(
+              // Text equals its own toString(); a datetime does not (null).
+              `MATCH (f:Fact) WHERE toString(f.${t}) = f.${t} WITH f LIMIT 1000
+               SET f.${t} = datetime(f.${t}) RETURN count(f) AS c`,
+            );
+            if (Number(r.records[0]?.get("c") ?? 0) < 1000) break;
+          }
+        }
+        const dup = await graph.run(
+          `MATCH (f:Fact) WITH f.id AS id, collect(f) AS nodes WHERE size(nodes) > 1
+           UNWIND tail(nodes) AS extra DETACH DELETE extra
+           RETURN collect(DISTINCT id) AS ids`,
+        );
+        const ids = (dup.records[0]?.get("ids") as string[] | undefined) ?? [];
+        for (const s of FACT_SCHEMA) {
+          await graph.run(s).catch((err) => log.debug(`facts: schema statement skipped — ${err instanceof Error ? err.message : String(err)}`));
+        }
+        this.schemaReady.add(graph);
+        if (ids.length) {
+          const facts = this.db.prepare(`SELECT * FROM facts WHERE id IN (${ids.map(() => "?").join(",")})`).all(...ids) as Fact[];
+          await this.project(facts, graph);
+          log.info(`facts: ${ids.length} duplicated fact node(s) in the graph merged into one each`);
+        }
+      })().finally(() => this.schemaPending.delete(graph));
+      this.schemaPending.set(graph, p);
+    }
+    return p;
+  }
 
   get(id: string): Fact | null {
     return (this.db.prepare("SELECT * FROM facts WHERE id = ?").get(id) as Fact | undefined) ?? null;
@@ -279,6 +341,7 @@ export class FactStore {
   async project(facts: Fact[], graph = this.getGraph()): Promise<number> {
     if (!graph?.capabilities.cypher || facts.length === 0) return 0;
     try {
+      await this.ensureGraphSchema(graph);
       const rows = facts.map((f) => {
         const m = REF.exec(f.subject);
         const label = m && GRAPH_LABELS.has(m[1]) ? m[1] : null;
@@ -289,21 +352,23 @@ export class FactStore {
             predicate: f.predicate,
             object: f.object,
             title: `${f.subject_name || f.subject} · ${f.predicate.replace(/_/g, " ")} · ${f.object}`,
-            valid_from: f.valid_from,
-            valid_to: f.valid_to,
-            ended_at: f.ended_at,
-            recorded_at: f.recorded_at,
-            superseded_at: f.superseded_at,
             current: !f.valid_to && !f.superseded_at,
             confidence: f.confidence,
           },
+          times: Object.fromEntries(FACT_TIMES.map((t) => [t, f[t] ?? null])),
           label,
           ref: m ? m[2] : null,
         };
       });
       // The nodes, their subjects and what replaced what land together.
       const write = async (tx: Pick<GraphDriver, "run">) => {
-        await tx.run("UNWIND $rows AS r MERGE (f:Fact {id: r.id}) SET f += r.props", { rows });
+        await tx.run(
+          `UNWIND $rows AS r MERGE (f:Fact {id: r.id}) SET f += r.props,
+             f.valid_from = datetime(r.times.valid_from), f.valid_to = datetime(r.times.valid_to),
+             f.recorded_at = datetime(r.times.recorded_at), f.ended_at = datetime(r.times.ended_at),
+             f.superseded_at = datetime(r.times.superseded_at)`,
+          { rows },
+        );
         // Facts written while the graph was off point at nothing yet; link by label.
         const byLabel = new Map<string, Array<{ id: string; ref: string }>>();
         for (const r of rows) {

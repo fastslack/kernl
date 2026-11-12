@@ -21,7 +21,8 @@ import { blankLiterals, planGate, readPlan, staticGate } from "./gate.js";
 import { type ClientPolicy, clientGate, filterSchema, redactRows } from "./privacy.js";
 
 export interface GraphSchema {
-  labels: Array<{ label: string; count: number; properties: string[] }>;
+  /** `types`: properties a constraint holds to one type (e.g. ZONED DATETIME). */
+  labels: Array<{ label: string; count: number; properties: string[]; types?: Record<string, string> }>;
   relationships: Array<{ from: string; type: string; to: string; count: number }>;
   indexes: Array<{ name: string; type: string; labels: string[]; properties: string[] }>;
   at: number;
@@ -70,10 +71,24 @@ export class GraphQueryService {
     } catch {
       /* properties are a nicety */
     }
+    const types = new Map<string, Record<string, string>>();
+    try {
+      const r = await g.run(
+        "SHOW CONSTRAINTS YIELD labelsOrTypes, properties, propertyType WHERE propertyType IS NOT NULL RETURN labelsOrTypes, properties, propertyType",
+      );
+      for (const rec of r.records) {
+        const [prop] = (rec.get("properties") as string[]) ?? [];
+        for (const l of (rec.get("labelsOrTypes") as string[]) ?? []) {
+          if (prop) types.set(l, { ...types.get(l), [prop]: String(rec.get("propertyType")) });
+        }
+      }
+    } catch {
+      /* type constraints are not on every engine */
+    }
     const out: GraphSchema = { labels: [], relationships: [], indexes: [], at: Date.now() };
     for (const label of labels) {
       const n = Number((await g.run(`MATCH (n:\`${label.replace(/`/g, "")}\`) RETURN count(n) AS n`)).records[0]?.get("n") ?? 0);
-      out.labels.push({ label, count: n, properties: [...(props.get(label) ?? [])].sort() });
+      out.labels.push({ label, count: n, properties: [...(props.get(label) ?? [])].sort(), ...(types.has(label) ? { types: types.get(label) } : {}) });
     }
     out.labels.sort((a, b) => b.count - a.count);
     const rels = await g.run(
@@ -105,7 +120,19 @@ export class GraphQueryService {
   async schemaText(policy?: ClientPolicy): Promise<string> {
     const s = policy ? filterSchema(await this.schema(), policy) : await this.schema();
     const lines = ["Node labels (count: properties):"];
-    for (const l of s.labels) lines.push(`  :${l.label} (${l.count}): ${l.properties.filter((p) => p !== "embedding").join(", ")}`);
+    let temporal = false;
+    for (const l of s.labels) {
+      const shown = l.properties.filter((p) => p !== "embedding").map((p) => (l.types?.[p] ? `${p} :: ${l.types[p]}` : p));
+      temporal ||= Object.values(l.types ?? {}).some((t) => /DATE|TIME/.test(t));
+      lines.push(`  :${l.label} (${l.count}): ${shown.join(", ")}`);
+    }
+    if (temporal) {
+      lines.push(
+        "  Properties typed DATE/DATETIME are temporal values, not text: compare them with datetime('2026-10-01') or " +
+          "datetime($at) — comparing with a plain string yields null and matches nothing. duration.inDays(a, b).days, " +
+          ".year and date.truncate('month', x) work on them.",
+      );
+    }
     lines.push("Relationships:");
     for (const r of s.relationships) lines.push(`  (:${r.from})-[:${r.type}]->(:${r.to})  ×${r.count}`);
     if (s.indexes.length) {

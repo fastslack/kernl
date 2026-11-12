@@ -248,11 +248,45 @@ function isCypherVector(v: unknown): v is { dtype: string; values: ArrayLike<num
   return v !== null && typeof v === "object" && v.constructor?.name === "CypherVector" && "values" in v;
 }
 
+const pad = (n: number, w = 2) => String(Math.trunc(Math.abs(n))).padStart(w, "0");
+const offset = (secs: number) => (secs === 0 ? "Z" : `${secs < 0 ? "-" : "+"}${pad(Math.abs(secs) / 3600)}:${pad((Math.abs(secs) % 3600) / 60)}`);
+const frac = (ns: number) => `.${pad(Math.floor(ns / 1e6), 3)}`;
+type Temporal = Record<string, number | string | null>;
+
+/**
+ * Relate's temporal values come back as objects with no string form; turn
+ * them into the ISO text neo4j-driver's `toString()` gives (a UTC datetime
+ * reads exactly like `Date.toISOString()`), so callers keep reading strings.
+ * Compare them in Cypher with `datetime($x)`, never with the string.
+ */
+export function temporalToString(v: unknown): string | null {
+  const name = (v as object | null)?.constructor?.name;
+  if (!name?.startsWith("Cypher")) return null;
+  const t = v as Temporal;
+  const n = (k: string) => Number(t[k] ?? 0);
+  const date = () => `${pad(n("year"), 4)}-${pad(n("month"))}-${pad(n("day"))}`;
+  const time = () => `${pad(n("hour"))}:${pad(n("minute"))}:${pad(n("second"))}${frac(n("nanosecond"))}`;
+  switch (name) {
+    case "CypherDate": return date();
+    case "CypherLocalTime": return time();
+    case "CypherTime": return `${time()}${offset(n("offsetSeconds"))}`;
+    case "CypherLocalDateTime": return `${date()}T${time()}`;
+    case "CypherDateTime": return `${date()}T${time()}${offset(n("offsetSeconds"))}${t.zone ? `[${t.zone}]` : ""}`;
+    case "CypherDuration": {
+      const secs = n("seconds") + n("nanos") / 1e9;
+      return `P${n("months") ? `${n("months")}M` : ""}${n("days") ? `${n("days")}D` : ""}T${secs}S`;
+    }
+    default: return null;
+  }
+}
+
 export function adaptValue(v: unknown): unknown {
   if (typeof v === "bigint") return new RelateInteger(Number(v));
   if (typeof v === "number") return Number.isInteger(v) ? new RelateInteger(v) : v;
   if (Array.isArray(v)) return v.map(adaptValue);
   if (isCypherVector(v)) return Array.from(v.values as ArrayLike<number>, Number);
+  const iso = temporalToString(v);
+  if (iso !== null) return iso;
   if (v === null || typeof v !== "object" || !isPlainObject(v)) return v;
 
   const obj = v as Record<string, unknown>;
