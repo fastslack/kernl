@@ -20,7 +20,7 @@
  * is not installed simply has no table.
  */
 
-import { type SqliteDb, type GraphDriver, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, type GraphDriver, type GraphRunner, inGraphTransaction, newId, isoNow } from "@kernl/extension-sdk";
 import type { Contact } from "./types.js";
 
 export type IdentityKind = "email" | "phone" | "linkedin" | "instagram" | "x" | "website";
@@ -318,15 +318,18 @@ export class PeopleService {
     const graph = this.getGraph();
     if (graph?.capabilities.cypher) {
       try {
-        moved.graph_relationships = await this.mergeInGraph(graph, kept, mergeId);
+        // One transaction: a failure halfway used to leave the absorbed
+        // Person in the graph with its relationships, and no backfill removes
+        // a node.
+        moved.graph_relationships = await inGraphTransaction(graph, (tx) => this.mergeInGraph(tx, kept, mergeId));
       } catch {
-        // The graph catches up from SQLite on the next backfill or write.
+        // Nothing of the merge reached the graph; the kept Person is rewritten on its next write.
       }
     }
     return { kept, moved };
   }
 
-  private async mergeInGraph(graph: GraphDriver, kept: Contact, mergeId: string): Promise<number> {
+  private async mergeInGraph(graph: GraphRunner, kept: Contact, mergeId: string): Promise<number> {
     await graph.run(
       `MERGE (p:Person {id: $id})
        SET p.name = $name, p.email = $email, p.company = $company, p.relationship = $relationship`,
@@ -348,6 +351,11 @@ export class PeopleService {
        RETURN outgoing + incoming AS n`,
       { old: mergeId, keep: kept.id },
     );
+    // Facts moved to the kept contact in SQLite; their nodes say so too.
+    await graph.run("MATCH (f:Fact {subject: $old}) SET f.subject = $keep", {
+      old: `Person:${mergeId}`,
+      keep: `Person:${kept.id}`,
+    });
     return Number(r.records[0]?.get("n") ?? 0);
   }
 

@@ -134,15 +134,18 @@ describe.skipIf(!relateClientInstalled())("people in the graph", () => {
     await Bun.sleep(20); // the CRM writes the graph fire-and-forget
     await g.run(`MATCH (a:Person {id: $gone}), (b:Person {id: $b}), (k:Person {id: $keep})
                  CREATE (a)-[:KNOWS {type: 'colleague'}]->(b), (b)-[:KNOWS {type: 'friend'}]->(a),
-                        (:Email {gmail_id: 'g1', subject: 'Engine'})<-[:SENT]-(a), (a)-[:KNOWS]->(k)`,
+                        (:Email {gmail_id: 'g1', subject: 'Engine'})<-[:SENT]-(a), (a)-[:KNOWS]->(k),
+                        (:Fact {id: 'f1', subject: 'Person:' + $gone})-[:ABOUT]->(a)`,
       { gone: gone.id, b: babbage.id, keep: keep.id });
 
     await people.merge(keep.id, gone.id);
+    const fact = (await g.run("MATCH (f:Fact {id: 'f1'})-[:ABOUT]->(p:Person) RETURN f.subject AS s, p.id AS p")).records[0];
+    expect([fact.get("s"), fact.get("p")]).toEqual([`Person:${keep.id}`, keep.id]);
     const rels = (await g.run(
       `MATCH (k:Person {id: $id})-[r]-(m) RETURN type(r) AS t, startNode(r) = k AS out, coalesce(m.name, m.subject) AS n, r.type AS rt ORDER BY t, n, out`,
       { id: keep.id },
     )).records.map((r) => r.toObject());
-    expect(rels).toEqual([
+    expect(rels.filter((r) => r.t !== "ABOUT")).toEqual([
       { t: "KNOWS", out: false, n: "Charles Babbage", rt: "friend" },
       { t: "KNOWS", out: true, n: "Charles Babbage", rt: "colleague" },
       { t: "SENT", out: true, n: "Engine", rt: null },
@@ -162,5 +165,39 @@ describe.skipIf(!relateClientInstalled())("people in the graph", () => {
     ]));
     expect(view.merged_from).toHaveLength(1);
     expect(view.calendar).toBeUndefined();
+  });
+
+  it("a merge that fails halfway leaves the graph as it was", async () => {
+    const real = new RelateGraphDriver();
+    real.configure({ path: ":memory:" });
+    await real.start();
+    // The same driver, except that the merge's last statement fails inside the transaction.
+    const g = Object.assign(Object.create(real) as RelateGraphDriver, {
+      withTransaction: <T>(fn: (tx: { run: RelateGraphDriver["run"] }) => Promise<T>) =>
+        real.withTransaction((tx) =>
+          fn({
+            run: (cypher: string, params?: Record<string, unknown>) =>
+              /MATCH \(f:Fact/.test(cypher) ? Promise.reject(new Error("boom")) : tx.run(cypher, params),
+          } as never),
+        ),
+    });
+    const { crm, people } = setup(() => g);
+    const keep = crm.addContact({ name: "Ada Lovelace", email: "ada@home.org", dedup: false });
+    const gone = crm.addContact({ name: "Ada", email: "ada@work.com", company: "Analytical", dedup: false });
+    await Bun.sleep(20);
+    await real.run("MATCH (a:Person {id: $gone}) CREATE (a)-[:SENT]->(:Email {gmail_id: 'g1'})", { gone: gone.id });
+
+    const out = await people.merge(keep.id, gone.id);
+    expect(out?.moved.graph_relationships).toBeUndefined();
+    // SQLite merged; the graph is untouched rather than half-merged.
+    const left = (await real.run(
+      "MATCH (p:Person) OPTIONAL MATCH (p)-[r:SENT]->() RETURN p.id AS id, p.company AS company, count(r) AS sent ORDER BY id",
+    )).records.map((r) => ({ id: r.get("id"), company: r.get("company"), sent: Number(r.get("sent")) }));
+    expect(left).toEqual(
+      [
+        { id: keep.id, company: "", sent: 0 },
+        { id: gone.id, company: "Analytical", sent: 1 },
+      ].sort((x, y) => x.id.localeCompare(y.id)),
+    );
   });
 });

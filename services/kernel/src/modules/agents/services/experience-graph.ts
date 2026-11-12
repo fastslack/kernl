@@ -31,6 +31,7 @@ import type { SqliteDb } from "../../../core/db/sqlite.js";
 import type { GraphDriver } from "../../../core/db-drivers/graph-driver.js";
 import { log } from "../../../core/logger.js";
 import { blobToVector } from "../../../core/ranking/relevance.js";
+import { type GraphRunner, inGraphTransaction } from "../../../sdk/graph-batch.js";
 
 export const LEARNING_VECTOR_INDEX = "agent-learning-embeddings";
 export const LEARNING_TEXT_INDEX = "agent-learning-text";
@@ -232,7 +233,7 @@ export class AgentExperienceGraph {
     return { runs: str(rec?.get("runs")), learnings: str(rec?.get("learnings")) };
   }
 
-  private async setWatermark(g: GraphDriver, key: "runs" | "learnings", value: string): Promise<void> {
+  private async setWatermark(g: GraphRunner, key: "runs" | "learnings", value: string): Promise<void> {
     await g.run(`MATCH (s:AgentXpSync {id: 'agents'}) SET s.${key} = $value`, { value });
   }
 
@@ -271,17 +272,6 @@ export class AgentExperienceGraph {
         .all(markAt, markAt, markId) as RunRow[];
       if (rows.length === 0) break;
 
-      await g.run(
-        `UNWIND $rows AS row
-         MERGE (a:Agent {id: row.agent_id})
-         MERGE (r:AgentRun {id: row.id})
-         SET r.status = row.status, r.goal = row.goal, r.steps = row.steps_count,
-             r.tokens = row.tokens_used, r.project_id = row.project_id,
-             r.created_at = row.created_at, r.done_at = row.done_at
-         MERGE (a)-[:RAN]->(r)`,
-        { rows },
-      );
-
       const ids = rows.map((r) => r.id);
       const placeholders = ids.map(() => "?").join(",");
       const tools = this.db
@@ -295,22 +285,37 @@ export class AgentExperienceGraph {
             GROUP BY run_id, tool_name`,
         )
         .all(...ids) as Array<{ run_id: string; tool_name: string; calls: number; errors: number }>;
-      if (tools.length > 0) {
-        await g.run(
+      const last = rows[rows.length - 1];
+
+      // A batch's runs, the tools they used and the watermark past them land
+      // together: a reader never sees a run without its tools.
+      await inGraphTransaction(g, async (tx) => {
+        await tx.run(
           `UNWIND $rows AS row
-           MATCH (r:AgentRun {id: row.run_id})
-           MERGE (t:AgentTool {name: row.tool_name})
-           MERGE (r)-[u:USED]->(t)
-           SET u.calls = row.calls, u.errors = row.errors`,
-          { rows: tools },
+           MERGE (a:Agent {id: row.agent_id})
+           MERGE (r:AgentRun {id: row.id})
+           SET r.status = row.status, r.goal = row.goal, r.steps = row.steps_count,
+               r.tokens = row.tokens_used, r.project_id = row.project_id,
+               r.created_at = row.created_at, r.done_at = row.done_at
+           MERGE (a)-[:RAN]->(r)`,
+          { rows },
         );
-      }
+        if (tools.length > 0) {
+          await tx.run(
+            `UNWIND $rows AS row
+             MATCH (r:AgentRun {id: row.run_id})
+             MERGE (t:AgentTool {name: row.tool_name})
+             MERGE (r)-[u:USED]->(t)
+             SET u.calls = row.calls, u.errors = row.errors`,
+            { rows: tools },
+          );
+        }
+        await this.setWatermark(tx, "runs", `${last.done_at}|${last.id}`);
+      });
 
       total += rows.length;
-      const last = rows[rows.length - 1];
       markAt = last.done_at;
       markId = last.id;
-      await this.setWatermark(g, "runs", `${markAt}|${markId}`);
       if (rows.length < BATCH) break;
     }
     return total;
@@ -368,25 +373,28 @@ export class AgentExperienceGraph {
       };
     });
 
-    for (let i = 0; i < payload.length; i += BATCH) {
-      await g.run(
-        `UNWIND $rows AS row
-         MERGE (a:Agent {id: row.agent_id})
-         MERGE (l:AgentLearning {id: row.id})
-         SET l.agent_id = row.agent_id, l.type = row.type, l.content = row.content,
-             l.confidence = row.confidence, l.active = row.active,
-             l.project_id = row.project_id, l.embedding = row.embedding,
-             l.embedding_model = row.embedding_model
-         MERGE (a)-[:LEARNED]->(l)
-         WITH l, row
-         UNWIND row.sources AS rid
-         MERGE (r:AgentRun {id: rid})
-         MERGE (l)-[:DERIVED_FROM]->(r)`,
-        { rows: payload.slice(i, i + BATCH) },
-      );
-    }
     const newest = changed.length ? changed[changed.length - 1].updated_at : since;
-    if (newest > since) await this.setWatermark(g, "learnings", newest);
+    // Every learning of this pass and the watermark past them, together.
+    await inGraphTransaction(g, async (tx) => {
+      for (let i = 0; i < payload.length; i += BATCH) {
+        await tx.run(
+          `UNWIND $rows AS row
+           MERGE (a:Agent {id: row.agent_id})
+           MERGE (l:AgentLearning {id: row.id})
+           SET l.agent_id = row.agent_id, l.type = row.type, l.content = row.content,
+               l.confidence = row.confidence, l.active = row.active,
+               l.project_id = row.project_id, l.embedding = row.embedding,
+               l.embedding_model = row.embedding_model
+           MERGE (a)-[:LEARNED]->(l)
+           WITH l, row
+           UNWIND row.sources AS rid
+           MERGE (r:AgentRun {id: rid})
+           MERGE (l)-[:DERIVED_FROM]->(r)`,
+          { rows: payload.slice(i, i + BATCH) },
+        );
+      }
+      if (newest > since) await this.setWatermark(tx, "learnings", newest);
+    });
     return rows.length;
   }
 
