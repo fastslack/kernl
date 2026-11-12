@@ -159,7 +159,7 @@ export class GraphQueryService {
     return { error: bad, hints: reading.warnings.map((w) => `${w.description}${w.remedy ? ` — ${w.remedy}` : ""}`) };
   }
 
-  async query(cypher: string, opts: { params?: Record<string, unknown>; limit?: number; timeoutMs?: number } = {}): Promise<QueryOutcome> {
+  async query(cypher: string, opts: { params?: Record<string, unknown>; limit?: number; timeoutMs?: number; raw?: boolean } = {}): Promise<QueryOutcome> {
     if (this.busy) return { ok: false, error: "The graph is still running an earlier query that ran out of time. Try again shortly with a narrower query." };
     const limit = Math.max(1, Math.min(opts.limit ?? 50, 500));
     const statement = cypher.trim().replace(/;\s*$/, "");
@@ -187,7 +187,8 @@ export class GraphQueryService {
         log.warn(`graph query ran out of time: ${statement.slice(0, 200)}`);
         return { ok: false, error: "The query ran out of time. Narrow it: start from an indexed property or a search index, add a LIMIT, use fewer hops." };
       }
-      const rows = r.records.map((rec) => plain(rec.toObject()) as Record<string, unknown>);
+      // `raw` keeps the driver's values (nodes with their element ids) for callers that copy them.
+      const rows = r.records.map((rec) => (opts.raw ? rec.toObject() : plain(rec.toObject())) as Record<string, unknown>);
       return {
         ok: true,
         rows: rows.slice(0, limit),
