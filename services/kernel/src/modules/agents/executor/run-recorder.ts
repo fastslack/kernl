@@ -15,6 +15,7 @@ import type { LlmLoopHooks } from "../../../core/llm/tool-loop.js";
 import { log } from "../../../core/logger.js";
 import type { Agent, AgentRun } from "../types.js";
 import type { AgentService } from "../service.js";
+import { recordToolCall } from "../../provenance/service.js";
 
 type LogEventInput = Parameters<AgentService["logEvent"]>[0];
 
@@ -60,6 +61,8 @@ export class RunRecorder {
   /** Persistence, event emission and pretty logging for runToolLoop. */
   loopHooks(): LlmLoopHooks {
     const { agent, run, service } = this;
+    /** Arguments of calls still waiting for their result, per tool. */
+    const pending = new Map<string, unknown[]>();
     const onText = (type: "final" | "thought") => ({ content, tokens }: { content: string; tokens: number }) => {
       this.stepNumber++;
       const stepTokens = Number(tokens) || 0;
@@ -99,6 +102,7 @@ export class RunRecorder {
       onToolCall: ({ tool_name, tool_input, preview }) => {
         this.stepNumber++;
         this.toolsUsed.add(tool_name);
+        pending.set(tool_name, [...(pending.get(tool_name) ?? []), tool_input]);
         service.addStep({
           run_id: run.id, step_number: this.stepNumber, type: "tool_call",
           tool_name, tool_input,
@@ -116,6 +120,15 @@ export class RunRecorder {
       },
       onToolResult: ({ tool_name, text, isError }) => {
         this.stepNumber++;
+        // Calls to one tool resolve in the order they were made.
+        const queue = pending.get(tool_name) ?? [];
+        recordToolCall({
+          tool: tool_name,
+          args: queue.shift(),
+          resultText: text,
+          ok: isError !== true,
+          actor: { kind: "agent", id: agent.id, name: agent.name, runId: run.id },
+        });
         // agent_run_steps has no metadata column; a result row's tool_input
         // is otherwise always "{}", so the error flag rides there. Rows
         // written before this carry "{}" and readers fall back to guessing.

@@ -36,6 +36,12 @@ export const LEARNING_VECTOR_INDEX = "agent-learning-embeddings";
 export const LEARNING_TEXT_INDEX = "agent-learning-text";
 const EMBEDDING_DIM = 384;
 const BATCH = 500;
+/**
+ * Bump when syncRuns writes something new for runs already synced.
+ * 2: USED.errors counts failed tool results (they are tool_result steps
+ * flagged is_error, not error steps).
+ */
+const RUNS_SYNC_VERSION = 2;
 /** Below this final score a shared learning is noise in the prompt, not help. */
 const MIN_SCORE = 0.4;
 
@@ -214,9 +220,16 @@ export class AgentExperienceGraph {
 
   private async readWatermarks(g: GraphDriver): Promise<{ runs: string; learnings: string }> {
     const r = await g.run(
-      "MERGE (s:AgentXpSync {id: 'agents'}) RETURN s.runs AS runs, s.learnings AS learnings",
+      `MERGE (s:AgentXpSync {id: 'agents'})
+       RETURN s.runs AS runs, s.learnings AS learnings, coalesce(s.runs_version, 1) AS runsVersion`,
     );
-    return { runs: str(r.records[0]?.get("runs")), learnings: str(r.records[0]?.get("learnings")) };
+    const rec = r.records[0];
+    // A store synced by an older version of syncRuns is synced again from the start.
+    if (num(rec?.get("runsVersion")) < RUNS_SYNC_VERSION) {
+      await g.run("MATCH (s:AgentXpSync {id: 'agents'}) SET s.runs = '', s.runs_version = $v", { v: RUNS_SYNC_VERSION });
+      return { runs: "", learnings: str(rec?.get("learnings")) };
+    }
+    return { runs: str(rec?.get("runs")), learnings: str(rec?.get("learnings")) };
   }
 
   private async setWatermark(g: GraphDriver, key: "runs" | "learnings", value: string): Promise<void> {
@@ -275,7 +288,8 @@ export class AgentExperienceGraph {
         .prepare(
           `SELECT run_id, tool_name,
                   SUM(type = 'tool_call') AS calls,
-                  SUM(type = 'error') AS errors
+                  SUM(type = 'error'
+                      OR (type = 'tool_result' AND json_extract(tool_input, '$.is_error') = 1)) AS errors
              FROM agent_run_steps
             WHERE run_id IN (${placeholders}) AND tool_name <> ''
             GROUP BY run_id, tool_name`,

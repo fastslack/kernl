@@ -36,6 +36,7 @@ import { createMcpPlansModule } from "../../modules/mcp-plans/index.js";
 import { createToolMemoryModule, type ToolMemoryModule } from "../../modules/tool-memory/index.js";
 import { createBenchModule } from "../../modules/bench/index.js";
 import { createBrainModule } from "../../modules/brain/index.js";
+import { createProvenanceModule } from "../../modules/provenance/index.js";
 import { createStorageModule } from "../../modules/storage/index.js";
 import { createExtensionsModule, type ExtensionsModuleHandle } from "../../modules/extensions/index.js";
 import { createStoreModule } from "../../modules/store/index.js";
@@ -168,6 +169,9 @@ export async function initCoreModules(args: {
   // gated behind BRAIN_AUTO_INDEX=1 (see modules/brain/index.ts) so a full
   // backfill never runs unsupervised; tools work regardless.
   registry.register(createBrainModule(() => embeddingsPromise));
+
+  // ── Provenance (who changed what: every writing tool call and the ids it touched) ──
+  registry.register(createProvenanceModule());
 
   // ── MCP Plans (mesh-aware dispatcher) ──
   registry.register(createMcpPlansModule({

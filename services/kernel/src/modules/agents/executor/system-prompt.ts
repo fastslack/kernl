@@ -33,6 +33,7 @@ import {
   promptLearningsBlock,
   promptSharedLearningsBlock,
   promptPerformanceBlock,
+  promptToolFailuresBlock,
   promptSimilarRunsBlock,
   promptMemorySummaryBlock,
   promptMemoryGoalSuffix,
@@ -269,6 +270,32 @@ export const sharedLearnings: SystemPromptStep = (ctx) => {
 const performanceStats: SystemPromptStep = (ctx) =>
   promptPerformanceBlock(ctx.lang, ctx.service.getAgentStats(ctx.agent.id)) || null;
 
+// Warn about tools this agent is about to use that have been failing in
+// other runs, fleet-wide, with the last error. The tools considered are its
+// allow list, or — when it may use anything — the ones it used lately. The
+// error text is tool output, so it is third-party data.
+export const toolFailureWarnings: SystemPromptStep = (ctx) => {
+  try {
+    const allowed = agentAllowedTools(ctx.agent);
+    const tools = allowed.length > 0 ? allowed : ctx.service.getRecentToolsUsed(ctx.agent.id);
+    const failing = ctx.service.getToolFailures({ tools });
+    if (failing.length === 0) return null;
+    return promptToolFailuresBlock(
+      ctx.lang,
+      failing.map((f) => {
+        const text = f.lastError.replace(/\s+/g, " ").trim().slice(0, 200);
+        return {
+          ...f,
+          lastError: text && sanitizePromptText(text).ok ? wrapExternal(text, { source: "tool-error", from: f.tool }) : "",
+        };
+      }),
+    ) || null;
+  } catch (err) {
+    log.debug(`Tool failure warnings skipped: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+};
+
 // Inject similar past runs — "when you were asked X, you produced Y"
 // This is the core of semantic recall: recognize situations you've been in before.
 const similarRuns: SystemPromptStep = (ctx) => {
@@ -352,6 +379,7 @@ export const SYSTEM_PROMPT_STEPS: ReadonlyArray<SystemPromptStep> = [
   learnings,
   sharedLearnings,
   performanceStats,
+  toolFailureWarnings,
   similarRuns,
   conversationalMemory,
   workspaceMandate,

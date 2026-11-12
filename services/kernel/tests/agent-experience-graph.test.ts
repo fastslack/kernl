@@ -132,6 +132,30 @@ describe.skipIf(!relateClientInstalled())("AgentExperienceGraph on Relate", () =
     expect(Number(used.records[0].get("c"))).toBe(1);
   });
 
+  it("counts failed tool results as USED errors, and resyncs a store synced before that", async () => {
+    addRun("r4", "b", "2026-11-11T12:00:00.000Z", ["kernel_mail_send", "kernel_mail_send"]);
+    const result = (n: number, isError: boolean) =>
+      db.prepare(
+        `INSERT INTO agent_run_steps (id, run_id, step_number, type, tool_name, tool_input, created_at)
+         VALUES (?, 'r4', ?, 'tool_result', 'kernel_mail_send', ?, ?)`,
+      ).run(`r4-res${n}`, 10 + n, JSON.stringify({ is_error: isError }), now);
+    result(1, true);
+    result(2, false);
+    const errorsOf = async (run: string) => Number((await graph.run(
+      `MATCH (:AgentRun {id: $run})-[u:USED]->(:AgentTool {name: 'kernel_mail_send'}) RETURN u.errors AS e`, { run },
+    )).records[0].get("e"));
+
+    await xp.sync();
+    expect(await errorsOf("r4")).toBe(1);
+
+    // A store whose runs were synced by the old count is synced again once.
+    await graph.run("MATCH (s:AgentXpSync {id: 'agents'}) SET s.runs_version = 1");
+    await graph.run("MATCH (:AgentRun {id: 'r4'})-[u:USED]->() SET u.errors = 0");
+    expect((await xp.sync()).runs).toBe(3);
+    expect(await errorsOf("r4")).toBe(1);
+    expect((await xp.sync()).runs).toBe(0);
+  });
+
   it("finds another agent's learning by meaning, with provenance", async () => {
     await xp.sync();
     const hits = await query();

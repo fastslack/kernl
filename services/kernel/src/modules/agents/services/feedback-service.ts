@@ -71,6 +71,57 @@ export class AgentFeedbackService {
       .all(agentId, limit) as AgentFeedback[];
   }
 
+  /**
+   * Tools that failed in a good share of recent runs, fleet-wide: a tool
+   * result flagged is_error counts once per run. Only tools that failed in at
+   * least `minRuns` runs and in `minRate` of the runs that used them.
+   */
+  getToolFailures(opts: { tools: string[]; days?: number; minRuns?: number; minRate?: number; limit?: number }): Array<{
+    tool: string;
+    runs: number;
+    failedRuns: number;
+    lastError: string;
+    lastAt: string;
+  }> {
+    if (opts.tools.length === 0) return [];
+    const since = new Date(Date.now() - (opts.days ?? 14) * 86_400_000).toISOString();
+    const failed = "json_extract(s.tool_input, '$.is_error') = 1";
+    const rows = this.db
+      .prepare(
+        `SELECT s.tool_name AS tool,
+                COUNT(DISTINCT s.run_id) AS runs,
+                COUNT(DISTINCT CASE WHEN ${failed} THEN s.run_id END) AS failedRuns,
+                MAX(CASE WHEN ${failed} THEN s.created_at END) AS lastAt
+           FROM agent_run_steps s
+          WHERE s.type = 'tool_result' AND s.created_at >= ?
+            AND s.tool_name IN (${opts.tools.map(() => "?").join(",")})
+          GROUP BY s.tool_name
+         HAVING failedRuns >= ? AND failedRuns * 1.0 / runs >= ?
+          ORDER BY failedRuns DESC, lastAt DESC
+          LIMIT ?`,
+      )
+      .all(since, ...opts.tools, opts.minRuns ?? 2, opts.minRate ?? 0.3, opts.limit ?? 6) as Array<{
+        tool: string; runs: number; failedRuns: number; lastAt: string;
+      }>;
+    const lastError = this.db.prepare(
+      `SELECT substr(tool_output, 1, 300) AS out FROM agent_run_steps
+        WHERE tool_name = ? AND type = 'tool_result' AND json_extract(tool_input, '$.is_error') = 1
+        ORDER BY created_at DESC LIMIT 1`,
+    );
+    return rows.map((r) => ({ ...r, lastError: (lastError.get(r.tool) as { out: string } | undefined)?.out ?? "" }));
+  }
+
+  /** Tools an agent called in its recent runs. */
+  getRecentToolsUsed(agentId: string, limit = 40): string[] {
+    return (this.db
+      .prepare(
+        `SELECT s.tool_name FROM agent_run_steps s JOIN agent_runs r ON r.id = s.run_id
+          WHERE r.agent_id = ? AND s.type = 'tool_call' AND s.tool_name <> ''
+          GROUP BY s.tool_name ORDER BY MAX(s.created_at) DESC LIMIT ?`,
+      )
+      .all(agentId, limit) as Array<{ tool_name: string }>).map((r) => r.tool_name);
+  }
+
   getAgentStats(agentId: string): {
     total_runs: number;
     completed: number;
