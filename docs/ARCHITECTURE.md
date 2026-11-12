@@ -14,7 +14,8 @@ description of today.
 
 Kernl is an **MCP server**. It exposes ~290 tools (`kernel_{module}_{action}`)
 over two transports — stdio and Streamable HTTP — backed by SQLite (primary) and
-an optional Neo4j graph. Everything else is a **module** or an **extension** that
+a built-in graph (Relate, an embedded Cypher engine on a file next to the SQLite
+database; Neo4j is an optional alternative). Everything else is a **module** or an **extension** that
 plugs into that core. You almost never touch the core to add a feature; you add a
 module or an extension.
 
@@ -26,7 +27,7 @@ services/kernel/src/core/                → framework: config, logger, DB clien
 services/kernel/src/modules/{name}/      → built-in feature modules (self-contained)
 services/kernel/assets/extensions/{cat}/ → marketplace extensions (loaded at runtime from prebuilt bundles)
 services/dashboard/                      → SvelteKit SPA (separate build, served by nginx)
-services/kernel/tests/                   → bun tests (in-memory SQLite, Neo4j unavailable)
+services/kernel/tests/                   → bun tests (in-memory SQLite; graph via a fake or an in-memory Relate store)
 ```
 
 ## Runtime conventions
@@ -37,8 +38,11 @@ services/kernel/tests/                   → bun tests (in-memory SQLite, Neo4j 
   always integer cents; booleans are `INTEGER 0/1`; deletes are soft
   (`deleted_at`). Several columns are `NOT NULL DEFAULT ''` — check presence with
   `<> ''`, not `IS NOT NULL`.
-- **Neo4j** is optional and degrades gracefully — always guard with
-  `neo4j.available` before graph calls.
+- **The graph** comes from the active graph driver (`ctx.graph`): `relate`
+  (built in, the default), `neo4j` (optional server) or `noop` (graph off).
+  Always guard with `graph?.capabilities.cypher` before graph calls, and gate
+  Graph Data Science work on `capabilities.gds` — only Neo4j has it.
+  `ctx.neo4j` is the deprecated legacy client. See [The graph layer](#the-graph-layer).
 
 ## Extensions vs. modules
 
@@ -106,8 +110,9 @@ Claude Desktop / API clients
   │  │ tasks    │  └──────────┘  │  Slack,...) │ │
   │  │ crm      │                └────────────┘ │
   │  │ reminders│  ┌──────────┐  ┌────────────┐ │
-  │  │ shopping │  │ SQLite   │  │ Neo4j      │ │
-  │  │ home     │  │ (primary)│  │ (optional) │ │
+  │  │ shopping │  │ SQLite   │  │ Graph      │ │
+  │  │ home     │  │ (primary)│  │ (Relate,   │ │
+  │  │          │  │          │  │  built in) │ │
   │  │ events   │  └──────────┘  └────────────┘ │
   │  │ ...      │                               │
   │  └─────────┘  ┌──────────────────────────┐  │
@@ -121,6 +126,48 @@ Claude Desktop / API clients
         v
   Dashboard (SvelteKit SPA on Nginx)
 ```
+
+## The graph layer
+
+Kernl keeps rows in SQLite and relationships in a graph. The graph comes from a
+pluggable **graph driver** (`core/db-drivers/`); exactly one is active, chosen
+in `/extensions`:
+
+| Driver | What it is | Capabilities |
+|---|---|---|
+| `relate` (default) | [Relate](https://relatedb.ai), an embedded Cypher 25 engine running inside the kernel on `data/graph.rl`. No server, no port, no password. | Cypher, vector + full-text indexes. No GDS. |
+| `neo4j` (optional) | A Neo4j 5.x server — `docker-compose.neo4j.yml` adds one. | Cypher, vectors, Graph Data Science. |
+| `noop` | Graph off; graph writes are skipped. | None. |
+
+A fresh install starts on `relate` whenever its client is present (the desktop
+app and the Docker image ship it), or on `neo4j` when `NEO4J_URI` points at a
+server. Seeding never overrides a driver already chosen. The kernel dials no
+Neo4j unless `NEO4J_URI` is set. `scripts/relate-migrate.sh` copies a Neo4j
+graph into a Relate store.
+
+Rules for graph code:
+
+- Write Cypher that runs on both engines: no `apoc.*`, no options map on
+  `db.index.fulltext.queryNodes` (use `LIMIT`), read counts with `Number(v)` or
+  `.toNumber()`.
+- Large vector collections do not belong in the graph: Relate keeps the whole
+  graph in memory. Cinema's 165k title vectors live in SQLite and are searched
+  in-process (`cinema/_module/vector-store.ts`).
+- SQLite stays the source of truth. Graph projections rebuild from it.
+
+### How agents learn
+
+1. Before a run, the system prompt carries the agent's own learnings and —
+   from the **shared experience graph** — learnings of *other* agents that fit
+   the goal: found by vector similarity (full-text when vectors are not
+   comparable), ranked by relevance, confidence, shared tools and shared office.
+2. The prompt records which learnings it carried (`agent_run_learnings`).
+3. After the run, an LLM grades it (`AGENTS_EVAL_PROVIDER`) and may extract a
+   new learning. Three failed gradings in a row notify the user.
+4. Grading credits or blames exactly the learnings that run carried; a failure
+   never weakens an `avoid` learning.
+5. The graph syncs incrementally: `(Agent)-[:RAN]->(AgentRun)-[:USED]->(AgentTool)`,
+   `(Agent)-[:LEARNED]->(AgentLearning)-[:DERIVED_FROM]->(AgentRun)`.
 
 ## Module Pattern
 
@@ -172,7 +219,8 @@ Every module receives:
 ```typescript
 interface ModuleContext {
   sqlite: SqliteDb;          // SQLite database
-  neo4j: Neo4jClient;        // Neo4j (check neo4j.available before use)
+  graph: GraphDriver | null; // Active graph driver (live) — guard with graph?.capabilities.cypher
+  neo4j: Neo4jClient;        // @deprecated legacy Neo4j client
   events: EventBus;          // Pub/sub event system
   config: KernelConfig;      // Full configuration
   systemRegistry: SystemRegistry;  // Process/worker tracking
@@ -398,5 +446,9 @@ Run: `bun test` or `npx vitest run`
 | `services/kernel/src/core/http-server.ts` | HTTP server with auth + rate limiting |
 | `services/kernel/src/core/event-bus.ts` | Pub/sub event system |
 | `services/kernel/src/core/db/sqlite.ts` | SQLite connection |
-| `services/kernel/src/core/db/neo4j.ts` | Neo4j client (graceful degradation) |
+| `services/kernel/src/core/db-drivers/graph-driver.ts` | Graph driver contract + capabilities |
+| `services/kernel/src/core/db-drivers/builtins/relate-graph-driver.ts` | Built-in graph (Relate, embedded) |
+| `services/kernel/src/core/db-drivers/builtins/neo4j-graph-driver.ts` | Optional Neo4j server driver |
+| `services/kernel/src/modules/agents/services/experience-graph.ts` | Shared experience graph for agents |
+| `services/kernel/src/core/db/neo4j.ts` | Legacy Neo4j client (deprecated) |
 | `services/kernel/src/core/db/query-helpers.ts` | Shared query utilities (safeGet, safeAll, tableExists) |

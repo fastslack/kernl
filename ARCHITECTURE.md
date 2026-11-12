@@ -8,7 +8,7 @@ reading all of it.
 
 Kernl is an **MCP server**. It exposes ~290 tools (`kernel_{module}_{action}`)
 over two transports — stdio and Streamable HTTP — backed by SQLite (primary) and
-an optional Neo4j graph. Everything else is a **module** or an **extension** that
+a built-in graph (Relate, embedded; Neo4j optional). Everything else is a **module** or an **extension** that
 plugs into that core. You almost never touch the core to add a feature; you add a
 module or an extension.
 
@@ -20,7 +20,7 @@ services/kernel/src/core/                → framework: config, logger, DB clien
 services/kernel/src/modules/{name}/      → built-in feature modules (self-contained)
 services/kernel/assets/extensions/{cat}/ → marketplace extensions (loaded at runtime from prebuilt bundles)
 services/dashboard/               → SvelteKit SPA (separate build, served by nginx)
-services/kernel/tests/                   → vitest/bun tests (in-memory SQLite, Neo4j unavailable)
+services/kernel/tests/                   → vitest/bun tests (in-memory SQLite, no graph server)
 ```
 
 ## Runtime
@@ -31,8 +31,9 @@ services/kernel/tests/                   → vitest/bun tests (in-memory SQLite,
   always integer cents; booleans are `INTEGER 0/1`; deletes are soft
   (`deleted_at`). Several columns are `NOT NULL DEFAULT ''` — check presence with
   `<> ''`, not `IS NOT NULL`.
-- **Neo4j** is optional and degrades gracefully — always guard with
-  `neo4j.available` before graph calls.
+- **The graph** comes from the active graph driver (`ctx.graph`; `relate` built
+  in by default, `neo4j` optional) — guard with `graph?.capabilities.cypher`,
+  and gate Graph Data Science on `capabilities.gds`. See docs/ARCHITECTURE.md.
 
 ## Anatomy of a module
 
@@ -43,7 +44,7 @@ export function createFooModule(): KernelModule {
   let tools: ToolDefinition[] = [];
   return {
     name: "foo",
-    async initialize(ctx: ModuleContext) {       // ctx = { sqlite, neo4j, events, config }
+    async initialize(ctx: ModuleContext) {       // ctx = { sqlite, graph, events, config, … }
       runMigrations(ctx.sqlite, "foo", fooMigrations);
       const service = new FooService(ctx.sqlite, ctx.neo4j);
       tools = fooTools(service);                  // ToolDefinition[] with Zod inputSchema

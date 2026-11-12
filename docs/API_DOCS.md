@@ -72,7 +72,7 @@ curl http://localhost:3086/api/health
   "status": "ok",
   "uptimeMs": 123456,
   "uptimeFormatted": "0h 2m 3s",
-  "services": { "sqlite": true, "neo4j": true, "dashboard": true }
+  "services": { "sqlite": true, "graph": true, "dashboard": true }
 }
 ```
 
