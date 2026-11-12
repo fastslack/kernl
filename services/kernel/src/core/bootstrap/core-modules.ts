@@ -38,6 +38,7 @@ import { createBenchModule } from "../../modules/bench/index.js";
 import { createBrainModule } from "../../modules/brain/index.js";
 import { createProvenanceModule } from "../../modules/provenance/index.js";
 import { createGraphQueryModule } from "../../modules/graph-query/index.js";
+import { createPlacesModule } from "../../modules/places/index.js";
 import { createStorageModule } from "../../modules/storage/index.js";
 import { createExtensionsModule, type ExtensionsModuleHandle } from "../../modules/extensions/index.js";
 import { createStoreModule } from "../../modules/store/index.js";
@@ -176,6 +177,7 @@ export async function initCoreModules(args: {
 
   // ── Graph query (agents read the graph: schema, checked read-only Cypher, plain-word questions) ──
   registry.register(createGraphQueryModule());
+  registry.register(createPlacesModule());
 
   // ── MCP Plans (mesh-aware dispatcher) ──
   registry.register(createMcpPlansModule({
