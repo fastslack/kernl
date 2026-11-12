@@ -111,13 +111,15 @@ export class ProvenanceService {
   constructor(
     private db: SqliteDb,
     private getGraph: () => GraphDriver | null = () => null,
+    /** Clock for `at`; the demo seed replays a past timeline with it. */
+    private now: () => string = isoNow,
   ) {}
 
   /** Store a call if its tool writes; returns how many rows were written. */
   record(call: ToolCallRecord): number {
     if (!isWriteTool(call.tool, call.sideEffects)) return 0;
     const refs = extractRefs(call.args, call.resultText, call.structured);
-    const at = isoNow();
+    const at = this.now();
     const callId = newId();
     const detail = argsPreview(call.args);
     const insert = this.db.prepare(
@@ -206,6 +208,11 @@ let active: ProvenanceService | null = null;
 
 export function setProvenanceService(s: ProvenanceService | null): void {
   active = s;
+}
+
+/** The running store, for readers in other modules (facts' explain). */
+export function getProvenanceService(): ProvenanceService | null {
+  return active;
 }
 
 /** Report a tool call from either dispatch path. Never throws. */

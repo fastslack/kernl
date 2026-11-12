@@ -13,6 +13,9 @@
  *     each result with what it is connected to (ask.ts).
  *   * `kernel_facts_assert` / `_retract` / `_query` — facts with two
  *     timelines: when each was true, and when Kernl knew it (facts.ts).
+ *   * `kernel_facts_explain` — what Kernl believed at the moment of a
+ *     decision against what was true then, who wrote it, and whether a
+ *     difference was late information or a wrong fact (explain.ts).
  *
  * Embeddings are built late (in services.ts), same as tool-memory — the
  * factory promise is awaited with a short race so boot never blocks.
@@ -41,6 +44,8 @@ import { BrainService } from "./service.js";
 import { BrainIndexer, MODULE_TO_KINDS } from "./indexer.js";
 import { askMemory, type AskDeps } from "./ask.js";
 import { FactStore, type Fact } from "./facts.js";
+import { explainBelief } from "./explain.js";
+import { getProvenanceService } from "../provenance/service.js";
 import { defineTool, defineToolNoInput } from "../../core/tool-builder.js";
 
 export interface BrainModule extends KernelModule {
@@ -208,6 +213,14 @@ const FactsQueryInput = z.object({
   limit: z.number().int().positive().max(500).default(50),
 });
 
+const ExplainInput = z.object({
+  subject: z.string().optional().describe('A fact subject, e.g. "Person:<id>".'),
+  name: z.string().optional().describe("Or a name to find the subject by."),
+  predicate: z.string().optional().describe("Only this predicate (works_at, email…)."),
+  at: z.string().optional().describe("The moment of the decision (ISO)."),
+  action_ref: z.string().optional().describe("Or the id of what the action produced or touched; its first recorded call gives the moment."),
+});
+
 function factView(f: Fact) {
   return {
     id: f.id,
@@ -296,6 +309,31 @@ function buildTools(
           asOf: a.as_of, knownAt: a.known_at, history: a.history, limit: a.limit,
         });
         return structuredResult({ facts: rows.map(factView) });
+      },
+    }),
+    defineTool({
+      name: "kernel_facts_explain",
+      description:
+        "Why did Kernl (or an agent) act that way? Give the person or thing (subject ref or name) and the " +
+        "moment of the decision — `at`, or `action_ref`, the id of what the action produced or touched " +
+        "(an email, a task…). Returns what Kernl believed then against what is now known to have been " +
+        "true then, fact by fact, who wrote each belief and from what source, and a verdict: consistent, " +
+        "late_information (the world changed but Kernl learned it after the decision) or wrong_belief " +
+        "(the stored fact was later corrected as a mistake).",
+      schema: ExplainInput,
+      outputSchema: z.unknown(),
+      tags: ["brain", "memory", "facts", "audit", "provenance"],
+      cost: { tokens_p50: 0, usd_p50: 0, latency_p50_ms: 10, reversible: true, cacheable: false },
+      async handler(a): Promise<ToolResult> {
+        const store = getFacts();
+        if (!store) return errorResult("facts not available");
+        try {
+          return structuredResult(explainBelief(store, getProvenanceService(), {
+            subject: a.subject, name: a.name, predicate: a.predicate, at: a.at, actionRef: a.action_ref,
+          }));
+        } catch (err) {
+          return errorResult(err instanceof Error ? err.message : String(err));
+        }
       },
     }),
     defineTool({

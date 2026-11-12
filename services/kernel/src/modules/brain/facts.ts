@@ -6,6 +6,8 @@
  *
  *   valid_from / valid_to       when it was true in the world
  *   recorded_at / superseded_at when Kernl believed it
+ *   ended_at                    when Kernl learned it had ended (valid_to is
+ *                               written later, in world time)
  *
  * so the memory stops piling up contradictions. Asserting a new value for a
  * single-valued predicate is read one of two ways:
@@ -43,6 +45,7 @@ export interface Fact {
   valid_from: string;
   valid_to: string | null;
   ended_by: string | null;
+  ended_at: string | null;
   recorded_at: string;
   superseded_at: string | null;
   superseded_by: string | null;
@@ -87,12 +90,17 @@ export function normTime(t: string): string {
   return new Date(ms).toISOString();
 }
 
+/** Lowercase, without accents: "Lucía" → "lucia". */
+const fold = (s: string) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().trim();
+
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
 export class FactStore {
   constructor(
     private db: SqliteDb,
     private getGraph: () => GraphDriver | null = () => null,
+    /** Transaction-time clock; the demo seed replays a past timeline with it. */
+    private now: () => string = isoNow,
   ) {}
 
   get(id: string): Fact | null {
@@ -115,7 +123,7 @@ export class FactStore {
     const object = input.object.trim();
     if (!subject || !predicate || !object) throw new Error("subject, predicate and object are required");
     const mode = input.mode ?? "change";
-    const now = isoNow();
+    const now = this.now();
     const validFrom = input.validFrom ? normTime(input.validFrom) : now;
 
     const outcome = this.db.transaction((): AssertOutcome => {
@@ -152,8 +160,8 @@ export class FactStore {
         } else {
           // It held until the new value began (never before it began itself).
           const end = start > f.valid_from ? start : f.valid_from;
-          this.db.prepare("UPDATE facts SET valid_to = ?, ended_by = ? WHERE id = ?").run(end, id, f.id);
-          ended.push({ ...f, valid_to: end, ended_by: id });
+          this.db.prepare("UPDATE facts SET valid_to = ?, ended_by = ?, ended_at = ? WHERE id = ?").run(end, id, now, f.id);
+          ended.push({ ...f, valid_to: end, ended_by: id, ended_at: now });
         }
       }
       return { status: "recorded", fact: this.get(id)!, ended, superseded };
@@ -172,14 +180,14 @@ export class FactStore {
   retract(id: string, how: "ended" | "wrong" = "ended", at?: string): Fact | null {
     const f = this.get(id);
     if (!f) return null;
-    const now = isoNow();
+    const now = this.now();
     if (how === "wrong") {
       if (f.superseded_at) return f;
       this.db.prepare("UPDATE facts SET superseded_at = ? WHERE id = ?").run(now, id);
     } else {
       if (f.valid_to) return f;
       const end = at ? normTime(at) : now;
-      this.db.prepare("UPDATE facts SET valid_to = ? WHERE id = ?").run(end > f.valid_from ? end : f.valid_from, id);
+      this.db.prepare("UPDATE facts SET valid_to = ?, ended_at = ? WHERE id = ?").run(end > f.valid_from ? end : f.valid_from, now, id);
     }
     const out = this.get(id)!;
     void this.project([out]);
@@ -217,18 +225,54 @@ export class FactStore {
       } else {
         where.push("superseded_at IS NULL");
       }
+      // An end Kernl learned after `knownAt` was not known then: as Kernl
+      // believed it, the fact was still open.
+      const open = k ? "(valid_to IS NULL OR ended_at > ?)" : "valid_to IS NULL";
       const t = q.asOf ? normTime(q.asOf) : null;
       if (t) {
-        where.push("valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)");
-        params.push(t, t);
+        where.push(`valid_from <= ? AND (${open} OR valid_to > ?)`);
+        params.push(t, ...(k ? [k] : []), t);
       } else {
-        where.push("valid_to IS NULL");
+        where.push(open);
+        if (k) params.push(k);
       }
     }
     const sql = `SELECT * FROM facts ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
                  ORDER BY ${q.history ? "subject, predicate, valid_from, recorded_at" : "recorded_at DESC"}
                  LIMIT ${Math.max(1, Math.min(q.limit ?? 100, 1000))}`;
     return this.db.prepare(sql).all(...params) as Fact[];
+  }
+
+  /** Subjects whose name or ref matches `text`, with the name they are known by. */
+  findSubjects(text: string, limit = 20): Array<{ subject: string; subject_name: string }> {
+    const like = `%${text.trim()}%`;
+    const found = this.db
+      .prepare(
+        `SELECT subject, COALESCE(MAX(NULLIF(subject_name, '')), '') AS subject_name FROM facts
+          WHERE subject_name LIKE ? OR subject LIKE ? GROUP BY subject ORDER BY subject LIMIT ?`,
+      )
+      .all(like, like, limit) as Array<{ subject: string; subject_name: string }>;
+    if (found.length) return found;
+    // SQLite's LIKE folds ASCII case only: "lucia" misses "Lucía". Compare
+    // without accents or case over the named subjects instead.
+    const want = fold(text);
+    if (!want) return [];
+    return (this.db
+      .prepare(
+        `SELECT subject, MAX(subject_name) AS subject_name FROM facts
+          WHERE subject_name <> '' GROUP BY subject ORDER BY subject LIMIT 5000`,
+      )
+      .all() as Array<{ subject: string; subject_name: string }>)
+      .filter((r) => fold(r.subject_name).includes(want))
+      .slice(0, limit);
+  }
+
+  /** The name a subject was given in any of its facts. */
+  subjectName(subject: string): string {
+    const r = this.db
+      .prepare("SELECT COALESCE(MAX(NULLIF(subject_name, '')), '') AS n FROM facts WHERE subject = ?")
+      .get(subject) as { n: string } | undefined;
+    return r?.n ?? "";
   }
 
   /** Write facts to the graph, linked to their subject node when it is one. */
@@ -247,6 +291,7 @@ export class FactStore {
             title: `${f.subject_name || f.subject} · ${f.predicate.replace(/_/g, " ")} · ${f.object}`,
             valid_from: f.valid_from,
             valid_to: f.valid_to,
+            ended_at: f.ended_at,
             recorded_at: f.recorded_at,
             superseded_at: f.superseded_at,
             current: !f.valid_to && !f.superseded_at,
