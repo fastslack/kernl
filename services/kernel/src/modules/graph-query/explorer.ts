@@ -104,9 +104,8 @@ export class GraphExplorer {
     } catch {
       /* no index yet: fall back to a scan */
     }
-    const match = label ? `MATCH (n:\`${label}\`)` : "MATCH (n)";
     const r = await g.run(
-      `${match} WHERE toLower(coalesce(n.name, n.title, n.subject, n.label, '')) CONTAINS toLower($q) RETURN n LIMIT $limit`,
+      `MATCH (n${label ? `:\`${label}\`` : ""}) WHERE toLower(coalesce(n.name, n.title, n.subject, n.label, '')) CONTAINS toLower($q) RETURN n LIMIT $limit`,
       { q, limit: lim },
     );
     return r.records.map((x) => toNode(x.get("n"))).filter((n): n is ExplorerNode => !!n);

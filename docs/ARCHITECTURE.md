@@ -207,6 +207,35 @@ Rules for graph code:
   against the schema) and `kernel_graph_ask` (a question → Cypher through the
   LLM driver, corrected from those errors). The embedded engine cannot cancel a
   query: one that runs out of time blocks new ones until it ends.
+- **Who sees the graph** (`graph-query/privacy.ts`) — Kernl's agents read all of
+  it. An outside MCP client gets `GRAPH_MCP_ACCESS` (`off`, `schema`, `read`;
+  default `read`) and never the `GRAPH_PRIVATE_LABELS` (default: Email,
+  EmailThread, Memory, Fact, ChatMessage, AgentMemory): hidden from the schema,
+  refused when named, unreachable through unlabeled patterns or the search
+  indexes that cover them, stubbed if they reach a row. The dashboard explorer
+  is the owner's and sees everything.
+- **Scratch graphs and slices** (`graph-query/scratch.ts`) — `kernel_graph_scratch`
+  gives each run a private in-memory graph it may write to; `kernel_graph_slice`
+  copies a checked read of the main graph into it, or returns it as JSON. At
+  most four exist (Relate cannot close a database), wiped when the run ends.
+- **Graph analytics** (`modules/graph-analytics/`) — `kernel_graph_analyze`:
+  PageRank, Louvain communities, components and betweenness, written back as
+  `pageRank`, `communityId`, `componentId`, `betweenness`. On GDS when the graph
+  has it, on a remote GDS when `GDS_REMOTE_URI` is set (only numbered nodes and
+  edges go there), otherwise in TypeScript.
+- **Code graph** (`repos/_module/code-graph.ts`) — a registered repo's git
+  history as `CodeFile`/`CodeAuthor` with `AUTHORED` and `CO_CHANGED`, rebuilt
+  when HEAD moves: `kernel_repos_code_hotspots`, `_code_owners`,
+  `kernel_repos_change_impact`.
+- **Places** (`modules/places/`, table `places`) — where events, trips, hotels
+  and activities are, from map links, by hand, or geocoded when
+  `PLACES_GEOCODER=nominatim` (off by default: it sends addresses out);
+  `(:Place {loc: point})`, `kernel_places_near`.
+- **Office knowledge packs** (`modules/office-packs/`) — an office's lessons as
+  sorted, redacted JSON or Markdown; importing one only stages it, and
+  `kernel_office_pack_review` accepts lessons into `agent_learnings` (confidence
+  capped at 0.6).
+- **Graph explorer** — the dashboard's `/graph`, served by `/api/graph/*`.
 
 ## Module Pattern
 
