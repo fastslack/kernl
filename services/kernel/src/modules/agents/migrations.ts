@@ -1069,4 +1069,8 @@ export const agentsMigrations: Migration[] = [
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is
   // correct with no rewrite step. The version numbers stay burned so a dev
   // DB that already recorded them can never shadow a future migration.
+  //
+  // NOTE: versions 61 and 62 are burned too. They belonged to a learning
+  // import from other instances that was removed before any release; a dev
+  // DB may have recorded them. The next migration is 63.
 ];

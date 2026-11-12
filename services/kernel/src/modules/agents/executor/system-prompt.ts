@@ -15,7 +15,8 @@
  */
 
 import { log } from "../../../core/logger.js";
-import { EXTERNAL_CONTENT_NOTICE } from "../../../sdk/external-content.js";
+import { EXTERNAL_CONTENT_NOTICE, wrapExternal } from "../../../sdk/external-content.js";
+import { sanitizePromptText } from "../../../sdk/prompt-sanitizer.js";
 import type { KernelConfig, KernelLanguage } from "../../../core/config.js";
 import type { Agent } from "../types.js";
 import type { AgentService } from "../service.js";
@@ -203,7 +204,7 @@ const learnings: SystemPromptStep = (ctx) => {
 // embeds the goal itself otherwise, and falls back to full-text search when no
 // embeddings client is wired. Never blocks a run: any failure contributes
 // nothing. The injected ids are logged so their effect can be measured.
-const sharedLearnings: SystemPromptStep = (ctx) => {
+export const sharedLearnings: SystemPromptStep = (ctx) => {
   if (ctx.config?.agents?.sharedLearnings === false) return null;
   const graph = ctx.service.getExperienceGraph();
   if (!graph?.available) return null;
@@ -218,7 +219,7 @@ const sharedLearnings: SystemPromptStep = (ctx) => {
           log.debug(`Shared learnings: goal embed failed, using full-text — ${err instanceof Error ? err.message : String(err)}`);
         }
       }
-      const items = await graph.findSharedLearnings({
+      const found = await graph.findSharedLearnings({
         agentId: ctx.agent.id,
         flowId: ctx.agent.flow_id ?? "",
         projectId: ctx.projectId,
@@ -227,6 +228,22 @@ const sharedLearnings: SystemPromptStep = (ctx) => {
         embeddingModel: client?.model ?? null,
         tools: agentAllowedTools(ctx.agent),
       });
+      // Another agent's lesson — or another instance's — is third-party text:
+      // it reaches the prompt as <external> data, never as an instruction, and
+      // one the injection detector flags is left out altogether.
+      const items = found
+        .filter((i) => sanitizePromptText(i.content).ok)
+        .map((i) => ({
+          ...i,
+          content: wrapExternal(i.content, { source: "shared-learning", from: i.agentName }),
+        }));
+      if (found.length > items.length) {
+        ctx.recorder.logEvent({
+          event_type: "run", event_subtype: "shared_learnings_flagged",
+          detail: `${found.length - items.length} shared learning(s) left out: flagged as possible prompt injection`,
+          raw_data: { ids: found.filter((i) => !items.some((k) => k.id === i.id)).map((i) => i.id) },
+        });
+      }
       if (items.length === 0) return null;
       ctx.service.recordInjectedLearnings(ctx.recorder.runId, items.map((i) => i.id), true);
       ctx.recorder.logEvent({

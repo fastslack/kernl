@@ -161,6 +161,9 @@ Rules for graph code:
    from the **shared experience graph** — learnings of *other* agents that fit
    the goal: found by vector similarity (full-text when vectors are not
    comparable), ranked by relevance, confidence, shared tools and shared office.
+   Another agent's learning is third-party text: it reaches the prompt inside
+   `<external trust="untrusted">`, as data rather than instruction, and one the
+   prompt-injection detector flags is left out.
 2. The prompt records which learnings it carried (`agent_run_learnings`).
 3. After the run, an LLM grades it (`AGENTS_EVAL_PROVIDER`) and may extract a
    new learning. Three failed gradings in a row notify the user.
