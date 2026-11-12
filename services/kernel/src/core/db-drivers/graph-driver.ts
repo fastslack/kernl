@@ -81,6 +81,14 @@ export interface GraphResultSummary {
   counters?: GraphCounters;
   /** Optional execution-time hint (ms). */
   resultAvailableAfterMs?: number;
+  /**
+   * The plan of an EXPLAIN/PROFILE, as the backend gives it: Relate's
+   * `{root: {operator, children, warnings}}` or neo4j-driver's
+   * `{operatorType, children}`. Read it through graph-query/plan.ts.
+   */
+  plan?: unknown;
+  /** Planner notifications (warnings with a code and a description). */
+  notifications?: unknown[];
 }
 
 export interface GraphResult {

@@ -37,6 +37,7 @@ import { createToolMemoryModule, type ToolMemoryModule } from "../../modules/too
 import { createBenchModule } from "../../modules/bench/index.js";
 import { createBrainModule } from "../../modules/brain/index.js";
 import { createProvenanceModule } from "../../modules/provenance/index.js";
+import { createGraphQueryModule } from "../../modules/graph-query/index.js";
 import { createStorageModule } from "../../modules/storage/index.js";
 import { createExtensionsModule, type ExtensionsModuleHandle } from "../../modules/extensions/index.js";
 import { createStoreModule } from "../../modules/store/index.js";
@@ -172,6 +173,9 @@ export async function initCoreModules(args: {
 
   // ── Provenance (who changed what: every writing tool call and the ids it touched) ──
   registry.register(createProvenanceModule());
+
+  // ── Graph query (agents read the graph: schema, checked read-only Cypher, plain-word questions) ──
+  registry.register(createGraphQueryModule());
 
   // ── MCP Plans (mesh-aware dispatcher) ──
   registry.register(createMcpPlansModule({

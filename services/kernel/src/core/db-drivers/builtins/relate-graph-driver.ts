@@ -63,6 +63,8 @@ export interface RelateResult {
   columns: string[];
   rows: Record<string, unknown>[];
   stats?: RelateStats;
+  /** Plan (EXPLAIN/PROFILE) and planner notifications. */
+  _summary?: { plan?: unknown; notifications?: unknown[] };
 }
 
 export interface RelateConnection {
@@ -225,7 +227,11 @@ export function adaptResult(r: RelateResult): GraphResult {
   const columns = r.columns ?? [];
   return {
     records: (r.rows ?? []).map((row) => toRecord(columns, row)),
-    summary: { counters: toCounters(r.stats) },
+    summary: {
+      counters: toCounters(r.stats),
+      ...(r._summary?.plan ? { plan: r._summary.plan } : {}),
+      ...(r._summary?.notifications?.length ? { notifications: r._summary.notifications } : {}),
+    },
   };
 }
 
