@@ -8,6 +8,9 @@
  *   * `kernel_brain_feedback` — apply a usage signal (autoaprendizaje).
  *   * `kernel_brain_decay`    — pull learned weights back toward baseline.
  *   * `kernel_brain_stats`    — coverage: items per kind + watermarks.
+ *   * `kernel_brain_ask`      — "what do I know about X?": brain, chat
+ *     memories, agent learnings and graph entities in one fused answer,
+ *     each result with what it is connected to (ask.ts).
  *
  * Embeddings are built late (in services.ts), same as tool-memory — the
  * factory promise is awaited with a short race so boot never blocks.
@@ -28,12 +31,13 @@ import type {
 } from "../../core/types.js";
 import { structuredResult, errorResult, fireAndForget } from "../../core/helpers.js";
 import { log } from "../../core/logger.js";
-import type { EmbeddingsClient } from "../../core/embeddings/index.js";
+import { LocalEmbeddings, type EmbeddingsClient } from "../../core/embeddings/index.js";
 import type { DataChangedPayload } from "../../core/kernel-events.js";
 import { runMigrations } from "../../core/db/migrations.js";
 import { brainMigrations } from "./migrations.js";
 import { BrainService } from "./service.js";
 import { BrainIndexer, MODULE_TO_KINDS } from "./indexer.js";
+import { askMemory, type AskDeps } from "./ask.js";
 import { defineTool, defineToolNoInput } from "../../core/tool-builder.js";
 
 export interface BrainModule extends KernelModule {
@@ -47,6 +51,10 @@ export function createBrainModule(
   let service: BrainService | null = null;
   let indexer: BrainIndexer | null = null;
   let tools: ToolDefinition[] = [];
+  let embeddingsClient: EmbeddingsClient | null = null;
+  // Chat memories are written with the bundled local model (chat/service.ts).
+  let chatEmbeddings: EmbeddingsClient | null = null;
+  let askDeps: AskDeps | null = null;
   const autoIndex = process.env.BRAIN_AUTO_INDEX === "1";
 
   // Coalesce data.changed storms: collect kinds, flush on a short timer.
@@ -68,7 +76,8 @@ export function createBrainModule(
   function wireService(ctx: ModuleContext, embeddings: EmbeddingsClient): void {
     service = new BrainService(ctx.sqlite, embeddings);
     indexer = new BrainIndexer(ctx.sqlite, service);
-    tools = buildTools(() => service, () => indexer);
+    embeddingsClient = embeddings;
+    tools = buildTools(() => service, () => indexer, () => askDeps);
 
     ctx.events.on(
       "data.changed",
@@ -91,6 +100,15 @@ export function createBrainModule(
     name: "brain",
     async initialize(ctx: ModuleContext) {
       runMigrations(ctx.sqlite, "brain", brainMigrations);
+      askDeps = {
+        db: ctx.sqlite,
+        brain: () => service,
+        embeddings: () => embeddingsClient,
+        chatEmbeddings: () => (chatEmbeddings ??= new LocalEmbeddings()),
+        graph: () => ctx.graph,
+      };
+      // Asking works before the embeddings backend is up (text and graph legs).
+      tools = buildTools(() => service, () => indexer, () => askDeps);
       let embeddings: EmbeddingsClient | null = null;
       try {
         const timeout = new Promise<null>((res) => setTimeout(() => res(null), 250));
@@ -139,6 +157,12 @@ const FeedbackInput = z.object({
   signal: z.enum(["open", "co_open", "correct", "ignore"]).describe("Usage signal driving the weight nudge."),
 });
 
+const AskInput = z.object({
+  query: z.string().min(1).describe("Who or what to ask about, in free text (\"Ada\", \"the Q4 report\", \"deploy failures\")."),
+  limit: z.number().int().positive().max(30).default(10),
+  related: z.number().int().min(0).max(20).default(5).describe("Neighbours to show per result from the graph; 0 to skip."),
+});
+
 const DecayInput = z.object({
   rate: z.number().min(0).max(1).default(0.1),
 });
@@ -146,8 +170,28 @@ const DecayInput = z.object({
 function buildTools(
   getSvc: () => BrainService | null,
   getIndexer: () => BrainIndexer | null,
+  getAskDeps: () => AskDeps | null,
 ): ToolDefinition[] {
   return [
+    defineTool({
+      name: "kernel_brain_ask",
+      description:
+        "What do I know about X? Searches every memory at once — indexed tasks, " +
+        "notes, contacts and mail (brain), past chat messages, what agents have " +
+        "learned, and the people, tasks, mail, events and products in the graph — " +
+        "by meaning and by words, merges the findings into one ranked list, and " +
+        "shows what each result is connected to. Use it before answering a " +
+        "question about a person, project or topic.",
+      schema: AskInput,
+      outputSchema: z.unknown(),
+      tags: ["brain", "memory", "search", "graph"],
+      cost: { tokens_p50: 0, usd_p50: 0, latency_p50_ms: 150, reversible: true, cacheable: false },
+      async handler(a): Promise<ToolResult> {
+        const deps = getAskDeps();
+        if (!deps) return errorResult("brain not initialised");
+        return structuredResult(await askMemory(deps, { query: a.query, limit: a.limit, related: a.related }));
+      },
+    }),
     defineTool({
       name: "kernel_brain_recall",
       description:

@@ -177,13 +177,15 @@ export class BrainService {
     resolveRows?: boolean;
     hybrid?: boolean;
     cosineWeight?: number;
+    /** The query already embedded with this service's client, to skip a second call. */
+    queryVector?: number[];
   }): Promise<RecallHit[]> {
     const limit = args.limit ?? 8;
     const threshold = args.minSimilarity ?? 0.25;
     const hybrid = args.hybrid ?? true;
     const cosW = args.cosineWeight ?? 0.7;
     const LEXICAL_RESCUE = 0.5; // include strong lexical matches below the cosine floor
-    const [queryVec] = await this.embeddings.embed([args.query], { inputType: "query" });
+    const queryVec = args.queryVector ?? (await this.embeddings.embed([args.query], { inputType: "query" }))[0];
     const goalKeywords = hybrid ? extractKeywords(args.query) : new Set<string>();
 
     let sql =
