@@ -319,6 +319,7 @@ const es: Record<I18nKey, string> = {
   "nav.view.sysoverview": "Resumen",
   "nav.view.architecture": "Arq. 3D",
   "nav.view.friends": "Instancias",
+  "nav.view.graph": "Grafo",
   "nav.view.share": "Compartir",
   "share.title": "Compartir",
   "share.sub": "Mandá texto y archivos a tus amigos de Kernl — directo por tu red cuando están cerca.",

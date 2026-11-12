@@ -12,7 +12,9 @@
  */
 
 import { z } from "zod";
-import type { KernelModule, ModuleContext, ToolDefinition, ToolResult } from "../../core/types.js";
+import type { DashboardDescriptor, ExtensibleModule, ModuleContext, ToolDefinition, ToolResult } from "../../core/types.js";
+import { HttpError } from "../../core/http-server.js";
+import { GraphExplorer } from "./explorer.js";
 import { errorResult, structuredResult } from "../../core/helpers.js";
 import { defineTool } from "../../core/tool-builder.js";
 import { llm } from "../../core/llm/client.js";
@@ -42,8 +44,9 @@ function scratchOwner(args: Record<string, unknown>): string {
   return agent ? `agent:${agent}` : "client";
 }
 
-export function createGraphQueryModule(): KernelModule {
+export function createGraphQueryModule(): ExtensibleModule {
   let service: GraphQueryService | null = null;
+  let explorerSvc: GraphExplorer | null = null;
   const off = () => errorResult("The graph is off.");
   const scratch = relateClientInstalled()
     ? new ScratchGraphs(async () => {
@@ -214,6 +217,7 @@ export function createGraphQueryModule(): KernelModule {
     name: "graph-query",
     async initialize(ctx: ModuleContext) {
       service = new GraphQueryService(() => ctx.graph);
+      explorerSvc = new GraphExplorer(() => ctx.graph);
       if (scratch) {
         scratch.startSweeper();
         const done = (p: unknown) => {
@@ -226,6 +230,40 @@ export function createGraphQueryModule(): KernelModule {
     },
     getTools(): ToolDefinition[] {
       return tools;
+    },
+    // The dashboard's graph explorer (/graph). The owner sees the whole graph here.
+    getDashboardDescriptor(): DashboardDescriptor {
+      return {
+        registerRoutes: (server) => {
+          const explorer = () => {
+            if (!service || !explorerSvc) throw new HttpError(503, "The graph is off.");
+            return explorerSvc;
+          };
+          const num = (v: string | null, def: number, max: number) => Math.max(1, Math.min(max, Number(v) || def));
+          const guard = async <T>(fn: () => Promise<T>): Promise<T> => {
+            try {
+              return await fn();
+            } catch (err) {
+              if (err instanceof HttpError) throw err;
+              throw new HttpError(400, err instanceof Error ? err.message.split("\n")[0] : String(err));
+            }
+          };
+          server.route("GET", "/api/graph/schema", () => guard(async () => {
+            if (!service) throw new HttpError(503, "The graph is off.");
+            const s = await service.schema();
+            return { labels: s.labels, relationships: s.relationships };
+          }));
+          server.route("GET", "/api/graph/sample", ({ query }) =>
+            guard(() => explorer().sample(query.get("label") ?? "", num(query.get("limit"), 150, 500))));
+          server.route("GET", "/api/graph/search", ({ query }) =>
+            guard(async () => ({ nodes: await explorer().search(query.get("q") ?? "", query.get("label") ?? "", num(query.get("limit"), 30, 100)) })));
+          server.route("GET", "/api/graph/neighborhood", ({ query }) => guard(() => {
+            const id = query.get("id");
+            if (!id) throw new HttpError(400, "id required");
+            return explorer().neighborhood(id, num(query.get("depth"), 1, 2), num(query.get("limit"), 150, 500));
+          }));
+        },
+      };
     },
     async shutdown() {
       scratch?.stop();

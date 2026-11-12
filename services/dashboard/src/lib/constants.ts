@@ -102,6 +102,7 @@ export const NAV_GROUPS: NavGroup[] = [
 			// Rail de /system. Las extensiones se cuelgan acá declarando
 			// `parent: "system"` en su manifiesto (rss-registry, cloudflare).
 			{ id: 'architecture', label: 'Arch 3D', icon: '🧊', parent: 'system', order: 20 },
+			{ id: 'graph', label: 'Graph', icon: '🕸️', parent: 'system', order: 25 },
 			{ id: 'friends', label: 'Friends', icon: '🤝', parent: 'system', order: 30 },
 			// El label acá es solo fallback: `viewLabel` prefiere la clave i18n
 			// `nav.view.api-registry`, que existe en en y es. Lo dejamos igual
@@ -127,7 +128,7 @@ export const SUB_TAB_LABELS: Record<string, string> = {
 	repos: 'Repos',
 	control: 'Overview', settings: 'Settings', system: 'System', extensions: 'Extensions', notifications: 'Notifications',
 	// Rutas de sistema fuera de la tab bar, alcanzadas desde el rail de /system:
-	architecture: 'Arch 3D', friends: 'Friends',
+	architecture: 'Arch 3D', graph: 'Graph', friends: 'Friends',
 	'api-registry': 'API Registry', 'rss-registry': 'RSS Feeds'
 };
 
