@@ -17,6 +17,7 @@
 import type { GraphDriver, GraphResult } from "../../core/db-drivers/graph-driver.js";
 import { log } from "../../core/logger.js";
 import { blankLiterals, planGate, readPlan, staticGate } from "./gate.js";
+import { type ClientPolicy, clientGate, filterSchema, redactRows } from "./privacy.js";
 
 export interface GraphSchema {
   labels: Array<{ label: string; count: number; properties: string[] }>;
@@ -100,8 +101,8 @@ export class GraphQueryService {
   }
 
   /** Short text form of the schema, for a prompt. */
-  async schemaText(): Promise<string> {
-    const s = await this.schema();
+  async schemaText(policy?: ClientPolicy): Promise<string> {
+    const s = policy ? filterSchema(await this.schema(), policy) : await this.schema();
     const lines = ["Node labels (count: properties):"];
     for (const l of s.labels) lines.push(`  :${l.label} (${l.count}): ${l.properties.filter((p) => p !== "embedding").join(", ")}`);
     lines.push("Relationships:");
@@ -159,10 +160,32 @@ export class GraphQueryService {
     return { error: bad, hints: reading.warnings.map((w) => `${w.description}${w.remedy ? ` — ${w.remedy}` : ""}`) };
   }
 
-  async query(cypher: string, opts: { params?: Record<string, unknown>; limit?: number; timeoutMs?: number; raw?: boolean } = {}): Promise<QueryOutcome> {
+  /** Extra checks for an outside MCP client (privacy.ts): its access level, private labels, and indexes that cover them. */
+  async clientCheck(cypher: string, policy: ClientPolicy): Promise<string | null> {
+    const bad = clientGate(cypher, policy);
+    if (bad) return bad;
+    if (!policy.privateLabels.size) return null;
+    const s = await this.schema();
+    for (const m of blankLiterals(cypher).matchAll(/\bCALL\s+db\.index\.(?:vector|fulltext)\.queryNodes\s*\(/gi)) {
+      // From the original text: in the blanked one the literal is spaces.
+      const lit = cypher.slice(m.index! + m[0].length).trimStart().match(/^(['"])(.*?)\1/);
+      if (!lit) return "MCP clients must name the search index as a literal.";
+      const idx = s.indexes.find((i) => i.name === lit[2]);
+      if (idx && idx.labels.some((l) => policy.privateLabels.has(l))) {
+        return `The index ${idx.name} covers private labels; MCP clients cannot search it.`;
+      }
+    }
+    return null;
+  }
+
+  async query(cypher: string, opts: { params?: Record<string, unknown>; limit?: number; timeoutMs?: number; raw?: boolean; policy?: ClientPolicy } = {}): Promise<QueryOutcome> {
     if (this.busy) return { ok: false, error: "The graph is still running an earlier query that ran out of time. Try again shortly with a narrower query." };
     const limit = Math.max(1, Math.min(opts.limit ?? 50, 500));
     const statement = cypher.trim().replace(/;\s*$/, "");
+    if (opts.policy) {
+      const refused = await this.clientCheck(statement, opts.policy).catch((e: Error) => e.message);
+      if (refused) return { ok: false, error: refused };
+    }
     let checked: Awaited<ReturnType<GraphQueryService["validate"]>>;
     try {
       checked = await this.validate(statement);
@@ -188,13 +211,17 @@ export class GraphQueryService {
         return { ok: false, error: "The query ran out of time. Narrow it: start from an indexed property or a search index, add a LIMIT, use fewer hops." };
       }
       // `raw` keeps the driver's values (nodes with their element ids) for callers that copy them.
-      const rows = r.records.map((rec) => (opts.raw ? rec.toObject() : plain(rec.toObject())) as Record<string, unknown>);
+      let rows = r.records.map((rec) => (opts.raw ? rec.toObject() : plain(rec.toObject())) as Record<string, unknown>);
+      let redacted = 0;
+      if (opts.policy) ({ rows, redacted } = redactRows(rows, opts.policy));
       return {
         ok: true,
         rows: rows.slice(0, limit),
         truncated: rows.length > limit || undefined,
         ms: Date.now() - t0,
-        hints: checked.hints.length ? checked.hints : rows.length === 0 ? ["No rows. Check the property names and values against the schema."] : undefined,
+        hints: redacted
+          ? [...checked.hints, `${redacted} private node(s) left out.`]
+          : checked.hints.length ? checked.hints : rows.length === 0 ? ["No rows. Check the property names and values against the schema."] : undefined,
       };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message.split("\n")[0] : String(err), hints: checked.hints };
@@ -207,7 +234,7 @@ export class GraphQueryService {
   async ask(
     question: string,
     complete: (system: string, user: string) => Promise<string>,
-    opts: { limit?: number; attempts?: number } = {},
+    opts: { limit?: number; attempts?: number; policy?: ClientPolicy } = {},
   ): Promise<QueryOutcome & { question: string; cypher?: string; attempts: number }> {
     const system = [
       "You translate questions about a personal knowledge graph into ONE read-only Cypher query.",
@@ -216,7 +243,7 @@ export class GraphQueryService {
       "variables; bound variable-length paths (e.g. *1..3); return readable properties, not whole nodes; add a LIMIT.",
       'Answer with JSON only: {"cypher": "..."}',
       "",
-      await this.schemaText(),
+      await this.schemaText(opts.policy),
     ].join("\n");
     let user = `Question: ${question}`;
     const max = Math.max(1, Math.min(opts.attempts ?? 3, 5));
@@ -228,7 +255,7 @@ export class GraphQueryService {
       if (!cypher) {
         last = { ok: false, error: "The model did not return a query." };
       } else {
-        last = await this.query(cypher, { limit: opts.limit });
+        last = await this.query(cypher, { limit: opts.limit, policy: opts.policy });
         if (last.ok) return { ...last, question, cypher, attempts: attempt };
       }
       user = `Question: ${question}\n\nYour previous query:\n${cypher ?? "(none)"}\n\nIt failed: ${last.error}${

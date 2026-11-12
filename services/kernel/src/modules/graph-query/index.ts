@@ -14,13 +14,25 @@
 import { z } from "zod";
 import type { KernelModule, ModuleContext, ToolDefinition, ToolResult } from "../../core/types.js";
 import { errorResult, structuredResult } from "../../core/helpers.js";
-import { defineTool, defineToolNoInput } from "../../core/tool-builder.js";
+import { defineTool } from "../../core/tool-builder.js";
 import { llm } from "../../core/llm/client.js";
 import { getRequestContext } from "../../core/request-context.js";
 import { log } from "../../core/logger.js";
 import { RelateGraphDriver, relateClientInstalled } from "../../core/db-drivers/builtins/relate-graph-driver.js";
 import { GraphQueryService, plain } from "./service.js";
 import { MAX_NODES, ScratchGraphs, collectSlice } from "./scratch.js";
+import { type ClientPolicy, clientPolicy, filterSchema } from "./privacy.js";
+
+/**
+ * The privacy policy when the caller is an outside MCP client, or undefined
+ * for Kernl's own agents (a run or an agent in the request context, or the
+ * executor's injected id — never settable by a client).
+ */
+function policyFor(args: Record<string, unknown>): ClientPolicy | undefined {
+  return scratchOwner(args) === "client" ? clientPolicy() : undefined;
+}
+const notForClients = (p: ClientPolicy) =>
+  errorResult(p.access === "off" ? "The graph is not shared with MCP clients (GRAPH_MCP_ACCESS=off)." : "This MCP client may only read the graph's schema (GRAPH_MCP_ACCESS=schema).");
 
 /** Whose scratch graph: the run, else the agent, else the MCP client. */
 function scratchOwner(args: Record<string, unknown>): string {
@@ -45,18 +57,21 @@ export function createGraphQueryModule(): KernelModule {
   const fail = (err: unknown) => errorResult(err instanceof Error ? err.message.split("\n")[0] : String(err));
 
   const tools: ToolDefinition[] = [
-    defineToolNoInput({
+    defineTool({
       name: "kernel_graph_schema",
+      schema: z.object({}),
       description:
         "What Kernl's graph holds: node labels with counts and properties, which relationships connect " +
         "which labels, and the vector and full-text search indexes. Read it before kernel_graph_query.",
       outputSchema: z.unknown(),
       tags: ["graph", "read"],
       cost: { tokens_p50: 0, usd_p50: 0, latency_p50_ms: 200, reversible: true, cacheable: true },
-      async handler(): Promise<ToolResult> {
+      async handler(a): Promise<ToolResult> {
         if (!service) return off();
+        const policy = policyFor(a);
+        if (policy?.access === "off") return notForClients(policy);
         try {
-          const s = await service.schema();
+          const s = policy ? filterSchema(await service.schema(), policy) : await service.schema();
           return structuredResult({ labels: s.labels, relationships: s.relationships, indexes: s.indexes });
         } catch (err) {
           return errorResult(err instanceof Error ? err.message : String(err));
@@ -80,7 +95,9 @@ export function createGraphQueryModule(): KernelModule {
       cost: { tokens_p50: 0, usd_p50: 0, latency_p50_ms: 100, reversible: true, cacheable: false },
       async handler(a): Promise<ToolResult> {
         if (!service) return off();
-        const out = await service.query(a.cypher, { params: a.params, limit: a.limit });
+        const policy = policyFor(a);
+        if (policy && policy.access !== "read") return notForClients(policy);
+        const out = await service.query(a.cypher, { params: a.params, limit: a.limit, policy });
         return out.ok ? structuredResult(out) : errorResult(`${out.error}${out.hints?.length ? `\nHints: ${out.hints.join(" ")}` : ""}`);
       },
     }),
@@ -99,12 +116,14 @@ export function createGraphQueryModule(): KernelModule {
       cost: { tokens_p50: 1500, usd_p50: 0.002, latency_p50_ms: 3000, reversible: true, cacheable: false },
       async handler(a): Promise<ToolResult> {
         if (!service) return off();
+        const policy = policyFor(a);
+        if (policy && policy.access !== "read") return notForClients(policy);
         try {
           const out = await service.ask(
             a.question,
             async (system, user) =>
               (await llm().chat({ system, user, maxTokens: 600, temperature: 0, json: true, caller: "graph-query:ask" })).text,
-            { limit: a.limit },
+            { limit: a.limit, policy },
           );
           return out.ok ? structuredResult(out) : errorResult(`Could not answer from the graph after ${out.attempts} tries: ${out.error}${out.cypher ? `\nLast query: ${out.cypher}` : ""}`);
         } catch (err) {
@@ -129,6 +148,8 @@ export function createGraphQueryModule(): KernelModule {
       async handler(a): Promise<ToolResult> {
         if (!scratch) return noScratch();
         const owner = scratchOwner(a);
+        const policy = policyFor(a);
+        if (policy?.access === "off") return notForClients(policy);
         try {
           const r = await scratch.run(owner, a.cypher, a.params ?? {});
           const rows = r.records.slice(0, a.limit).map((rec) => plain(rec.toObject()) as Record<string, unknown>);
@@ -156,7 +177,9 @@ export function createGraphQueryModule(): KernelModule {
       cost: { tokens_p50: 0, usd_p50: 0, latency_p50_ms: 200, reversible: true, cacheable: false },
       async handler(a): Promise<ToolResult> {
         if (!service) return off();
-        const out = await service.query(a.cypher, { params: a.params, limit: a.rows, raw: true, timeoutMs: 15_000 });
+        const policy = policyFor(a);
+        if (policy && policy.access !== "read") return notForClients(policy);
+        const out = await service.query(a.cypher, { params: a.params, limit: a.rows, raw: true, timeoutMs: 15_000, policy });
         if (!out.ok) return errorResult(`${out.error}${out.hints?.length ? `\nHints: ${out.hints.join(" ")}` : ""}`);
         const slice = collectSlice(out.rows ?? []);
         if (!slice.nodes.length) return errorResult("The query returned no nodes. Return nodes, relationships or paths (RETURN n, r, p), not their properties.");
