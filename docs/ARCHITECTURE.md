@@ -135,7 +135,7 @@ in `/extensions`:
 
 | Driver | What it is | Capabilities |
 |---|---|---|
-| `relate` (default) | [Relate](https://relatedb.ai), an embedded Cypher 25 engine running inside the kernel on `data/graph.rl`. No server, no port, no password. | Cypher, vector + full-text indexes. No GDS. |
+| `relate` (default) | [Relate](https://relatedb.ai), an embedded Cypher 25 engine running inside the kernel on `data/graph`. No server, no port, no password. | Cypher, vector + full-text indexes. No GDS. |
 | `neo4j` (optional) | A Neo4j 5.x server — `docker-compose.neo4j.yml` adds one. | Cypher, vectors, Graph Data Science. |
 | `noop` | Graph off; graph writes are skipped. | None. |
 
@@ -153,7 +153,13 @@ Rules for graph code:
 - Large vector collections do not belong in the graph: Relate keeps the whole
   graph in memory. Cinema's 165k title vectors live in SQLite and are searched
   in-process (`cinema/_module/vector-store.ts`).
-- SQLite stays the source of truth. Graph projections rebuild from it.
+- SQLite stays the source of truth. Graph projections rebuild from it: a module
+  that writes graph nodes offers `getGraphBackfill()`, run once per store
+  (`core/graph-backfill.ts`), and every Cypher statement is planned against
+  Relate in `tests/cypher-corpus.test.ts`.
+- The graph lives in memory; `RELATE_LOGICAL_GRAPH_SIZE_LIMIT` (default 2gib,
+  or "Memory limit" in /extensions) refuses growth past it instead of letting
+  the kernel run out of memory.
 
 ### How agents learn
 

@@ -4,7 +4,7 @@
 <stack>
 - **Runtime**: Node.js >=20, ESM (`"type": "module"`)
 - **Language**: TypeScript (strict), target ES2022, moduleResolution Node16
-- **Databases**: SQLite (primary), graph built in via Relate (embedded Cypher, `data/graph.rl`); Neo4j 5.x + GDS optional (`docker-compose.neo4j.yml`)
+- **Databases**: SQLite (primary), graph built in via Relate (embedded Cypher, a `data/graph` directory store); Neo4j 5.x + GDS optional (`docker-compose.neo4j.yml`)
 - **Protocol**: MCP (Model Context Protocol) via `@modelcontextprotocol/sdk` — dual transport: stdio + Streamable HTTP
 - **Validation**: Zod schemas (converted to JSON Schema for MCP via `zodToJsonSchema()`)
 - **Testing**: vitest (in-memory SQLite, Neo4j unavailable by default)
@@ -98,12 +98,16 @@ config is stored, the Neo4j driver falls back to `NEO4J_URI`/`NEO4J_USER`/
 
 **Relate, the default graph (driver `relate`):**
 `core/db-drivers/builtins/relate-graph-driver.ts` runs the same Cypher in-process
-against a store file (`data/graph.rl` by default, `RELATE_DATABASE` to override).
+against a directory store (`data/graph` by default, `RELATE_DATABASE` to override;
+an older default `graph.rl` file is moved there once, in a child process). The
+graph lives in memory, capped by `RELATE_LOGICAL_GRAPH_SIZE_LIMIT` (2gib default).
 It has no GDS, so `gds`
 and `mlPipelines` stay false — gate GDS work on those, never on `cypher`. The
-client `@relate/relate` is not a kernel dependency: the driver loads it at start
-from `RELATE_CLIENT_MODULE` (the image installs it in `/opt/relate`) and stays
-not-ready with an error if it is missing. Write Cypher that runs on both: no
+client `@relate/relate` is a kernel dependency (pinned in package.json and both
+lockfiles); `RELATE_CLIENT_MODULE` points at another copy. Every Cypher statement
+is planned against it in tests/cypher-corpus.test.ts — keep that green. Modules
+that project rows into the graph offer `getGraphBackfill()` so existing data
+reaches a new store (core/graph-backfill.ts). Write Cypher that runs on both: no
 `apoc.*`, no options map on `db.index.fulltext.queryNodes` (use `LIMIT`), and
 read counts with `Number(v)` or `.toNumber()` — the driver returns
 neo4j-style integers. `scripts/relate-migrate.sh` copies a Neo4j graph into a

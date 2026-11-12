@@ -246,7 +246,7 @@ deployment into a directory nothing reads.
 
 ### Neo4j Backup (optional server)
 
-The built-in graph lives in `data/graph.rl`, next to the SQLite database, and is
+The built-in graph lives in `data/graph`, next to the SQLite database, and is
 backed up with it. The steps below apply only to the optional Neo4j server.
 
 `backup.sh` already dumps Neo4j when the Docker stack is up (skip it with

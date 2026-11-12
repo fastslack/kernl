@@ -18,6 +18,7 @@ export function createNotesModule() {
       return new NotesService(ctx.sqlite, () => ctx.graph);
     },
     tools: notesTools,
+    graphBackfill: (s) => ({ name: "notes", version: 1, order: 20, run: (g) => s.graphBackfill(g) }),
     rpc: notesRpcActions,
     dashboard: dashboardChannel("notes", (db) => queryNotes(db)),
   });

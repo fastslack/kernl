@@ -4,7 +4,7 @@ import { CinemaVectorStore } from "../assets/extensions/leisure/cinema/_module/v
 import { migrateGraphVectors, bulkEmbeddingAllowed } from "../assets/extensions/leisure/cinema/_module/embeddings.js";
 import { runMigrations } from "../src/core/db/migrations.js";
 import { cinemaMigrations } from "../assets/extensions/leisure/cinema/_module/migrations/001_cinema_titles.js";
-import { RelateGraphDriver } from "../src/core/db-drivers/builtins/relate-graph-driver.js";
+import { RelateGraphDriver, relateClientInstalled } from "../src/core/db-drivers/builtins/relate-graph-driver.js";
 
 const DIM = 384;
 const MODEL = "Xenova/all-MiniLM-L6-v2";
@@ -100,7 +100,7 @@ describe("bulk embedding policy", () => {
   });
 });
 
-describe.skipIf(!process.env.RELATE_CLIENT_MODULE)("moving vectors out of the graph (Relate)", () => {
+describe.skipIf(!relateClientInstalled())("moving vectors out of the graph (Relate)", () => {
   it("copies node vectors into SQLite, strips the graph, and requeues lost ones", async () => {
     const db = new Database(":memory:");
     runMigrations(db as never, "cinema", cinemaMigrations);

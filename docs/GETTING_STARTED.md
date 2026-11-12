@@ -99,7 +99,7 @@ are distributed separately with a [Kernl Pro license](https://lifekernl.com/pric
 
 ### Graph
 The graph is built in: the kernel runs Relate, an embedded Cypher engine, on
-`data/graph.rl`. Memory, semantic recall and the agents' shared experience work
+`data/graph`. Memory, semantic recall and the agents' shared experience work
 with no setup.
 
 ### Neo4j (optional, Graph Data Science)

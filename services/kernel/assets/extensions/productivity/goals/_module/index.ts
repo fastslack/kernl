@@ -19,6 +19,7 @@ export function createGoalsModule() {
       return new GoalsService(ctx.sqlite, () => ctx.graph);
     },
     tools: (s) => goalsTools(s),
+    graphBackfill: (s) => ({ name: "goals", version: 1, order: 20, run: (g) => s.graphBackfill(g) }),
     rpc: (s) => goalsRpcActions(s),
     // Not dashboardChannel: goals also refreshes the calendar channel.
     dashboard: {

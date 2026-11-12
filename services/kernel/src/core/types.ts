@@ -343,6 +343,14 @@ export interface KernelModule {
    * in and how many items at most. See `GraphBudget`.
    */
   getGraphBudgets?(): GraphBudget[];
+  /**
+   * Optional — rebuild this module's slice of the graph from its own tables.
+   * Modules write graph nodes as rows change; anything that existed before
+   * the graph was on (an install that ran on the no-op driver, a new store
+   * after switching drivers) never reached it. The kernel runs each backfill
+   * once per store and records it there (core/graph-backfill.ts).
+   */
+  getGraphBackfill?(): GraphBackfill | undefined;
   shutdown(): Promise<void>;
 }
 
@@ -626,4 +634,15 @@ export interface DashboardDescriptor {
 /** Module that can optionally provide dashboard integration */
 export interface ExtensibleModule extends KernelModule {
   getDashboardDescriptor?(): DashboardDescriptor | null;
+}
+
+/** A module's one-off rebuild of its graph projection from SQLite. */
+export interface GraphBackfill {
+  /** Stable name, recorded in the graph once the backfill has run. */
+  name: string;
+  /** Bump to run it again on every store (e.g. when the projection gains a property). */
+  version: number;
+  /** Lower runs first — modules whose nodes others link to (tasks, contacts) go early. Default 50. */
+  order?: number;
+  run(graph: import("./db-drivers/graph-driver.js").GraphDriver): Promise<{ nodes: number; relationships: number }>;
 }

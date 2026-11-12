@@ -8,7 +8,7 @@ import {
   luceneTerms,
   scoreSharedLearning,
 } from "../src/modules/agents/services/experience-graph.js";
-import { RelateGraphDriver } from "../src/core/db-drivers/builtins/relate-graph-driver.js";
+import { RelateGraphDriver, relateClientInstalled } from "../src/core/db-drivers/builtins/relate-graph-driver.js";
 import type { GraphDriver } from "../src/core/db-drivers/graph-driver.js";
 
 describe("shared-learning scoring", () => {
@@ -57,7 +57,7 @@ function near(v: number[], eps = 0.05): number[] {
   return w.map((x) => x / n);
 }
 
-describe.skipIf(!process.env.RELATE_CLIENT_MODULE)("AgentExperienceGraph on Relate", () => {
+describe.skipIf(!relateClientInstalled())("AgentExperienceGraph on Relate", () => {
   let db: Database;
   let graph: GraphDriver;
   let xp: AgentExperienceGraph;

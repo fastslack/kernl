@@ -79,32 +79,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-cer
     && rm /tmp/glab.deb \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Relate — the embedded graph engine behind the `relate` graph driver. Not a
-# kernel dependency (the driver loads it at start, see relate-graph-driver.ts),
-# so it lives apart in /opt/relate. Installed from the signed GitHub release
-# until @relate/relate is published on npm; each tarball is checked against the
-# SHA-256 GitHub records for that release asset.
-ARG RELATE_VERSION=0.1.3
-ARG RELATE_SHA256_CLIENT=c6b140dab1b5440ee309d535d83725c00dd914f031738e96d5c40a2f71195dca
-ARG RELATE_SHA256_LINUX_X64=05562d4bb51036599acfec3a84b7d183d587fb3e0bedc3c59df5dfeec2b7cc6c
-ARG RELATE_SHA256_LINUX_ARM64=b77a231466287f63df956b333da8319f3e7853571f672521543ba431ff2f1c4f
-RUN set -eu; \
-    case "$(dpkg --print-architecture)" in \
-      amd64) plat=linux-x64; sha="$RELATE_SHA256_LINUX_X64" ;; \
-      arm64) plat=linux-arm64; sha="$RELATE_SHA256_LINUX_ARM64" ;; \
-      *) echo "Relate: no build for this architecture — graph driver 'relate' unavailable"; exit 0 ;; \
-    esac; \
-    base="https://github.com/relatedb/relate/releases/download/v${RELATE_VERSION}"; \
-    mkdir -p /opt/relate/pkgs; cd /opt/relate; \
-    curl -fsSL "$base/relate-relate-${RELATE_VERSION}.tgz" -o pkgs/client.tgz; \
-    curl -fsSL "$base/relate-relate-${plat}-${RELATE_VERSION}.tgz" -o pkgs/native.tgz; \
-    echo "$RELATE_SHA256_CLIENT  pkgs/client.tgz" | sha256sum -c -; \
-    echo "$sha  pkgs/native.tgz" | sha256sum -c -; \
-    printf '{"private":true,"dependencies":{"@relate/relate":"file:./pkgs/client.tgz","@relate/relate-%s":"file:./pkgs/native.tgz","koffi":"2.16.3"}}\n' "$plat" > package.json; \
-    bun install --production; \
-    rm -rf pkgs /root/.bun/install/cache; \
-    test -f node_modules/@relate/relate-${plat}/lib/librelate_ffi.so
-ENV RELATE_CLIENT_MODULE=/opt/relate/node_modules/@relate/relate/index.js
+# Relate (the built-in graph) arrives with the kernel's node_modules: it is a
+# regular dependency (@relate/relate) with a native package per platform.
 
 # Copy built kernel bundle (--chown avoids slow recursive chown)
 COPY --chown=bun:bun --from=kernel-build /build/dist/ ./dist/

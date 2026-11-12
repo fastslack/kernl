@@ -25,7 +25,7 @@ Kernl is a **local-first, self-hosted** personal life management server. Your da
 ## Where Data Is Stored
 
 - **SQLite database**: `./data/kernel.db` (configurable via `SQLITE_PATH`)
-- **Graph**: a local file (`data/graph.rl`, Relate) inside the kernel — or, if you add it, a local Neo4j container. Never cloud
+- **Graph**: a local file (`data/graph`, Relate) inside the kernel — or, if you add it, a local Neo4j container. Never cloud
 - **Attachments**: `./data/attachments/` directory
 - **Embeddings**: Computed locally using `Xenova/all-MiniLM-L6-v2` ONNX model (no cloud inference)
 

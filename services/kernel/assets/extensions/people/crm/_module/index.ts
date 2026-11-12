@@ -46,6 +46,7 @@ export function createCrmModule(): CrmModule {
 
     tools: (s) => crmTools(s.service),
     rpc: (s) => contactsRpcActions(s.service, s.events),
+    graphBackfill: (s) => ({ name: "crm", version: 1, order: 10, run: (g) => s.service.graphBackfill(g) }),
 
     dashboard: (s) => ({
       channels: [{ name: "crm", query: (db) => queryCrm(db) }],

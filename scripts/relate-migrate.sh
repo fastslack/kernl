@@ -3,7 +3,7 @@
 #
 #   NEO4J_PASSWORD=… scripts/relate-migrate.sh [DEST]
 #
-# DEST defaults to data/graph.rl, the path the relate driver opens when the
+# DEST defaults to data/graph, the directory store the relate driver opens when the
 # kernel's SQLite database lives in data/. The source is only read; DEST must
 # not exist yet (relate pull writes into an empty store only).
 #
@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-DEST="${1:-data/graph.rl}"
+DEST="${1:-data/graph}"
 RELATE_BIN="${RELATE_BIN:-relate}"
 SRC_URI="${NEO4J_HTTP_URI:-http://localhost:17474}"
 SRC_USER="${NEO4J_USER:-neo4j}"

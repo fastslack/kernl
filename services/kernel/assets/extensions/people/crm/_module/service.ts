@@ -1,4 +1,4 @@
-import { type SqliteDb, type GraphDriver, type PatchColumn, newId, isoNow, buildPatch } from "@kernl/extension-sdk";
+import { type SqliteDb, type GraphDriver, unwindInBatches, type PatchColumn, newId, isoNow, buildPatch } from "@kernl/extension-sdk";
 import type { Contact, Interaction, LeadStatus } from "./types.js";
 
 /** The contacts columns updateContact may write; anything else in the patch is ignored. */
@@ -41,6 +41,31 @@ export class CrmService {
     private db: SqliteDb,
     private getGraph: () => GraphDriver | null,
   ) {}
+
+  /**
+   * Graph backfill: the same Person nodes create()/update() and
+   * logInteraction() write. KNOWS edges live only in the graph, so there is
+   * nothing to rebuild them from.
+   */
+  async graphBackfill(graph: GraphDriver): Promise<{ nodes: number; relationships: number }> {
+    const contacts = this.db
+      .prepare(
+        `SELECT id, name, email, company, relationship,
+                CASE WHEN last_interaction <> '' THEN last_interaction END AS last_interaction
+           FROM contacts`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    const nodes = await unwindInBatches(
+      graph,
+      `UNWIND $rows AS row
+       MERGE (p:Person {id: row.id})
+       SET p.name = row.name, p.email = row.email, p.company = row.company,
+           p.relationship = row.relationship,
+           p.lastInteraction = coalesce(row.last_interaction, p.lastInteraction)`,
+      contacts,
+    );
+    return { nodes, relationships: 0 };
+  }
 
   /** Find a contact by normalized phone or by email — used by addContact for
    *  idempotent dedup. Returns the first match (most recent). */

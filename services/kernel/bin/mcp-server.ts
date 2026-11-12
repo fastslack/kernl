@@ -63,6 +63,16 @@ process.on("SIGINT", () => {
   // Let the bootstrap shutdown handlers take over
 });
 
+// ── One-off internal tasks ────────────────────────────────────
+//
+// The kernel can re-run itself as a short-lived child for work that must not
+// share its process — today, moving a single-file graph store into a
+// directory store (core/db-drivers/builtins/relate-graph-driver.ts).
+if (process.env.KERNL_INTERNAL_TASK === "relate-store-migration") {
+  const { runStoreMigrationTask } = await import("../src/core/db-drivers/builtins/relate-graph-driver.js");
+  await runStoreMigrationTask();
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────
 
 bootstrap().catch((err) => {

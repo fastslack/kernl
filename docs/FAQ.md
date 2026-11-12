@@ -16,7 +16,7 @@ token and an encryption key on first boot.
 
 **Do I need Neo4j?**
 No. The graph is built in: the kernel runs Relate, an embedded Cypher engine, on
-`data/graph.rl` — memory, semantic recall and the agents' shared learning work
+`data/graph` — memory, semantic recall and the agents' shared learning work
 with no server. Neo4j is optional, for Graph Data Science analytics (community
 detection, PageRank): `docker compose -f docker-compose.yml -f docker-compose.neo4j.yml up -d`,
 then activate "Neo4j" in `/extensions`.

@@ -71,6 +71,7 @@ export function createRemindersModule(): RemindersModule {
 
     tools: (s, ctx) => reminderTools(s.service, ctx.notifier),
     rpc: (s) => remindersRpcActions(s.service, s.events),
+    graphBackfill: (s) => ({ name: "reminders", version: 1, order: 20, run: (g) => s.service.graphBackfill(g) }),
 
     dashboard: (s) => ({
       channels: [{ name: "reminders", query: (db) => queryReminders(db) }],

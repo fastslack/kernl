@@ -4,6 +4,7 @@ import {
   RelateInteger,
   adaptValue,
   defaultRelatePath,
+  relateClientInstalled,
   type RelateModule,
   type RelateResult,
 } from "../src/core/db-drivers/builtins/relate-graph-driver.js";
@@ -32,6 +33,10 @@ function fakeModule(
         return {
           connect: () => ({
             async queryAsync(cypher: string, params?: Record<string, unknown>) {
+              calls.push({ cypher, params });
+              return handler(cypher, params);
+            },
+            query(cypher: string, params?: Record<string, unknown>) {
               calls.push({ cypher, params });
               return handler(cypher, params);
             },
@@ -228,10 +233,10 @@ describe("RelateGraphDriver lifecycle", () => {
     }
   });
 
-  it("defaults the store next to the SQLite database", () => {
+  it("defaults to a directory store next to the SQLite database", () => {
     delete process.env.RELATE_DATABASE;
     process.env.SQLITE_PATH = "/srv/kernl/data/kernel.db";
-    expect(defaultRelatePath()).toBe("/srv/kernl/data/graph.rl");
+    expect(defaultRelatePath()).toBe("/srv/kernl/data/graph");
     process.env.RELATE_DATABASE = "/elsewhere/g.rl";
     expect(defaultRelatePath()).toBe("/elsewhere/g.rl");
   });
@@ -239,9 +244,7 @@ describe("RelateGraphDriver lifecycle", () => {
 
 // ── Real engine (opt-in) ──────────────────────────────────────────────
 
-const clientModule = process.env.RELATE_CLIENT_MODULE;
-
-describe.skipIf(!clientModule)("RelateGraphDriver against the real engine", () => {
+describe.skipIf(!relateClientInstalled())("RelateGraphDriver against the real engine", () => {
   async function startMemory(): Promise<RelateGraphDriver> {
     const driver = new RelateGraphDriver();
     driver.configure({ path: ":memory:" });

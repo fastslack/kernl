@@ -1,4 +1,4 @@
-import { type SqliteDb, type GraphDriver, newId, isoNow, addDays, localDateTime, toInstant } from "@kernl/extension-sdk";
+import { type SqliteDb, type GraphDriver, unwindInBatches, newId, isoNow, addDays, localDateTime, toInstant } from "@kernl/extension-sdk";
 import type { Reminder, ReminderStatus, RepeatInterval } from "./types.js";
 
 /**
@@ -36,6 +36,28 @@ export class ReminderService {
     private db: SqliteDb,
     private getGraph: () => GraphDriver | null,
   ) {}
+
+  /** Graph backfill: Reminder nodes and their REMINDS_ABOUT edge to a task. */
+  async graphBackfill(graph: GraphDriver): Promise<{ nodes: number; relationships: number }> {
+    const reminders = this.db
+      .prepare("SELECT id, title, status, trigger_at, task_id FROM reminders")
+      .all() as Array<Record<string, unknown>>;
+    const nodes = await unwindInBatches(
+      graph,
+      `UNWIND $rows AS row
+       MERGE (r:Reminder {id: row.id})
+       SET r.title = row.title, r.status = row.status, r.trigger_at = row.trigger_at`,
+      reminders,
+    );
+    const relationships = await unwindInBatches(
+      graph,
+      `UNWIND $rows AS row
+       MATCH (r:Reminder {id: row.id}), (t:Task {id: row.task_id})
+       MERGE (r)-[:REMINDS_ABOUT]->(t)`,
+      reminders.filter((r) => r.task_id),
+    );
+    return { nodes, relationships };
+  }
 
   create(input: {
     title: string;

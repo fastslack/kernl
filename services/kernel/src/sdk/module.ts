@@ -13,6 +13,7 @@
 import type {
   AgentDriver,
   DashboardChannel,
+  GraphBackfill,
   DashboardDescriptor,
   ExtensibleModule,
   ModuleContext,
@@ -43,6 +44,8 @@ export interface ModuleSpec<S> {
   agentHandlers?: (state: S) => Record<string, () => Promise<unknown>>;
   agentDrivers?: (state: S) => AgentDriver[];
   retentionPolicies?: (state: S) => RetentionPolicy[];
+  /** Rebuild this module's graph projection from its tables (see KernelModule.getGraphBackfill). */
+  graphBackfill?: (state: S) => GraphBackfill | undefined;
   shutdown?: (state: S) => void | Promise<void>;
 }
 
@@ -86,6 +89,7 @@ export function defineModule<S = void>(spec: ModuleSpec<S>): ExtensibleModule {
   if (spec.agentHandlers) mod.getAgentHandlers = () => withState(spec.agentHandlers, {});
   if (spec.agentDrivers) mod.getAgentDrivers = () => withState(spec.agentDrivers, []);
   if (spec.retentionPolicies) mod.getRetentionPolicies = () => withState(spec.retentionPolicies, []);
+  if (spec.graphBackfill) mod.getGraphBackfill = () => withState(spec.graphBackfill, undefined);
   return mod;
 }
 
