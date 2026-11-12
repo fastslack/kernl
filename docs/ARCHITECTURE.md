@@ -177,6 +177,36 @@ Rules for graph code:
    never weakens an `avoid` learning.
 5. The graph syncs incrementally: `(Agent)-[:RAN]->(AgentRun)-[:USED]->(AgentTool)`,
    `(Agent)-[:LEARNED]->(AgentLearning)-[:DERIVED_FROM]->(AgentRun)`.
+   `USED.errors` counts failed tool results.
+6. The prompt also names the tools the agent is about to use that failed in a
+   good share of recent runs across the fleet, with the last error as external
+   data (`toolFailureWarnings` in `executor/system-prompt.ts`).
+
+### Memory, facts, people and provenance
+
+- **`kernel_brain_ask`** (`modules/brain/ask.ts`) — one question over every
+  memory: brain items, chat messages and memories, agent learnings, current
+  facts and graph entities (full-text index `kernl_entity_text`), each searched
+  by meaning and by words, fused with Reciprocal Rank Fusion and expanded one
+  hop in the graph. Each leg queries vectors with the model that wrote them.
+- **Facts** (`modules/brain/facts.ts`, table `facts`) — subject, predicate,
+  value with two timelines: when it was true (`valid_from`/`valid_to`) and when
+  Kernl believed it (`recorded_at`/`superseded_at`). A new value ends the old
+  one (change) or replaces it (correction); nothing is deleted. Projected as
+  `(:Fact)-[:ABOUT]->(subject)` with `REPLACES` links.
+- **People** (`crm/_module/people.ts`) — `contact_identities` holds every email,
+  phone and handle of a contact; `kernel_crm_duplicates`, `kernel_crm_merge`
+  (repoints every `contact_id` column, facts and graph relationships, keeps a
+  snapshot in `contact_merges`) and `kernel_crm_person_360`.
+- **Provenance** (`modules/provenance/`, table `tool_provenance`) — every tool
+  call that writes, from MCP or a native agent run, with who made it and the
+  ids it touched; `kernel_audit_who_changed`. A run is linked to what it
+  touched: `(:AgentRun)-[:TOUCHED]->(n)`.
+- **Graph queries for agents** (`modules/graph-query/`) — `kernel_graph_schema`,
+  `kernel_graph_query` (read-only, checked by text, by the planner's EXPLAIN and
+  against the schema) and `kernel_graph_ask` (a question → Cypher through the
+  LLM driver, corrected from those errors). The embedded engine cannot cancel a
+  query: one that runs out of time blocks new ones until it ends.
 
 ## Module Pattern
 
