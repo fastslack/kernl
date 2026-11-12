@@ -65,6 +65,29 @@ describe("duplicates", () => {
     people.markDistinct(b.id, a.id);
     expect(people.duplicates().map((p) => key(p.a.id, p.b.id))).toEqual([key(c.id, d.id)]);
   });
+
+  it("tells a person who changed jobs from a namesake, through the facts", () => {
+    const { db, crm, people } = setup();
+    runMigrations(db as never, "brain", brainMigrations);
+    const facts = new FactStore(db as never, () => null);
+    const old = crm.addContact({ name: "Lucía Ferreyra", email: "lucia@andina.example", company: "Andina", dedup: false });
+    const moved = crm.addContact({ name: "Lucia Ferreyra", email: "lucia@delta.example", company: "Delta Norte", dedup: false });
+    const namesake = crm.addContact({ name: "Lucía Ferreyra", email: "lf@omega.example", company: "Omega", dedup: false });
+    const key = (x: string, y: string) => [x, y].sort().join("|");
+
+    // Before Kernl knows she moved: a same-name hint only, below the default 0.5.
+    expect(people.duplicates().every((p) => p.score === 0.4)).toBe(true);
+
+    facts.assert({ subject: `Person:${old.id}`, predicate: "works_at", object: "Andina", validFrom: "2024-01-01" });
+    facts.assert({ subject: `Person:${old.id}`, predicate: "works_at", object: "Delta Norte", validFrom: "2026-11-01" });
+    const found = new Map(people.duplicates().map((p) => [key(p.a.id, p.b.id), p]));
+    expect(found.get(key(old.id, moved.id))).toMatchObject({
+      score: 0.85,
+      reasons: ["same name; Delta Norte is where Lucía Ferreyra works, per the facts"],
+    });
+    expect(found.get(key(old.id, namesake.id))!.score).toBe(0.4);
+    expect(found.get(key(moved.id, namesake.id))!.score).toBe(0.4);
+  });
 });
 
 describe("merge", () => {

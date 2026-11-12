@@ -222,13 +222,29 @@ export class PeopleService {
       if (n.split(" ").length < 2) continue;
       byName.set(n, [...(byName.get(n) ?? []), c.id]);
     }
+    // Where each person has worked, from the facts Kernl keeps (also past
+    // employers): a new contact whose company is one the other record already
+    // moved to is the same person who changed jobs, not a namesake.
+    const employers = new Map<string, Set<string>>();
+    if (tableExists(this.db, "facts")) {
+      const rows = this.db
+        .prepare("SELECT subject, object FROM facts WHERE predicate = 'works_at' AND superseded_at IS NULL AND subject LIKE 'Person:%'")
+        .all() as Array<{ subject: string; object: string }>;
+      for (const r of rows) {
+        const id = r.subject.slice("Person:".length);
+        employers.set(id, (employers.get(id) ?? new Set()).add(normName(r.object)));
+      }
+    }
     for (const ids of byName.values()) {
       for (let i = 0; i < ids.length; i++) {
         for (let j = i + 1; j < ids.length; j++) {
           const ca = normName(info.get(ids[i])!.company);
           const cb = normName(info.get(ids[j])!.company);
           if (ca && cb && ca === cb) add(ids[i], ids[j], 0.8, "same name and company");
-          else if (ca && cb) add(ids[i], ids[j], 0.4, "same name, different company");
+          else if (ca && cb && (employers.get(ids[i])?.has(cb) || employers.get(ids[j])?.has(ca))) {
+            const [who, other] = employers.get(ids[i])?.has(cb) ? [ids[i], ids[j]] : [ids[j], ids[i]];
+            add(ids[i], ids[j], 0.85, `same name; ${info.get(other)!.company} is where ${info.get(who)!.name} works, per the facts`);
+          } else if (ca && cb) add(ids[i], ids[j], 0.4, "same name, different company");
           else add(ids[i], ids[j], 0.6, "same name");
         }
       }
