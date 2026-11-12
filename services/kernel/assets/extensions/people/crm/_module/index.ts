@@ -2,6 +2,8 @@ import { type ExtensibleModule, defineModule } from "@kernl/extension-sdk";
 import { crmMigrations } from "./migrations/001_crm.js";
 import { CrmService } from "./service.js";
 import { crmTools } from "./tools.js";
+import { PeopleService } from "./people.js";
+import { peopleTools } from "./people-tools.js";
 import { registerCrmDashboardRoutes } from "./dashboard-routes.js";
 import { registerContactsRoutes } from "./routes.js";
 import { contactsRpcActions } from "./rpc-actions.js";
@@ -30,6 +32,9 @@ export function createCrmModule(): CrmModule {
 
       const service = new CrmService(ctx.sqlite, () => ctx.graph);
       serviceRef = service;
+      const people = new PeopleService(ctx.sqlite, () => ctx.graph);
+      // Contacts written before identities existed get theirs.
+      people.syncAll();
 
       // Listen for cross-module events
       ctx.events.on("contact.interaction", async (payload) => {
@@ -41,10 +46,10 @@ export function createCrmModule(): CrmModule {
         service.logInteraction({ contact_id: contactId, type, summary });
       });
 
-      return { service, events: ctx.events };
+      return { service, people, events: ctx.events };
     },
 
-    tools: (s) => crmTools(s.service),
+    tools: (s) => [...crmTools(s.service), ...peopleTools(s.people, s.service)],
     rpc: (s) => contactsRpcActions(s.service, s.events),
     graphBackfill: (s) => ({ name: "crm", version: 1, order: 10, run: (g) => s.service.graphBackfill(g) }),
 

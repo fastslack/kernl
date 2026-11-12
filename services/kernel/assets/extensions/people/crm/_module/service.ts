@@ -1,5 +1,6 @@
 import { type SqliteDb, type GraphDriver, unwindInBatches, type PatchColumn, newId, isoNow, buildPatch } from "@kernl/extension-sdk";
 import type { Contact, Interaction, LeadStatus } from "./types.js";
+import { addIdentity, contactByIdentity, syncContactIdentities, type IdentityKind } from "./people.js";
 
 /** The contacts columns updateContact may write; anything else in the patch is ignored. */
 const CONTACT_PATCH: Record<string, PatchColumn> = {
@@ -38,7 +39,7 @@ function normalizePhone(raw: string): string {
 
 export class CrmService {
   constructor(
-    private db: SqliteDb,
+    readonly db: SqliteDb,
     private getGraph: () => GraphDriver | null,
   ) {}
 
@@ -85,6 +86,11 @@ export class CrmService {
         .get(e) as Contact | undefined;
       if (hit) return hit;
     }
+    // A second address or number the person is also known by.
+    for (const [kind, value] of [["email", email], ["phone", phone]] as const) {
+      const id = value ? contactByIdentity(this.db, kind, value) : null;
+      if (id) return this.getById(id);
+    }
     return undefined;
   }
 
@@ -116,6 +122,12 @@ export class CrmService {
     if (dedup) {
       const existing = this.findExisting(input.phone, input.email);
       if (existing) {
+        // Keep every address the person arrives with, not only the first.
+        const seen: Array<[IdentityKind, string | undefined]> = [
+          ["email", input.email], ["phone", input.phone], ["linkedin", input.linkedin_url],
+          ["instagram", input.instagram_handle], ["x", input.x_handle], ["website", input.website],
+        ];
+        for (const [kind, value] of seen) if (value) addIdentity(this.db, existing.id, kind, value, input.lead_source || "import");
         // Merge: only fill empty fields and append to notes — never overwrite
         // human-curated data. Updates last_interaction so it shows up at the
         // top of "recent" views.
@@ -175,6 +187,7 @@ export class CrmService {
         contact.instagram_handle, contact.linkedin_url, contact.x_handle, contact.website,
         contact.project_id, contact.created_at, contact.updated_at,
       );
+    syncContactIdentities(this.db, contact);
 
     const graph = this.getGraph();
     if (graph?.capabilities.cypher) {
@@ -257,6 +270,7 @@ export class CrmService {
     if (!this.getById(id)) return false;
     this.db.transaction(() => {
       this.db.prepare("DELETE FROM interactions WHERE contact_id = ?").run(id);
+      this.db.prepare("DELETE FROM contact_identities WHERE contact_id = ?").run(id);
       this.db.prepare("DELETE FROM contacts WHERE id = ?").run(id);
     })();
 
@@ -275,6 +289,8 @@ export class CrmService {
     params.push(isoNow());
     params.push(id);
     const r = this.db.prepare(`UPDATE contacts SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+    // New addresses join the old ones; the old stay as identities of this person.
+    syncContactIdentities(this.db, this.getById(id));
     return (r?.changes ?? 0) > 0;
   }
 

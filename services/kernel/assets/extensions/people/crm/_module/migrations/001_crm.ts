@@ -71,4 +71,40 @@ export const crmMigrations: Migration[] = [
     version: 4,
     sql: `ALTER TABLE contacts ADD COLUMN do_not_contact INTEGER NOT NULL DEFAULT 0;`,
   },
+  {
+    // v5 — one person, many identities. A contact keeps every email, phone
+    // and handle it is known by (contacts holds one of each); pairs judged
+    // to be different people are remembered; merges keep what was merged.
+    version: 5,
+    sql: `
+      CREATE TABLE IF NOT EXISTS contact_identities (
+        id          TEXT PRIMARY KEY,
+        contact_id  TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+        kind        TEXT NOT NULL CHECK(kind IN ('email','phone','linkedin','instagram','x','website')),
+        value       TEXT NOT NULL,
+        value_norm  TEXT NOT NULL,
+        source      TEXT NOT NULL DEFAULT '',
+        created_at  TEXT NOT NULL,
+        UNIQUE(contact_id, kind, value_norm)
+      );
+      CREATE INDEX IF NOT EXISTS idx_contact_identities_value ON contact_identities(kind, value_norm);
+
+      CREATE TABLE IF NOT EXISTS contact_distinct (
+        a           TEXT NOT NULL,
+        b           TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        PRIMARY KEY (a, b)
+      );
+
+      CREATE TABLE IF NOT EXISTS contact_merges (
+        id          TEXT PRIMARY KEY,
+        kept_id     TEXT NOT NULL,
+        merged_id   TEXT NOT NULL,
+        snapshot    TEXT NOT NULL,
+        moved       TEXT NOT NULL DEFAULT '{}',
+        created_at  TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_contact_merges_kept ON contact_merges(kept_id);
+    `,
+  },
 ];
