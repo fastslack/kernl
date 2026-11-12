@@ -301,27 +301,32 @@ export class FactStore {
           ref: m ? m[2] : null,
         };
       });
-      await graph.run("UNWIND $rows AS r MERGE (f:Fact {id: r.id}) SET f += r.props", { rows });
-      // Facts written while the graph was off point at nothing yet; link by label.
-      const byLabel = new Map<string, Array<{ id: string; ref: string }>>();
-      for (const r of rows) {
-        if (r.label && r.ref) byLabel.set(r.label, [...(byLabel.get(r.label) ?? []), { id: r.id, ref: r.ref }]);
-      }
-      for (const [label, list] of byLabel) {
-        await graph.run(
-          `UNWIND $rows AS r MATCH (f:Fact {id: r.id}) MATCH (s:${label} {id: r.ref}) MERGE (f)-[:ABOUT]->(s)`,
-          { rows: list },
-        );
-      }
-      for (const f of facts) {
-        const next = f.superseded_by ?? f.ended_by;
-        if (next) {
-          await graph.run(
-            "MATCH (a:Fact {id: $a}), (b:Fact {id: $b}) MERGE (b)-[:REPLACES {how: $how}]->(a)",
-            { a: f.id, b: next, how: f.superseded_by ? "correction" : "change" },
+      // The nodes, their subjects and what replaced what land together.
+      const write = async (tx: Pick<GraphDriver, "run">) => {
+        await tx.run("UNWIND $rows AS r MERGE (f:Fact {id: r.id}) SET f += r.props", { rows });
+        // Facts written while the graph was off point at nothing yet; link by label.
+        const byLabel = new Map<string, Array<{ id: string; ref: string }>>();
+        for (const r of rows) {
+          if (r.label && r.ref) byLabel.set(r.label, [...(byLabel.get(r.label) ?? []), { id: r.id, ref: r.ref }]);
+        }
+        for (const [label, list] of byLabel) {
+          await tx.run(
+            `UNWIND $rows AS r MATCH (f:Fact {id: r.id}) MATCH (s:${label} {id: r.ref}) MERGE (f)-[:ABOUT]->(s)`,
+            { rows: list },
           );
         }
-      }
+        for (const f of facts) {
+          const next = f.superseded_by ?? f.ended_by;
+          if (next) {
+            await tx.run(
+              "MATCH (a:Fact {id: $a}), (b:Fact {id: $b}) MERGE (b)-[:REPLACES {how: $how}]->(a)",
+              { a: f.id, b: next, how: f.superseded_by ? "correction" : "change" },
+            );
+          }
+        }
+      };
+      if (graph.withTransaction) await graph.withTransaction(write);
+      else await write(graph);
       return rows.length;
     } catch (err) {
       log.debug(`facts: graph projection failed — ${err instanceof Error ? err.message : String(err)}`);

@@ -139,6 +139,14 @@ export interface GraphDriver extends BaseDbDriver {
    */
   withSession<T>(fn: (session: GraphSession) => Promise<T>): Promise<T>;
 
+  /**
+   * Several statements as one transaction: all commit, or none does. `fn`
+   * talks to the graph only through `tx`, and must be safe to run again —
+   * a backend may retry the whole of it after a transient conflict.
+   * Optional: callers fall back to plain `run()` when a driver lacks it.
+   */
+  withTransaction?<T>(fn: (tx: GraphSession) => Promise<T>): Promise<T>;
+
   /** Health snapshot — extends BaseDbDriverStatus with graph capabilities. */
   getStatus(): GraphDriverStatus;
 }

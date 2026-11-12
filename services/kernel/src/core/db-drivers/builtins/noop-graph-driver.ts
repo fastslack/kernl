@@ -87,4 +87,10 @@ export class NoopGraphDriver implements GraphDriver {
       "NoopGraphDriver.withSession() called — caller skipped capabilities check. Gate on `driver.capabilities.transactions` before opening a session.",
     );
   }
+
+  async withTransaction<T>(_fn: (tx: GraphSession) => Promise<T>): Promise<T> {
+    throw new Error(
+      "NoopGraphDriver.withTransaction() called — caller skipped capabilities check. Gate on `driver.capabilities.transactions` first.",
+    );
+  }
 }

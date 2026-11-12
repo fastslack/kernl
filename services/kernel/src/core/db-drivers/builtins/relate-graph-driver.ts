@@ -15,6 +15,19 @@
  * `RELATE_CLIENT_MODULE` points at a client installed somewhere else, and the
  * client itself honours `RELATE_LIB` for the native engine library.
  *
+ * Connections: one writer, a few readers. A connection runs one statement at
+ * a time and Relate cannot cancel one, so on a single shared connection a
+ * slow read (an agent's graph query, the explorer, analytics) held up every
+ * other statement in the kernel — measured, a 4.5 s read kept a one-node
+ * lookup waiting 4.5 s; on a second connection it took 2 ms. Statements that
+ * only read (isReadStatement) go to the least busy of RELATE_READ_CONNECTIONS
+ * readers (3 by default; 0 sends everything to the writer); anything else,
+ * and anything unsure, goes to the writer. A read first waits for the writes
+ * issued before it, so a caller never reads behind its own write. Errors the
+ * engine marks retryable (a write-write conflict) are retried, and
+ * withTransaction() runs several statements atomically on a connection of
+ * their own.
+ *
  * Two behaviours of the client shape this file:
  *
  * - It has no way to close a store: the handle lives until the process exits,
@@ -71,6 +84,11 @@ export interface RelateConnection {
   queryAsync(cypher: string, params?: Record<string, unknown>): Promise<RelateResult>;
   /** Synchronous — blocks the event loop; tests and one-off tools only. */
   query(cypher: string, params?: Record<string, unknown>): RelateResult;
+  /** Explicit transactions (synchronous; refused while an async query is in flight on the connection). */
+  begin?(): void;
+  /** Returns the commit's bookmark, or null when it committed nothing. Throws a retryable error on a write-write conflict. */
+  commit?(): string | null;
+  rollback?(): void;
 }
 
 export interface RelateDatabase {
@@ -140,6 +158,64 @@ export function legacyRelatePath(): string {
  */
 export const DEFAULT_GRAPH_SIZE_LIMIT = "2gib";
 const SIZE_RE = /^(none|0|\d+(\.\d+)?\s*(b|kb|kib|mb|mib|gb|gib|tb|tib)?)$/i;
+
+// ── Routing: which statements may run on a reader ─────────────────────
+
+/** Readers when RELATE_READ_CONNECTIONS is unset. */
+export const DEFAULT_READ_CONNECTIONS = 3;
+
+export function readConnectionCount(): number {
+  const raw = process.env.RELATE_READ_CONNECTIONS?.trim();
+  if (!raw) return DEFAULT_READ_CONNECTIONS;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) ? Math.max(0, Math.min(n, 16)) : DEFAULT_READ_CONNECTIONS;
+}
+
+/** Clauses that change the graph or its schema. */
+const WRITE_CLAUSE = /\b(CREATE|MERGE|SET|DELETE|REMOVE|DROP|DETACH|FOREACH|ALTER|DEFINE|LOAD\s+CSV|IN\s+TRANSACTIONS)\b/i;
+/** Procedures that only read. Any other CALL is treated as a write. */
+const READ_PROCEDURE =
+  /^(db\.(labels|relationshipTypes|propertyKeys|info|ping|stats\.retrieve|schema\.[A-Za-z]+|index\.(vector|fulltext)\.query(Nodes|Relationships))|dbms\.(components|info|listCapabilities|listConfig|showCurrentUser))$/;
+
+/** The statement with string literals, quoted names and comments blanked out. */
+function blankLiteralsForRouting(cypher: string): string {
+  return cypher
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\/\/[^\n]*/g, " ")
+    .replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`[^`]*`/g, "''");
+}
+
+/**
+ * True only when the statement certainly does not write: no writing clause
+ * and no procedure outside the read-only list. Unsure means false — the
+ * writer runs anything, a reader only loses its point when it waits.
+ */
+export function isReadStatement(cypher: string): boolean {
+  const text = blankLiteralsForRouting(cypher);
+  for (const m of text.matchAll(/\bCALL\s+([A-Za-z_][\w.]*)\s*\(/gi)) {
+    if (!READ_PROCEDURE.test(m[1])) return false;
+  }
+  // `n.set`, `{merge: 1}` and `(n:Set)` are names, not clauses.
+  const clauses = text.replace(/\.\s*[A-Za-z_]\w*/g, ".x").replace(/[A-Za-z_]\w*\s*:(?!:)/g, "k:").replace(/:\s*[A-Za-z_]\w*/g, ":x");
+  if (WRITE_CLAUSE.test(clauses)) return false;
+  return /\b(MATCH|RETURN|SHOW|CALL|EXPLAIN|PROFILE)\b/i.test(clauses);
+}
+
+const isRetryable = (err: unknown) => (err as { retryable?: unknown } | null)?.retryable === true;
+
+/** Run again while the engine says the failure is worth retrying (a write-write conflict). */
+async function withRetry<T>(fn: () => Promise<T>, attempts = 5): Promise<T> {
+  for (let i = 1; ; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (i >= attempts || !isRetryable(err)) throw err;
+      await new Promise((r) => setTimeout(r, 4 * 2 ** i + Math.random() * 8));
+    }
+  }
+}
+
+const settle = () => undefined;
 
 // ── Value adaptation (Relate → neo4j-driver shapes) ───────────────────
 
@@ -249,7 +325,13 @@ export class RelateGraphDriver implements GraphDriver {
   private openedPath: string | null = null;
   private capacityWarned = false;
   private db: RelateDatabase | null = null;
+  /** The writer: every statement that may write, in the order issued. */
   private conn: RelateConnection | null = null;
+  /** Read-only statements, spread by how many each one is running. */
+  private readers: RelateConnection[] = [];
+  private readerLoad = new Map<RelateConnection, number>();
+  /** Settles once every write issued so far has finished (never rejects). */
+  private writeTail: Promise<unknown> = Promise.resolve();
   private ready = false;
   private vectorIndex = false;
   private fulltextIndex = false;
@@ -373,9 +455,13 @@ export class RelateGraphDriver implements GraphDriver {
       this.conn = db.connect();
       await this.conn.queryAsync("RETURN 1 AS ok");
       await this.probeCapabilities();
+      this.readers = Array.from({ length: readConnectionCount() }, () => db.connect());
+      this.readerLoad = new Map(this.readers.map((c) => [c, 0]));
+      this.writeTail = Promise.resolve();
       this.ready = true;
       log.info(
-        `RelateGraphDriver ready: ${path} (Cypher ${this.cypherVersion ?? "?"}, vector=${this.vectorIndex}, fulltext=${this.fulltextIndex})`,
+        `RelateGraphDriver ready: ${path} (Cypher ${this.cypherVersion ?? "?"}, vector=${this.vectorIndex}, ` +
+          `fulltext=${this.fulltextIndex}, readers=${this.readers.length})`,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -454,6 +540,8 @@ export class RelateGraphDriver implements GraphDriver {
     // it, and a later start() on the same path must reuse it.
     this.ready = false;
     this.conn = null;
+    this.readers = [];
+    this.readerLoad.clear();
     this.db = null;
     log.info("RelateGraphDriver stopped");
   }
@@ -474,6 +562,7 @@ export class RelateGraphDriver implements GraphDriver {
       info: {
         path: this.openedPath ?? this.resolvedPath(),
         memoryLimit: process.env.RELATE_LOGICAL_GRAPH_SIZE_LIMIT ?? "none",
+        readConnections: this.readers.length,
         cypherVersion: this.cypherVersion,
         fulltextIndex: this.fulltextIndex,
       },
@@ -484,11 +573,82 @@ export class RelateGraphDriver implements GraphDriver {
   // ── Operations ────────────────────────────────────────────────────
 
   async run(cypher: string, params?: Record<string, unknown>): Promise<GraphResult> {
-    if (!this.conn || !this.ready) {
+    const writer = this.conn;
+    if (!writer || !this.ready) {
       throw new Error("RelateGraphDriver: not ready — call start() first");
     }
+    if (this.readers.length > 0 && isReadStatement(cypher)) return this.runOnReader(cypher, params);
+    const p = withRetry(() => writer.queryAsync(cypher, params ?? {}));
+    this.afterWrite(p);
     try {
-      return adaptResult(await this.conn.queryAsync(cypher, params ?? {}));
+      return adaptResult(await p);
+    } catch (err) {
+      this.noteCapacity(err);
+      throw err;
+    }
+  }
+
+  /** Reads issued from now on wait for `p` as well as every earlier write. */
+  private afterWrite(p: Promise<unknown>): void {
+    const before = this.writeTail;
+    this.writeTail = p.then(settle, settle).then(() => before);
+  }
+
+  private async runOnReader(cypher: string, params?: Record<string, unknown>): Promise<GraphResult> {
+    // Program order: a read sees every write issued before it.
+    await this.writeTail;
+    let conn = this.readers[0];
+    for (const c of this.readers) if (this.readerLoad.get(c)! < this.readerLoad.get(conn)!) conn = c;
+    this.readerLoad.set(conn, this.readerLoad.get(conn)! + 1);
+    try {
+      return adaptResult(await withRetry(() => conn.queryAsync(cypher, params ?? {})));
+    } catch (err) {
+      this.noteCapacity(err);
+      throw err;
+    } finally {
+      this.readerLoad.set(conn, Math.max(0, (this.readerLoad.get(conn) ?? 1) - 1));
+    }
+  }
+
+  /**
+   * Several statements as one transaction, on a connection of their own:
+   * all of them commit or none does. On a write-write conflict with another
+   * connection the whole of `fn` runs again (up to five times), so `fn` must
+   * be safe to repeat — it should only talk to the graph through `tx`.
+   */
+  async withTransaction<T>(fn: (tx: GraphSession) => Promise<T>): Promise<T> {
+    const db = this.db;
+    if (!db || !this.ready) {
+      throw new Error("RelateGraphDriver: not ready — call start() first");
+    }
+    const attempt = async (): Promise<T> => {
+      const conn = db.connect();
+      if (!conn.begin || !conn.commit || !conn.rollback) {
+        throw new Error("RelateGraphDriver: this Relate client has no explicit transactions");
+      }
+      conn.begin();
+      try {
+        const out = await fn({
+          async run(cypher: string, params?: Record<string, unknown>) {
+            return adaptResult(await conn.queryAsync(cypher, params ?? {}));
+          },
+          async close() {},
+        });
+        conn.commit();
+        return out;
+      } catch (err) {
+        try {
+          conn.rollback();
+        } catch {
+          // Already ended by the failed commit.
+        }
+        throw err;
+      }
+    };
+    const p = withRetry(attempt);
+    this.afterWrite(p);
+    try {
+      return await p;
     } catch (err) {
       this.noteCapacity(err);
       throw err;

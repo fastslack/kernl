@@ -289,6 +289,26 @@ export class Neo4jGraphDriver implements GraphDriver {
       await native.close();
     }
   }
+
+  /** A managed write transaction: neo4j-driver commits it, and retries transient failures itself. */
+  async withTransaction<T>(fn: (tx: GraphSession) => Promise<T>): Promise<T> {
+    if (!this.driver || !this.connected) {
+      throw new Error("Neo4jGraphDriver: not connected — call start() first");
+    }
+    const native = this.driver.session();
+    try {
+      return await native.executeWrite((tx) =>
+        fn({
+          async run(cypher: string, params?: Record<string, unknown>) {
+            return (await tx.run(cypher, params)) as unknown as GraphResult;
+          },
+          async close() {},
+        }),
+      );
+    } finally {
+      await native.close();
+    }
+  }
 }
 
 // ── Session adapter ──────────────────────────────────────────────────

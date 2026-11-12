@@ -10,8 +10,9 @@
  * Cypher through the LLM driver and corrects it from those same errors.
  *
  * The embedded engine cannot cancel a running query. A query that outlives
- * its timeout keeps running in the background; until it ends, new queries
- * are refused rather than piled on top of it.
+ * its timeout keeps running in the background on one of the driver's read
+ * connections — the rest of the kernel carries on, on the others — and until
+ * it ends, new agent queries are refused rather than piled on top of it.
  */
 
 import type { GraphDriver, GraphResult } from "../../core/db-drivers/graph-driver.js";
