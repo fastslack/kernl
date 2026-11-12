@@ -39,6 +39,7 @@ import { createBrainModule } from "../../modules/brain/index.js";
 import { createProvenanceModule } from "../../modules/provenance/index.js";
 import { createGraphQueryModule } from "../../modules/graph-query/index.js";
 import { createPlacesModule } from "../../modules/places/index.js";
+import { createOfficePacksModule } from "../../modules/office-packs/index.js";
 import { createStorageModule } from "../../modules/storage/index.js";
 import { createExtensionsModule, type ExtensionsModuleHandle } from "../../modules/extensions/index.js";
 import { createStoreModule } from "../../modules/store/index.js";
@@ -264,6 +265,11 @@ export async function initCoreModules(args: {
   // Office panels: declared views and actions of an office, shown in the 3D world.
   const panelsModule = createPanelsModule();
   registry.register(panelsModule);
+  // Office knowledge packs: export an office's lessons, import others' through review.
+  registry.register(createOfficePacksModule(() => {
+    const svc = agentsModule.getService();
+    return svc ? (input) => svc.addLearning(input) : null;
+  }));
   // Office environments moved to the paid DevOps extension. The shared
   // container an office's agents run commands in is a DevOps capability, not a
   // base-install one; that extension registers it behind `pro:devops`, so an
