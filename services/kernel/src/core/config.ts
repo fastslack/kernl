@@ -347,7 +347,9 @@ export function loadConfig(): KernelConfig {
       path: process.env.SQLITE_PATH ?? resolve("data", "kernel.db"),
     },
     neo4j: {
-      uri: process.env.NEO4J_URI ?? "bolt://localhost:17687",
+      // Empty unless set: the graph is built in (Relate). Neo4j is optional
+      // and only dialled when NEO4J_URI points at one.
+      uri: process.env.NEO4J_URI?.trim() ?? "",
       user: process.env.NEO4J_USER ?? "neo4j",
       password: process.env.NEO4J_PASSWORD ?? "",
     },

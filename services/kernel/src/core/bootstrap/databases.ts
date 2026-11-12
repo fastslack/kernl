@@ -36,10 +36,15 @@ export async function initDatabases(config: KernelConfig): Promise<{
   // dashboard (Google OAuth credentials among them) must be in place.
   const restored = rehydrateStoredSettings(sqlite, config);
   if (restored > 0) log.info(`Config: restored ${restored} stored setting(s) into the environment`);
+  // Legacy client, only for an install that points at a Neo4j server. The
+  // graph is built in (Relate driver); without NEO4J_URI nothing is dialled —
+  // a default address used to reach whatever Neo4j answered on this machine.
   const neo4j = new Neo4jClient();
-  await neo4j.connect(config.neo4j);
-  if (!config.neo4j.password) {
-    log.warn("SECURITY: NEO4J_PASSWORD not set. Set it in .env for production.");
+  if (config.neo4j.uri) {
+    await neo4j.connect(config.neo4j);
+    if (!config.neo4j.password) {
+      log.warn("SECURITY: NEO4J_PASSWORD not set. Set it in .env for production.");
+    }
   }
 
   const events = new EventBus();

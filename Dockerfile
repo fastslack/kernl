@@ -134,8 +134,6 @@ ENV MCP_TRANSPORT=http \
     DASHBOARD_ENABLED=true \
     DASHBOARD_PORT=3086 \
     SQLITE_PATH=/app/data/kernel.db \
-    NEO4J_URI=bolt://neo4j:7687 \
-    NEO4J_USER=neo4j \
     LOG_LEVEL=info \
     TIMEZONE=UTC
 

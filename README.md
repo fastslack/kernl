@@ -83,7 +83,7 @@ nothing left the machine at all. Chat and agents stay off until you connect one;
 rest of the dashboard works either way.
 
 <details>
-<summary><b>Prefer Docker?</b> (adds the bundled Neo4j graph brain)</summary>
+<summary><b>Prefer Docker?</b> (the full stack in containers)</summary>
 
 ```bash
 git clone https://github.com/fastslack/kernl.git
@@ -96,8 +96,8 @@ docker compose exec kernel cat /app/data/.kernel-auth-token
 
 Paste that token once into the dashboard's login screen and you're in — it's kept in
 your browser and reused for every request. To pin your own instead, set
-`KERNEL_AUTH_TOKEN` (`openssl rand -hex 32`) in `.env` before the first `up`. The graph
-brain (Neo4j) and key-free web search come bundled in this path.
+`KERNEL_AUTH_TOKEN` (`openssl rand -hex 32`) in `.env` before the first `up`. Key-free
+web search comes bundled in this path; the graph brain is built into the kernel on every path.
 
 To let the Filesystem Commander browse a folder of your machine, and to run
 `claude_code` agents on your Claude Code login, set `KERNL_FS_ROOT` in `.env` and
@@ -146,7 +146,7 @@ Real data. Real actions. On your machine — not in someone else's cloud.
 |  |  |
 |---|---|
 | 🔒 **Private by default** | Self-hosted. Your tasks, email and finances never touch someone else's cloud. |
-| 🧠 **Real memory** | A graph-backed brain (Neo4j + GDS) links every module, so your AI finally *remembers*. |
+| 🧠 **Real memory** | A built-in graph brain (Relate, embedded — no server to run) links every module and shares what your agents learn, so your AI finally *remembers*. |
 | 🤖 **Agents that act** | Not a chatbot — autonomous *offices* that work in loops and use your tools. |
 | 🔌 **Any LLM, any client** | NVIDIA (free), Gemini, Groq, OpenRouter, Anthropic, OpenAI, DeepSeek, Grok, MiniMax, Claude Code, or a local model via Ollama or LM Studio. Any MCP client connects. |
 | 🧩 **Endlessly extensible** | Everything is a module. Ship your own as a portable `.kernl` package. |
@@ -173,7 +173,7 @@ Real data. Real actions. On your machine — not in someone else's cloud.
 - **Sandbox drivers** — run agent code in Docker, CubeSandbox, or your own driver.
 - **Channels** — WhatsApp, Telegram, Slack, email, Mattermost and webchat on one notification bus.
 
-**Graph intelligence** — optional Neo4j + GDS for cross-module relationship analysis.
+**Graph intelligence** — a built-in graph (Relate, in-process Cypher) for memory and shared agent learning; optional Neo4j + GDS for heavy graph analytics.
 
 ## 🔌 MCP integration
 
@@ -247,8 +247,8 @@ Only if you build from source or run the container stack instead:
 
 - **Bun ≥ 1.3** (primary runtime) or **Node ≥ 20** — source installs.
 - **Docker + Compose** — the container paths, and the only route to the full stack.
-- **Neo4j 5.x + GDS** (optional; Compose starts one for you; Kernl degrades gracefully
-  without it). Budget 1–2 GB of RAM for it if you keep it.
+- **Neo4j 5.x + GDS** (optional — the graph is built in. Add it with
+  `docker-compose.neo4j.yml` for Graph Data Science analytics; budget 1–2 GB of RAM).
 
 ## Configuration
 
@@ -304,8 +304,8 @@ rather you read them here than discover them at an awkward moment.
 - **Back it up yourself, and check the exit code.** `backup.sh` is solid and
   verifies its own output, but nothing runs it for you. See
   [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md).
-- **Neo4j is hungry.** The bundled graph wants ~1–2 GB of RAM on its own. On a
-  small VPS, run the stack without it — Kernl degrades gracefully.
+- **Neo4j is hungry, and optional.** The built-in graph needs no server; the optional
+  Neo4j (`docker-compose.neo4j.yml`) wants ~1–2 GB of RAM on its own.
 - **No telemetry, which cuts both ways.** Nothing phones home, so nothing tells
   us when your install breaks. Bug reports are the only signal we get.
 

@@ -152,6 +152,13 @@ async function checkSqlite(): Promise<DiagnosticResult> {
 
 async function checkNeo4j(): Promise<DiagnosticResult> {
   const config = loadConfig();
+  if (!config.neo4j.uri) {
+    return {
+      name: "Neo4j",
+      status: "pass",
+      message: "Not configured (optional — the graph is built in via Relate)",
+    };
+  }
 
   try {
     const response = await fetch(config.neo4j.uri.replace("bolt://", "http://").replace(":17687", ":17474"));
@@ -170,7 +177,7 @@ async function checkNeo4j(): Promise<DiagnosticResult> {
     name: "Neo4j",
     status: "warn",
     message: `Not available at ${config.neo4j.uri}`,
-    details: "Graph features will be disabled. Run: docker compose up -d",
+    details: "Start it (docker compose -f docker-compose.yml -f docker-compose.neo4j.yml up -d) or unset NEO4J_URI to use the built-in graph.",
   };
 }
 

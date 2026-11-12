@@ -27,13 +27,14 @@
 # — and resumed after. Only the offices it paused are resumed. --no-drain skips
 # the wait (an emergency restart).
 #
-# Services: kernel dashboard mtw-request whatsapp-bridge neo4j searxng
+# Services: kernel dashboard mtw-request whatsapp-bridge searxng, plus neo4j
+# when docker-compose.neo4j.yml is in play (see below).
 
 set -Eeuo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="kernl-public"
-SERVICES=(neo4j searxng mtw-request whatsapp-bridge kernel dashboard claude-login-relay)
+SERVICES=(searxng mtw-request whatsapp-bridge kernel dashboard claude-login-relay)
 
 if [[ -t 1 ]]; then
   R=$'\e[31m' G=$'\e[32m' Y=$'\e[33m' B=$'\e[1m' D=$'\e[2m' N=$'\e[0m'
@@ -66,6 +67,14 @@ else
   GPU_STATE="off (NVIDIA module/libs mismatch or no GPU — reboot to restore)"
 fi
 COMPOSE_FILES+=(-f "$REPO/docker-compose.host.yml")
+# Neo4j is optional — the graph is built in (Relate). An install that already
+# has a Neo4j volume keeps its server, so an upgrade never strands its graph;
+# KERNL_NEO4J=1 asks for it on a fresh one, KERNL_NEO4J=0 leaves it out.
+if [[ "${KERNL_NEO4J:-}" == 1 ]] \
+   || { [[ "${KERNL_NEO4J:-}" != 0 ]] && docker volume inspect "${PROJECT}_neo4j-data" >/dev/null 2>&1; }; then
+  COMPOSE_FILES+=(-f "$REPO/docker-compose.neo4j.yml")
+  SERVICES=(neo4j "${SERVICES[@]}")
+fi
 
 compose() { (cd "$REPO" && docker compose "${COMPOSE_FILES[@]}" "$@"); }
 

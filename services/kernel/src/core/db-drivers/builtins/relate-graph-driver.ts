@@ -31,6 +31,8 @@
  *   see the plain value.
  */
 
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { log } from "../../logger.js";
 import type {
@@ -85,6 +87,22 @@ const defaultLoader: RelateLoader = async () => {
   const mod = (await import(specifier)) as RelateModule & { default?: RelateModule };
   return mod.Database ? mod : (mod.default as RelateModule);
 };
+
+/**
+ * Whether the client can be loaded, without loading it (no native library is
+ * touched): an explicit RELATE_CLIENT_MODULE that exists, or `@relate/relate`
+ * resolvable from where the kernel runs.
+ */
+export function relateClientInstalled(): boolean {
+  const explicit = process.env.RELATE_CLIENT_MODULE?.trim();
+  if (explicit) return existsSync(explicit);
+  try {
+    createRequire(import.meta.url).resolve(DEFAULT_CLIENT_MODULE);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Stores opened by this process, by resolved path. See the header: they cannot be closed. */
 const openStores = new Map<string, RelateDatabase>();
@@ -255,9 +273,17 @@ export class RelateGraphDriver implements GraphDriver {
     this.path = p || null;
   }
 
-  /** Opt-in only: an explicit `RELATE_DATABASE` asks for this backend. */
+  /**
+   * The default graph for a fresh install whenever its client is there — the
+   * desktop payload and the Docker image both ship it. An explicit
+   * `RELATE_DATABASE` asks for it too. Never overrides a driver already chosen.
+   */
   canSelfConfigure(): boolean {
-    return !!process.env.RELATE_DATABASE?.trim();
+    if (process.env.RELATE_DATABASE?.trim()) return true;
+    // An operator who pointed the install at a Neo4j server (NEO4J_URI, as
+    // docker-compose.neo4j.yml does) meant that server.
+    if (process.env.NEO4J_URI?.trim()) return false;
+    return relateClientInstalled();
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────

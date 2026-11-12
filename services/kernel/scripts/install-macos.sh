@@ -299,7 +299,7 @@ ok "Data directories ready"
 
 # ── 7. Build & start ─────────────────────────────────────────────────
 step "Building images and starting stack"
-info "First build pulls bun:1.2 + neo4j:5.22 — give it a few minutes."
+info "First build pulls bun:1.2 — give it a few minutes."
 
 # Pull what we can in parallel (cached images won't redownload)
 docker compose pull --ignore-buildable 2>/dev/null || true
@@ -308,9 +308,10 @@ docker compose pull --ignore-buildable 2>/dev/null || true
 info "Building dashboard bundle..."
 docker compose run --rm dashboard-build >/dev/null 2>&1 || warn "dashboard-build returned non-zero — continuing"
 
-# Bring up: kernel + dashboard + neo4j + mtw-request + whatsapp-bridge
+# Bring up: kernel + dashboard + mtw-request + whatsapp-bridge. The graph is
+# built into the kernel (Relate); Neo4j is optional (docker-compose.neo4j.yml).
 # (IBKR is behind the 'ibkr' profile and stays off.)
-docker compose up -d --build neo4j kernel dashboard
+docker compose up -d --build kernel dashboard
 
 # ── 8. Health ────────────────────────────────────────────────────────
 step "Waiting for services"
@@ -333,12 +334,6 @@ else
     warn "Dashboard not yet reachable — give it a moment, then refresh http://localhost:3086"
 fi
 
-NEO4J_PASS="$(grep -oE '^NEO4J_PASSWORD=.*' .env | cut -d'=' -f2- || echo password)"
-if docker exec mtw-neo4j cypher-shell -u neo4j -p "$NEO4J_PASS" "RETURN 1" >/dev/null 2>&1; then
-    ok "Neo4j is up"
-else
-    warn "Neo4j still initializing (GDS plugin takes ~30s on first boot)"
-fi
 
 # ── 9. Done ──────────────────────────────────────────────────────────
 cat <<EOF
@@ -351,7 +346,6 @@ cat <<EOF
     Dashboard    ${BLUE}http://localhost:3086${NC}
     Kernel API   ${BLUE}http://localhost:3087/api${NC}
     MCP HTTP     ${BLUE}http://localhost:3086/mcp${NC}
-    Neo4j        ${BLUE}http://localhost:17474${NC}  ${DIM}(neo4j / $NEO4J_PASS)${NC}
 
   ${BOLD}MCP client (Claude Desktop / Cursor):${NC}
     ${DIM}{

@@ -202,12 +202,30 @@ describe("RelateGraphDriver lifecycle", () => {
     expect(driver.validateConfig({}).valid).toBe(true);
   });
 
-  it("self-configures only when RELATE_DATABASE is set", () => {
+  it("is the default graph when its client is installed, or when RELATE_DATABASE asks for it", () => {
     const driver = new RelateGraphDriver(async () => fakeModule(okHandler()));
-    delete process.env.RELATE_DATABASE;
-    expect(driver.canSelfConfigure()).toBe(false);
-    process.env.RELATE_DATABASE = "/tmp/x.rl";
-    expect(driver.canSelfConfigure()).toBe(true);
+    const savedClient = process.env.RELATE_CLIENT_MODULE;
+    const savedNeo4j = process.env.NEO4J_URI;
+    try {
+      delete process.env.NEO4J_URI;
+      delete process.env.RELATE_DATABASE;
+      process.env.RELATE_CLIENT_MODULE = "/nonexistent/relate/index.js";
+      expect(driver.canSelfConfigure()).toBe(false);
+      process.env.RELATE_CLIENT_MODULE = import.meta.path; // any file that exists
+      expect(driver.canSelfConfigure()).toBe(true);
+      // An install pointed at a Neo4j server keeps it…
+      process.env.NEO4J_URI = "bolt://neo4j:7687";
+      expect(driver.canSelfConfigure()).toBe(false);
+      // …unless Relate is asked for by name.
+      process.env.RELATE_CLIENT_MODULE = "/nonexistent/relate/index.js";
+      process.env.RELATE_DATABASE = "/tmp/x.rl";
+      expect(driver.canSelfConfigure()).toBe(true);
+    } finally {
+      if (savedClient === undefined) delete process.env.RELATE_CLIENT_MODULE;
+      else process.env.RELATE_CLIENT_MODULE = savedClient;
+      if (savedNeo4j === undefined) delete process.env.NEO4J_URI;
+      else process.env.NEO4J_URI = savedNeo4j;
+    }
   });
 
   it("defaults the store next to the SQLite database", () => {

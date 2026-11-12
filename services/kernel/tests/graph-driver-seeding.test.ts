@@ -4,6 +4,7 @@ import { runMigrations } from "../src/core/db/migrations.js";
 import { extensionsMigrations } from "../src/modules/extensions/migrations.js";
 import { GraphDriverRegistry } from "../src/core/db-drivers/graph-driver-registry.js";
 import type { GraphDriver } from "../src/core/db-drivers/graph-driver.js";
+import { registerBuiltinGraphDrivers } from "../src/core/db-drivers/builtins/index.js";
 
 /**
  * Seeding decides which graph driver a fresh install starts out on. Getting it
@@ -109,5 +110,62 @@ describe("GraphDriverRegistry seeding", () => {
 
     expect(() => registry.seedBuiltinRows()).not.toThrow();
     expect(statusOf(db, "neo4j")).toBe("active");
+  });
+});
+
+describe("built-in graph drivers on a fresh install", () => {
+  const keys = ["RELATE_CLIENT_MODULE", "RELATE_DATABASE", "NEO4J_URI", "NEO4J_USER", "NEO4J_PASSWORD"] as const;
+  let saved: Record<string, string | undefined>;
+  beforeEach(() => {
+    saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    for (const k of keys) delete process.env[k];
+  });
+  const restore = () => {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  };
+  const seed = () => {
+    const db = new Database(":memory:");
+    runMigrations(db as never, "extensions", extensionsMigrations);
+    const registry = new GraphDriverRegistry();
+    registry.setDb(db as never);
+    registerBuiltinGraphDrivers(registry);
+    registry.seedBuiltinRows();
+    return db;
+  };
+
+  it("starts on the built-in graph when its client is installed", () => {
+    try {
+      process.env.RELATE_CLIENT_MODULE = import.meta.path;
+      const db = seed();
+      expect(statusOf(db, "relate")).toBe("active");
+      expect(statusOf(db, "neo4j")).toBe("installed");
+      expect(statusOf(db, "noop")).toBe("installed");
+    } finally {
+      restore();
+    }
+  });
+
+  it("starts on Neo4j when the install points at a Neo4j server", () => {
+    try {
+      process.env.RELATE_CLIENT_MODULE = import.meta.path;
+      process.env.NEO4J_URI = "bolt://neo4j:7687";
+      process.env.NEO4J_USER = "neo4j";
+      process.env.NEO4J_PASSWORD = "kernlgraph";
+      expect(statusOf(seed(), "neo4j")).toBe("active");
+    } finally {
+      restore();
+    }
+  });
+
+  it("stays on the no-op driver when neither is available", () => {
+    try {
+      process.env.RELATE_CLIENT_MODULE = "/nonexistent/relate/index.js";
+      expect(statusOf(seed(), "noop")).toBe("active");
+    } finally {
+      restore();
+    }
   });
 });
