@@ -5,6 +5,7 @@
  *   - brain items      (SQLite: embeddings of tasks, notes, contacts, mail…)
  *   - chat memories    (graph `:Memory`, one per chat message, plus SQLite FTS)
  *   - agent learnings  (graph `:AgentLearning`, vector + full-text indexes)
+ *   - facts            (SQLite `facts`, what is true now — facts.ts)
  *   - graph entities   (people, tasks, notes, mail, events, products…)
  *
  * `askMemory()` runs a dense and a lexical search on each that has one, fuses
@@ -38,7 +39,7 @@ const LEG_SIZE = 20;
 /** Labels the entity index covers, and the property that names each. */
 export const ENTITY_LABELS = [
   "Person", "Task", "Note", "Goal", "Reminder", "Email", "EmailThread",
-  "CalendarEvent", "Product", "Store", "Concept", "Article",
+  "CalendarEvent", "Product", "Store", "Concept", "Article", "Fact",
 ] as const;
 
 /** Brain source tables whose rows are also graph nodes keyed by `id`. */
@@ -179,6 +180,31 @@ export async function askMemory(
     });
   });
 
+  await leg("facts", async () => {
+    if (terms.length === 0) return "no terms";
+    // What is true now and still believed, by how many terms it shares.
+    const hits = terms.map(() => "((subject_name || ' ' || subject || ' ' || predicate || ' ' || object) LIKE ?)").join(" + ");
+    const rows = deps.db
+      .prepare(
+        `SELECT * FROM (
+           SELECT id, subject, subject_name, predicate, object, valid_from, recorded_at, ${hits} AS hits
+           FROM facts WHERE valid_to IS NULL AND superseded_at IS NULL)
+         WHERE hits > 0 ORDER BY hits DESC, recorded_at DESC LIMIT ${LEG_SIZE}`,
+      )
+      .all(...terms.map((t) => `%${t}%`)) as Array<Record<string, unknown>>;
+    return rows.map((r) => {
+      const line = `${str(r.subject_name) || str(r.subject)} · ${str(r.predicate).replace(/_/g, " ")} · ${str(r.object)}`;
+      return {
+        key: `Fact:${str(r.id)}`,
+        kind: "fact",
+        title: clip(line, 100),
+        text: `${line} (since ${str(r.valid_from).slice(0, 10)})`,
+        ref: { fact_id: str(r.id), subject: str(r.subject) },
+        node: { label: "Fact", id: str(r.id) },
+      };
+    });
+  });
+
   await leg("chat-text", async () => {
     if (terms.length === 0) return "no terms";
     const rows = deps.db
@@ -240,6 +266,7 @@ export async function askMemory(
     await ensureEntityTextIndex(g);
     const r = await g.run(
       `CALL db.index.fulltext.queryNodes($index, $terms) YIELD node AS n, score
+       WHERE NOT (n:Fact AND n.current = false)
        RETURN labels(n)[0] AS label, elementId(n) AS el,
               coalesce(n.id, n.gmail_id, n.gmail_thread_id, n.google_event_id, n.link) AS id,
               coalesce(n.name, n.title, n.subject, n.label) AS title,
