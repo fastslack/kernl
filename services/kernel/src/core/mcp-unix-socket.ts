@@ -89,6 +89,22 @@ function parseHandshake(buf: Buffer): { ctx: KernelRequestContext; rest: Buffer 
   };
 }
 
+/** True when something accepts connections on `socketPath` right now. */
+export function socketIsServed(socketPath: string, timeoutMs = 500): Promise<boolean> {
+  if (!fs.existsSync(socketPath)) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const probe = net.connect(socketPath);
+    const done = (served: boolean) => {
+      clearTimeout(timer);
+      probe.destroy();
+      resolve(served);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    probe.once("connect", () => done(true));
+    probe.once("error", () => done(false));
+  });
+}
+
 export async function startMcpUnixSocketServer(
   registry: ModuleRegistry,
   events: EventBus | undefined,
@@ -96,6 +112,12 @@ export async function startMcpUnixSocketServer(
   socketPath: string,
 ): Promise<McpUnixSocketHandle> {
   fs.mkdirSync(path.dirname(socketPath), { recursive: true, mode: 0o755 });
+  // The path is machine-wide. A stale file from a crash is ours to replace;
+  // one another kernel is still serving is not — unlinking it would cut that
+  // kernel off its own agents.
+  if (await socketIsServed(socketPath)) {
+    throw new Error(`${socketPath} is served by another running kernel; leaving it alone (set KERNEL_MCP_SOCKET to use another path)`);
+  }
   try { fs.unlinkSync(socketPath); } catch { /* didn't exist */ }
 
   const netServer = net.createServer((socket) => {
