@@ -140,7 +140,8 @@ export function createBrainModule(
     getTools(): ToolDefinition[] { return tools; },
     getGraphBackfill() {
       const store = facts;
-      return store ? { name: "facts", version: 1, order: 40, run: (g) => store.backfill(g) } : undefined;
+      // v2: re-projects every fact with native datetimes and ended_at.
+      return store ? { name: "facts", version: 2, order: 40, run: (g) => store.backfill(g) } : undefined;
     },
     getService(): BrainService | null { return service; },
     getIndexer(): BrainIndexer | null { return indexer; },

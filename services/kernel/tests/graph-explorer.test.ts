@@ -1,4 +1,5 @@
 import { describe, it, expect } from "bun:test";
+import { ensureEntityTextIndex, FOLD_ENTITIES_CYPHER, FOLD_PAIRS, foldText, foldedQuery } from "../src/modules/brain/ask.js";
 import { RelateGraphDriver, relateClientInstalled } from "../src/core/db-drivers/builtins/relate-graph-driver.js";
 import { GraphExplorer, toNode } from "../src/modules/graph-query/explorer.js";
 
@@ -35,5 +36,32 @@ describe.skipIf(!relateClientInstalled())("explorer on Relate", () => {
     expect(two.nodes).toHaveLength(4);
     expect(two.links).toHaveLength(3);
     expect(await ex.neighborhood("nope")).toEqual({ nodes: [], links: [] });
+  });
+
+  it("finds names with or without their accents, through the index and through the substring fallback", async () => {
+    const g = new RelateGraphDriver();
+    g.configure({ path: ":memory:" });
+    await g.start();
+    await g.run(`CREATE (:Person {name: 'Lucía Ferreyra'}), (:Person {name: 'Martin Sosa'}), (:Concept {name: 'Logística'})`);
+    // What the brain's entity index keeps current in the background, done here and awaited.
+    await ensureEntityTextIndex(g);
+    await g.run(FOLD_ENTITIES_CYPHER, { pairs: FOLD_PAIRS });
+    const ex = new GraphExplorer(() => g);
+    expect((await ex.search("Lucia")).map((n) => n.name)).toEqual(["Lucía Ferreyra"]);
+    expect((await ex.search("martín")).map((n) => n.name)).toEqual(["Martin Sosa"]);
+    // The fallback (a label, so no index): a piece of a word, accents ignored both ways.
+    expect((await ex.search("ferrey", "Person")).map((n) => n.name)).toEqual(["Lucía Ferreyra"]);
+    expect((await ex.search("logist", "Concept")).map((n) => n.name)).toEqual(["Logística"]);
+    // The folded copy is plumbing: the explorer does not show it.
+    expect((await ex.search("Lucia"))[0].props.search_fold).toBeUndefined();
+    await g.stop();
+  });
+});
+
+describe("folding accents", () => {
+  it("strips accents and lowercases; a query keeps its own form and adds the bare one", () => {
+    expect(foldText("Lucía FERREYRA, Logística, Ñandú")).toBe("lucia ferreyra, logistica, nandu");
+    expect(foldedQuery("Martín Sosa")).toBe("Martín Sosa martin sosa");
+    expect(foldedQuery("plain words")).toBe("plain words");
   });
 });

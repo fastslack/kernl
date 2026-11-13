@@ -78,6 +78,8 @@ export interface RelateResult {
   stats?: RelateStats;
   /** Plan (EXPLAIN/PROFILE) and planner notifications. */
   _summary?: { plan?: unknown; notifications?: unknown[] };
+  /** The statement's summary, with the engine's own timing (parse, plan and run). */
+  consume?(): { elapsedMs?: number; parseMs?: number; planMs?: number; executeMs?: number };
 }
 
 export interface RelateConnection {
@@ -341,14 +343,49 @@ function toCounters(stats: RelateStats | undefined): GraphCounters | undefined {
 
 export function adaptResult(r: RelateResult): GraphResult {
   const columns = r.columns ?? [];
+  // The engine's time for the statement alone: a read also waits for earlier
+  // writes and for the event loop, which a timer around the await counts too.
+  let engineMs: number | undefined;
+  let phasesMs: { parse: number; plan: number; execute: number } | undefined;
+  try {
+    const c = typeof r.consume === "function" ? r.consume() : undefined;
+    if (typeof c?.elapsedMs === "number" && Number.isFinite(c.elapsedMs)) engineMs = c.elapsedMs;
+    if (typeof c?.parseMs === "number") phasesMs = { parse: c.parseMs, plan: c.planMs ?? 0, execute: c.executeMs ?? 0 };
+  } catch { /* an older client: no summary */ }
   return {
     records: (r.rows ?? []).map((row) => toRecord(columns, row)),
     summary: {
       counters: toCounters(r.stats),
+      ...(engineMs !== undefined ? { resultAvailableAfterMs: engineMs } : {}),
+      ...(phasesMs ? { phasesMs } : {}),
       ...(r._summary?.plan ? { plan: r._summary.plan } : {}),
       ...(r._summary?.notifications?.length ? { notifications: r._summary.notifications } : {}),
     },
   };
+}
+
+/**
+ * Open a file store, waiting a little for another process to let go of it.
+ * A kernel restarting over itself (a restart script, a dev server reloading)
+ * starts while the old one is still shutting down and holding the store; the
+ * engine then refuses the open, and a driver that gave up there left the new
+ * kernel running with no graph at all.
+ */
+async function openWhenFree(mod: RelateModule, path: string, waitMs = Number(process.env.RELATE_OPEN_WAIT_MS ?? 15_000)): Promise<RelateDatabase> {
+  const t0 = Date.now();
+  let warned = false;
+  for (;;) {
+    try {
+      return mod.Database.open(path);
+    } catch (err) {
+      if (Date.now() - t0 >= waitMs) throw err;
+      if (!warned) {
+        warned = true;
+        log.info(`RelateGraphDriver: ${path} is not free yet (${err instanceof Error ? err.message : String(err)}) — waiting up to ${Math.round(waitMs / 1000)} s`);
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
 }
 
 // ── Driver ────────────────────────────────────────────────────────────
@@ -376,6 +413,7 @@ export class RelateGraphDriver implements GraphDriver {
   private vectorIndex = false;
   private vectorSearch = false;
   private fulltextIndex = false;
+  private fulltextSearch = false;
   private cypherVersion: string | null = null;
   private lastError: string | null = null;
 
@@ -388,6 +426,7 @@ export class RelateGraphDriver implements GraphDriver {
       gds: false,
       vectorSimilarity: cypher && this.vectorIndex,
       vectorSearch: cypher && this.vectorIndex && this.vectorSearch,
+      fulltextSearch: cypher && this.fulltextIndex && this.fulltextSearch,
       mlPipelines: false,
       embedded: true,
       parameterised: cypher,
@@ -489,7 +528,7 @@ export class RelateGraphDriver implements GraphDriver {
       // `:memory:` is per-driver by nature; a file store is shared process-wide.
       let db = path === ":memory:" ? undefined : openStores.get(path);
       if (!db) {
-        db = mod.Database.open(path);
+        db = path === ":memory:" ? mod.Database.open(path) : await openWhenFree(mod, path);
         if (path !== ":memory:") openStores.set(path, db);
       }
       this.db = db;
@@ -548,6 +587,7 @@ export class RelateGraphDriver implements GraphDriver {
     this.vectorIndex = false;
     this.vectorSearch = false;
     this.fulltextIndex = false;
+    this.fulltextSearch = false;
     this.cypherVersion = null;
     try {
       const r = await this.conn!.queryAsync(
@@ -562,6 +602,16 @@ export class RelateGraphDriver implements GraphDriver {
       if (this.vectorIndex && Number.parseInt(this.cypherVersion ?? "", 10) >= 25) {
         const v = await this.conn!.queryAsync("RETURN vector([1.0, 0.0], 2, FLOAT32) IS NOT NULL AS ok").catch(() => null);
         this.vectorSearch = v?.rows?.[0]?.ok === true;
+      }
+      // SEARCH over a full-text index: planning it tells. A missing index is
+      // still a parsed statement; only a syntax error means the clause is not there.
+      if (this.fulltextIndex && Number.parseInt(this.cypherVersion ?? "", 10) >= 25) {
+        try {
+          await this.conn!.queryAsync("EXPLAIN MATCH (n) SEARCH n IN (FULLTEXT INDEX kernl_probe FOR 'x' LIMIT 1) SCORE AS s RETURN n");
+          this.fulltextSearch = true;
+        } catch (err) {
+          this.fulltextSearch = !/syntax/i.test(String(err));
+        }
       }
     } catch {
       // Older engines lack the procedure; fall back to the vector function.

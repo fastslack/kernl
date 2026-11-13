@@ -126,6 +126,37 @@ export function vectorSearchClause(graph: Pick<GraphDriver, "capabilities">, s: 
   );
 }
 
+export function hasFulltextSearch(graph: Pick<GraphDriver, "capabilities">): boolean {
+  return graph.capabilities.fulltextSearch === true;
+}
+
+export interface FulltextSearchSpec {
+  /** Variable bound to each hit. */
+  alias: string;
+  /** The full-text index's name (a literal: SEARCH takes no parameter here). */
+  index: string;
+  /** Cypher expression for the query text, usually a parameter: `$q`. */
+  query: string;
+  /** Hits taken from the index, before any WHERE that follows. */
+  k: number;
+  /** The label every hit carries, when the index covers one. */
+  label?: string;
+}
+
+/**
+ * The opening clauses of a full-text query, binding `alias` and `score`:
+ * Relate's `SEARCH … IN (FULLTEXT INDEX …)` where the engine has it, the
+ * `db.index.fulltext.queryNodes` procedure elsewhere (Neo4j). A WHERE may
+ * follow either form. On Relate the index yields `k` hits before that WHERE.
+ */
+export function fulltextSearchClause(graph: Pick<GraphDriver, "capabilities">, s: FulltextSearchSpec): string {
+  const a = s.alias;
+  if (hasFulltextSearch(graph)) {
+    return `MATCH (${a}${s.label ? `:${ident(s.label)}` : ""}) SEARCH ${a} IN (FULLTEXT INDEX ${ident(s.index)} FOR ${s.query} LIMIT ${Math.max(1, Math.floor(s.k))}) SCORE AS score`;
+  }
+  return `CALL db.index.fulltext.queryNodes('${s.index.replace(/'/g, "\\'")}', ${s.query}) YIELD node AS ${a}, score`;
+}
+
 /**
  * Run the query `build` makes around a nearest-neighbour clause. When the
  * index lacks a filter property — built by an older Kernl, copied from Neo4j,

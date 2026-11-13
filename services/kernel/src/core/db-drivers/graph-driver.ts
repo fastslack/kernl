@@ -41,6 +41,12 @@ export interface GraphCapabilities {
    * Optional: absent means false. Write through `sdk/graph-vectors.ts`.
    */
   vectorSearch?: boolean;
+  /**
+   * `SEARCH n IN (FULLTEXT INDEX …)` — Relate's native full-text search, the
+   * successor of `db.index.fulltext.queryNodes` (deprecated there). Optional:
+   * absent means false. Write through `fulltextSearchClause` (sdk/graph-vectors.ts).
+   */
+  fulltextSearch?: boolean;
   /** GDS ML pipelines (nodeClassification, linkPrediction, …). */
   mlPipelines: boolean;
   /** Driver runs in-process — no external server, no separate port. */
@@ -87,6 +93,8 @@ export interface GraphResultSummary {
   counters?: GraphCounters;
   /** Optional execution-time hint (ms). */
   resultAvailableAfterMs?: number;
+  /** The engine's split of that time, when it reports one (Relate: parse, plan, execute). */
+  phasesMs?: { parse: number; plan: number; execute: number };
   /**
    * The plan of an EXPLAIN/PROFILE, as the backend gives it: Relate's
    * `{root: {operator, children, warnings}}` or neo4j-driver's

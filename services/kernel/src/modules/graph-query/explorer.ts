@@ -6,7 +6,8 @@
  * MCP clients go through the tools and their checks instead.
  */
 import type { GraphDriver } from "../../core/db-drivers/graph-driver.js";
-import { ENTITY_TEXT_INDEX } from "../brain/ask.js";
+import { ENTITY_TEXT_INDEX, ensureEntityTextIndex, foldText, foldedQuery } from "../brain/ask.js";
+import { fulltextSearchClause } from "../../sdk/graph-vectors.js";
 
 export interface ExplorerNode {
   id: string;
@@ -24,7 +25,7 @@ export interface ExplorerLink {
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]{0,99}$/;
 /** Properties that are not worth shipping to a browser. */
-const SKIP = new Set(["embedding", "embedding_model", "text_vector"]);
+const SKIP = new Set(["embedding", "embedding_model", "text_vector", "search_fold"]);
 
 function displayName(p: Record<string, unknown>): string {
   for (const k of ["name", "title", "subject", "label", "goal", "content", "text", "id"]) {
@@ -97,16 +98,26 @@ export class GraphExplorer {
     try {
       const words = q.replace(/[^\p{L}\p{N}\s]/gu, " ").trim();
       if (words && !label) {
-        const r = await g.run(`CALL db.index.fulltext.queryNodes('${ENTITY_TEXT_INDEX}', $q) YIELD node RETURN node LIMIT $limit`, { q: words, limit: lim });
+        await ensureEntityTextIndex(g);
+        const r = await g.run(
+          `${fulltextSearchClause(g, { alias: "node", index: ENTITY_TEXT_INDEX, query: "$q", k: lim })} RETURN node LIMIT $limit`,
+          // Folded too: the index does not fold accents (Lucia ≠ Lucía); search_fold does.
+          { q: foldedQuery(words), limit: lim },
+        );
         const hits = r.records.map((x) => toNode(x.get("node"))).filter((n): n is ExplorerNode => !!n);
         if (hits.length) return hits;
       }
     } catch {
       /* no index yet: fall back to a scan */
     }
+    // A substring anywhere, with or without accents on either side: the name as
+    // written, or its folded copy (search_fold, kept by the brain's entity index).
     const r = await g.run(
-      `MATCH (n${label ? `:\`${label}\`` : ""}) WHERE toLower(coalesce(n.name, n.title, n.subject, n.label, '')) CONTAINS toLower($q) RETURN n LIMIT $limit`,
-      { q, limit: lim },
+      `MATCH (n${label ? `:\`${label}\`` : ""})
+       WITH n, toLower(coalesce(n.name, n.title, n.subject, n.label, '')) AS t
+       WHERE t CONTAINS $q OR t CONTAINS $qf OR coalesce(n.search_fold, '') CONTAINS $qf
+       RETURN n LIMIT $limit`,
+      { q: q.toLowerCase(), qf: foldText(q), limit: lim },
     );
     return r.records.map((x) => toNode(x.get("n"))).filter((n): n is ExplorerNode => !!n);
   }

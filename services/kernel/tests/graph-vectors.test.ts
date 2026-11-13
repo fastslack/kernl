@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "bun:test";
 import type { GraphDriver } from "../src/core/db-drivers/graph-driver.js";
 import { RelateGraphDriver, relateClientInstalled } from "../src/core/db-drivers/builtins/relate-graph-driver.js";
-import { asVector, ensureVectorIndex, runVectorSearch, vectorSearchClause } from "../src/sdk/graph-vectors.js";
+import { asVector, ensureVectorIndex, fulltextSearchClause, runVectorSearch, vectorSearchClause } from "../src/sdk/graph-vectors.js";
 import { KnowledgeService } from "../src/modules/chat/knowledge-service.js";
 
 /** The same engine, made to answer as one without VECTOR values or SEARCH (Neo4j 5). */
@@ -125,5 +125,38 @@ describe.skipIf(!relateClientInstalled())("vectors on the built-in graph", () =>
     // Excluding the current episode still applies after the k nearest are taken.
     const other = await ks.findSimilarMemories(near(0), 50, "current");
     expect(other.map((m) => m.id)).toEqual(["old"]);
+  });
+});
+
+// Full text: Relate deprecates db.index.fulltext.queryNodes for its SEARCH
+// clause (its planner says so); Neo4j keeps the procedure.
+describe("full-text clauses", () => {
+  const neo4j = { capabilities: { cypher: true, vectorSimilarity: true } } as unknown as GraphDriver;
+  const relate = { capabilities: { cypher: true, vectorSimilarity: true, fulltextSearch: true } } as unknown as GraphDriver;
+
+  it("use the procedure where the engine has no SEARCH, the clause where it has", () => {
+    expect(fulltextSearchClause(neo4j, { alias: "n", index: "kernl_entity_text", query: "$q", k: 20 }))
+      .toBe("CALL db.index.fulltext.queryNodes('kernl_entity_text', $q) YIELD node AS n, score");
+    expect(fulltextSearchClause(relate, { alias: "l", index: "agent-learning-text", label: "AgentLearning", query: "$t", k: 50 }))
+      .toBe("MATCH (l:`AgentLearning`) SEARCH l IN (FULLTEXT INDEX `agent-learning-text` FOR $t LIMIT 50) SCORE AS score");
+  });
+
+  it.skipIf(!relateClientInstalled())("on Relate: the capability is found, SEARCH answers, and the planner has nothing to say against it", async () => {
+    const d = new RelateGraphDriver();
+    d.configure({ path: ":memory:" });
+    await d.start();
+    try {
+      expect(d.capabilities.fulltextSearch).toBe(true);
+      await d.run("CREATE FULLTEXT INDEX ft IF NOT EXISTS FOR (n:Person|Company) ON EACH [n.name]");
+      await d.run("CREATE (:Person {name: 'Lucía Ferreyra'}), (:Company {name: 'Delta Norte'})");
+      const clause = fulltextSearchClause(d, { alias: "n", index: "ft", query: "$q", k: 5 });
+      const r = await d.run(`${clause} RETURN n.name AS name, score`, { q: "delta" });
+      expect(r.records.map((x) => x.get("name"))).toEqual(["Delta Norte"]);
+      const plan = await d.run(`EXPLAIN ${clause} RETURN n`, { q: "delta" });
+      const notes = ((plan.summary as { notifications?: Array<{ code?: string }> }).notifications ?? []).map((x) => String(x.code));
+      expect(notes.some((c) => /Deprecation/.test(c))).toBe(false);
+    } finally {
+      await d.stop();
+    }
   });
 });

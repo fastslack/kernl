@@ -8,6 +8,7 @@
  */
 
 import { z } from "zod";
+import type { GraphDriver } from "../../core/db-drivers/graph-driver.js";
 import type { KernelModule, ModuleContext, RetentionPolicy, ToolDefinition, ToolResult } from "../../core/types.js";
 import { agePolicy } from "../../sdk/retention.js";
 import { errorResult, structuredResult } from "../../core/helpers.js";
@@ -65,6 +66,11 @@ export function createProvenanceModule(): KernelModule {
       runMigrations(ctx.sqlite, "provenance", provenanceMigrations);
       service = new ProvenanceService(ctx.sqlite, () => ctx.graph);
       setProvenanceService(service);
+    },
+    // TOUCHED edges for a new or upgraded store; after the projected modules (order 50).
+    getGraphBackfill() {
+      const svc = service;
+      return svc ? { name: "provenance", version: 1, order: 50, run: (g: GraphDriver) => svc.backfill(g) } : undefined;
     },
     getRetentionPolicies(): RetentionPolicy[] {
       return [

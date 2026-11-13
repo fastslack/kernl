@@ -132,11 +132,13 @@ export class ProvenanceService {
           call.tool, call.ok ? 1 : 0, ref, detail);
       }
     })();
-    if (call.ok && call.actor.runId && refs.length) void this.project(call.actor.runId, call.tool, refs, at);
+    if (call.ok && call.actor.runId && refs.length) {
+      void this.project(call.actor.runId, call.tool, refs, at, { id: call.actor.id, name: call.actor.name ?? "" });
+    }
     return refs.length || 1;
   }
 
-  private async project(runId: string, tool: string, refs: string[], at: string): Promise<void> {
+  private async project(runId: string, tool: string, refs: string[], at: string, actor: { id: string; name: string }): Promise<void> {
     const label = TOOL_LABEL.find(([re]) => re.test(tool))?.[1];
     const g = this.getGraph();
     if (!label || !g?.capabilities.cypher) return;
@@ -148,12 +150,47 @@ export class ProvenanceService {
          WITH r UNWIND $refs AS ref
          MATCH (n:${label} {id: ref})
          MERGE (r)-[t:TOUCHED {tool: $tool}]->(n)
-         SET t.at = $at`,
-        { run: runId, refs, tool, at },
+         SET t.at = $at, t.actor_id = $actorId, t.actor = $actorName`,
+        { run: runId, refs, tool, at, actorId: actor.id, actorName: actor.name },
       );
     } catch (err) {
       log.debug(`provenance: graph link failed — ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  /**
+   * Rebuild the TOUCHED edges from the table, for a new or upgraded store: the
+   * projection above only runs on new calls. Idempotent (MERGE).
+   */
+  async backfill(g: GraphDriver): Promise<{ nodes: number; relationships: number }> {
+    const rows = this.db
+      .prepare(
+        `SELECT run_id, tool, ref, at, actor_id, actor_name FROM tool_provenance
+          WHERE ok = 1 AND run_id <> '' AND ref <> '' ORDER BY at`,
+      )
+      .all() as Array<{ run_id: string; tool: string; ref: string; at: string; actor_id: string; actor_name: string }>;
+    const byLabel = new Map<string, typeof rows>();
+    for (const r of rows) {
+      const label = TOOL_LABEL.find(([re]) => re.test(r.tool))?.[1];
+      if (label) byLabel.set(label, [...(byLabel.get(label) ?? []), r]);
+    }
+    let edges = 0;
+    for (const [label, list] of byLabel) {
+      for (let i = 0; i < list.length; i += 1000) {
+        const chunk = list.slice(i, i + 1000);
+        const res = await g.run(
+          `UNWIND $rows AS row
+           MATCH (n:${label} {id: row.ref})
+           MERGE (r:AgentRun {id: row.run_id})
+           MERGE (r)-[t:TOUCHED {tool: row.tool}]->(n)
+           SET t.at = row.at, t.actor_id = row.actor_id, t.actor = row.actor_name
+           RETURN count(t) AS n`,
+          { rows: chunk },
+        );
+        edges += Number(res.records[0]?.get("n") ?? 0);
+      }
+    }
+    return { nodes: 0, relationships: edges };
   }
 
   /** Every recorded call that named or returned `ref`, newest first. */

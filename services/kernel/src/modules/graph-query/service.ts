@@ -137,10 +137,14 @@ export class GraphQueryService {
     for (const r of s.relationships) lines.push(`  (:${r.from})-[:${r.type}]->(:${r.to})  ×${r.count}`);
     if (s.indexes.length) {
       lines.push("Search indexes:");
+      // Relate deprecates the full-text procedure for its SEARCH clause: teach the form the engine prefers.
+      const native = this.getGraph()?.capabilities.fulltextSearch === true;
       for (const i of s.indexes) {
         const how = i.type === "VECTOR"
           ? `CALL db.index.vector.queryNodes('${i.name}', 10, $vector) YIELD node, score`
-          : `CALL db.index.fulltext.queryNodes('${i.name}', 'some words') YIELD node, score`;
+          : native
+            ? `MATCH (node) SEARCH node IN (FULLTEXT INDEX ${i.name} FOR 'some words' LIMIT 10) SCORE AS score`
+            : `CALL db.index.fulltext.queryNodes('${i.name}', 'some words') YIELD node, score`;
         lines.push(`  ${i.name}: ${i.type} on ${i.labels.join("|")}(${i.properties.join(", ")}) — ${how}`);
       }
     }

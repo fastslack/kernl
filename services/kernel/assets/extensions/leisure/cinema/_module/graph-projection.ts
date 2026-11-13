@@ -663,6 +663,32 @@ export function projectionProgress(db: SqliteDb): CursorRow[] {
   return PROJECTORS.map((p) => readCursor(db, p.entity));
 }
 
+// ── A store that lost the catalogue ───────────────────────────────────
+
+const checkedStores = new WeakSet<GraphDriver>();
+
+/**
+ * The cursors live in SQLite and say "done", so a new graph store (an upgrade
+ * to the built-in graph, a store rebuilt from scratch) would never get the
+ * catalogue back. Once per store: titles in SQLite, none in the graph, and
+ * every cursor done → start the projection over.
+ */
+async function restartOnEmptyStore(db: SqliteDb, graph: GraphDriver): Promise<void> {
+  if (checkedStores.has(graph)) return;
+  checkedStores.add(graph);
+  try {
+    const cursors = projectionProgress(db);
+    if (!cursors.length || cursors.some((c) => c.done !== 1)) return;
+    const titles = db.prepare("SELECT 1 AS x FROM cinema_titles LIMIT 1").get() as { x: number } | undefined;
+    if (!titles) return;
+    const r = await graph.run("MATCH (t:CinemaTitle) RETURN t.id AS id LIMIT 1");
+    if (r.records.length === 0) {
+      resetCursors(db);
+      log.info("cinema: the graph store has no catalogue — projecting it again from SQLite");
+    }
+  } catch { /* checked again on the next store */ }
+}
+
 // ── One pass ───────────────────────────────────────────────────────────
 
 export interface ProjectionTickResult {
@@ -688,6 +714,7 @@ export async function projectTick(
   if (!graph?.capabilities.cypher) {
     throw new Error("catalogue projection requires an active graph driver with cypher support");
   }
+  await restartOnEmptyStore(db, graph);
   for (const projector of PROJECTORS) {
     const state = readCursor(db, projector.entity);
     if (state.done === 1) continue;

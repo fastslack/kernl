@@ -10,6 +10,8 @@ describe("static gate", () => {
       "MATCH (p:Person) WHERE p.name = 'SET me CREATE (x)' RETURN p",
       "MATCH p = (a:Person)-[:KNOWS*1..3]->(b) RETURN length(p)",
       "CALL db.index.fulltext.queryNodes('kernl_entity_text', 'ada') YIELD node RETURN node.name",
+      // The form the schema now teaches on Relate.
+      "MATCH (node) SEARCH node IN (FULLTEXT INDEX kernl_entity_text FOR 'ada' LIMIT 10) SCORE AS score RETURN node.name",
       "CALL db.labels()",
       "MATCH (n:Person) CALL (n) { MATCH (n)--(m) RETURN count(m) AS c } RETURN n.name, c",
       "MATCH (n:Offset) RETURN n // DELETE in a comment",

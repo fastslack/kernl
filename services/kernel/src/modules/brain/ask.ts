@@ -28,9 +28,16 @@ import type { EmbeddingsClient } from "../../core/embeddings/index.js";
 import type { GraphDriver } from "../../core/db-drivers/graph-driver.js";
 import { log } from "../../core/logger.js";
 import type { BrainService } from "./service.js";
-import { runVectorSearch } from "../../sdk/graph-vectors.js";
+import { fulltextSearchClause, runVectorSearch } from "../../sdk/graph-vectors.js";
 
-export const ENTITY_TEXT_INDEX = "kernl_entity_text";
+/**
+ * Entity names, titles and subjects, plus `search_fold`: the same text without
+ * accents. Relate's full-text index does not fold them (Lucia ≠ Lucía), and
+ * its index takes no analyzer option, so Kernl keeps the folded copy itself.
+ * v2 added that property; the first index (v1) is dropped on the way.
+ */
+export const ENTITY_TEXT_INDEX = "kernl_entity_text_v2";
+const OLD_ENTITY_TEXT_INDEXES = ["kernl_entity_text"];
 const MEMORY_VECTOR_INDEX = "memory-embeddings";
 const LEARNING_VECTOR_INDEX = "agent-learning-embeddings";
 const LEARNING_TEXT_INDEX = "agent-learning-text";
@@ -120,14 +127,67 @@ export function queryTerms(text: string, max = 12): string[] {
 
 let entityIndexEnsured: GraphDriver | null = null;
 
-/** Create the full-text index over entity names once per graph driver. */
+/** Lowercase, without accents: "Lucía Ferreyra" → "lucia ferreyra". */
+export function foldText(text: string): string {
+  return text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
+/** A full-text query that also finds what is written with (or without) accents the query lacks (or has). */
+export function foldedQuery(text: string): string {
+  const folded = foldText(text);
+  return folded === text.toLowerCase() ? text : `${text} ${folded}`;
+}
+
+/** Accented letters and their bare form, for folding inside Cypher (which has no unaccent()). */
+export const FOLD_PAIRS: Array<[string, string]> = [..."áàäâãåāéèëêēíìïîīóòöôõøōúùüûūñçýÿšžčćłđ"].map((c) => [c, foldText(c)]);
+
+/**
+ * Write `search_fold` on every entity whose name, title, subject or label has
+ * accents (and only those: the rest already match a bare query). Idempotent;
+ * touches only nodes whose folded text changed.
+ */
+export const FOLD_ENTITIES_CYPHER = `
+MATCH (n:${ENTITY_LABELS.join("|")})
+WITH n, toLower(trim(coalesce(n.name, '') + ' ' + coalesce(n.title, '') + ' ' + coalesce(n.subject, '') + ' ' + coalesce(n.label, ''))) AS raw
+WHERE raw <> ''
+WITH n, raw, reduce(s = raw, p IN $pairs | replace(s, p[0], p[1])) AS folded
+WHERE folded <> raw AND (n.search_fold IS NULL OR n.search_fold <> folded)
+SET n.search_fold = folded
+RETURN count(n) AS folded`;
+
+const FOLD_EVERY_MS = 10 * 60_000;
+const lastFold = new WeakMap<GraphDriver, number>();
+
+/**
+ * Keep `search_fold` current, in the background: on first use of a graph and
+ * then at most every ten minutes, when someone searches. A pass over 90k nodes
+ * takes about 1.5 s in Relate; nobody waits for it.
+ */
+export function refreshEntityFolds(graph: GraphDriver, now = Date.now()): Promise<number> | null {
+  const last = lastFold.get(graph);
+  if (last !== undefined && now - last < FOLD_EVERY_MS) return null;
+  lastFold.set(graph, now);
+  return graph.run(FOLD_ENTITIES_CYPHER, { pairs: FOLD_PAIRS })
+    .then((r) => Number(r.records[0]?.get("folded") ?? 0))
+    .catch((err) => {
+      log.debug(`entity text: folding accents failed — ${err instanceof Error ? err.message : String(err)}`);
+      return 0;
+    });
+}
+
+/** Create the full-text index over entity names once per graph driver, and start folding accents. */
 export async function ensureEntityTextIndex(graph: GraphDriver): Promise<void> {
-  if (entityIndexEnsured === graph) return;
-  await graph.run(
-    `CREATE FULLTEXT INDEX ${ENTITY_TEXT_INDEX} IF NOT EXISTS
-     FOR (n:${ENTITY_LABELS.join("|")}) ON EACH [n.name, n.title, n.subject, n.label]`,
-  );
-  entityIndexEnsured = graph;
+  if (entityIndexEnsured !== graph) {
+    await graph.run(
+      `CREATE FULLTEXT INDEX ${ENTITY_TEXT_INDEX} IF NOT EXISTS
+       FOR (n:${ENTITY_LABELS.join("|")}) ON EACH [n.name, n.title, n.subject, n.label, n.search_fold]`,
+    );
+    for (const old of OLD_ENTITY_TEXT_INDEXES) {
+      try { await graph.run(`DROP INDEX ${old} IF EXISTS`); } catch { /* not there, or not droppable here */ }
+    }
+    entityIndexEnsured = graph;
+  }
+  void refreshEntityFolds(graph);
 }
 
 export async function askMemory(
@@ -255,11 +315,11 @@ export async function askMemory(
     if (!g) return "graph off";
     if (terms.length === 0) return "no terms";
     const r = await g.run(
-      `CALL db.index.fulltext.queryNodes($index, $terms) YIELD node AS l, score
+      `${fulltextSearchClause(g, { alias: "l", index: LEARNING_TEXT_INDEX, label: "AgentLearning", query: "$terms", k: LEG_SIZE * 5 })}
        WHERE l.active = true
        RETURN l.id AS id, l.type AS type, l.content AS content, l.agent_id AS agent_id, elementId(l) AS el
        LIMIT ${LEG_SIZE}`,
-      { index: LEARNING_TEXT_INDEX, terms: terms.join(" ") },
+      { terms: terms.join(" ") },
     );
     return r.records.map((x) => learningCandidate(x.toObject()));
   });
@@ -269,14 +329,15 @@ export async function askMemory(
     if (terms.length === 0) return "no terms";
     await ensureEntityTextIndex(g);
     const r = await g.run(
-      `CALL db.index.fulltext.queryNodes($index, $terms) YIELD node AS n, score
+      `${fulltextSearchClause(g, { alias: "n", index: ENTITY_TEXT_INDEX, query: "$terms", k: LEG_SIZE * 3 })}
        WHERE NOT (n:Fact AND n.current = false)
        RETURN labels(n)[0] AS label, elementId(n) AS el,
               coalesce(n.id, n.gmail_id, n.gmail_thread_id, n.google_event_id, n.link) AS id,
               coalesce(n.name, n.title, n.subject, n.label) AS title,
               coalesce(n.description, n.snippet, n.content, n.email, n.company, '') AS text
        LIMIT ${LEG_SIZE}`,
-      { index: ENTITY_TEXT_INDEX, terms: terms.join(" ") },
+      // With the terms folded too: "Lucia" finds "Lucía", "Martín" finds "Martin".
+      { terms: foldedQuery(terms.join(" ")) },
     );
     return r.records.map((x) => {
       const label = str(x.get("label"));

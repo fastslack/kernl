@@ -47,6 +47,13 @@ export async function runGraphBackfills(
   graph: GraphDriver | null,
 ): Promise<BackfillOutcome[]> {
   if (!graph?.capabilities.cypher || backfills.length === 0) return [];
+  // One marker per backfill, looked up by name on every boot: unique, so the
+  // lookup and the MERGE use the index (Relate's planner flagged the scan).
+  try {
+    await graph.run("CREATE CONSTRAINT kernl_graph_backfill_name IF NOT EXISTS FOR (m:KernlGraphBackfill) REQUIRE m.name IS UNIQUE");
+  } catch (err) {
+    log.debug(`graph backfill: marker constraint not created — ${err instanceof Error ? err.message : String(err)}`);
+  }
   const outcomes: BackfillOutcome[] = [];
   for (const b of backfills) {
     try {

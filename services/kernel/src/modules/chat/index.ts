@@ -112,6 +112,16 @@ export function createChatModule(): ChatModule {
       return chatService;
     },
 
+    // The knowledge schema (constraints, vector indexes, list embeddings turned
+    // into VECTORs) on every store as soon as it is ready — a copied 0.4.x graph
+    // included — not on the first memory written after an upgrade.
+    getGraphBackfill() {
+      const svc = chatService;
+      return svc
+        ? { name: "chat-schema", version: 1, order: 5, run: async () => { await svc.getKnowledgeService().createConstraintsAndIndexes(); return { nodes: 0, relationships: 0 }; } }
+        : undefined;
+    },
+
     getDistiller() {
       return distiller;
     },
