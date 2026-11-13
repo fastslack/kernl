@@ -7,6 +7,8 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-13
+
 ### Actualizar desde 0.4.6
 
 - **El grafo ahora viene incluido y tu instalación se pasa sola.** En el primer
@@ -80,6 +82,10 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 ### Corregido
 
+- **La imagen de Docker se construye en ARM.** Entre las variantes de CPU de
+  whisper.cpp hay una que el compilador de bookworm no conoce en arm64, así que
+  la imagen del kernel no se construía en Graviton, una Raspberry Pi o Docker en
+  una Mac con Apple Silicon.
 - **`LIMIT $n` en Neo4j.** El driver de JavaScript manda todo número como
   float, y Neo4j lo rechaza después de `LIMIT` y `SKIP` ("'5000.0' is not a
   valid value"): fallaban la limpieza de huérfanos del grafo de cine, el

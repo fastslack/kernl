@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-13
+
 ### Upgrading from 0.4.6
 
 - **The graph is built in now, and your install moves to it on its own.** On
@@ -78,6 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Docker image builds on ARM.** whisper.cpp's CPU variants include one
+  bookworm's compiler does not know on arm64, so the kernel image failed to
+  build on Graviton, a Raspberry Pi or Docker on an Apple Silicon Mac.
 - **`LIMIT $n` on Neo4j.** The JavaScript driver sends every number as a
   float, which Neo4j refuses after `LIMIT` and `SKIP` ("'5000.0' is not a valid
   value"): the cinema graph's orphan cleanup, the graph explorer, chat memory
