@@ -1,14 +1,14 @@
 import type { Migration } from "@kernl/extension-sdk";
 
 /**
- * Which titles the graph limits keep out of Neo4j (see graph-budget.ts).
+ * Which titles the graph limits kept out of Neo4j (System › Storage, until
+ * 0.5.0 took the catalogue out of the graph).
  *
- * `cinema_graph_out` lists them; an empty table means no limits, so every
- * existing query keeps its behaviour until the user sets one. The embedder
- * and the per-title projectors skip what is listed here.
+ * `cinema_graph_out` lists them; an empty table means no limits. The embedder
+ * still skips what is listed, so titles a user left out are not embedded now.
  *
- * `cinema_graph_state` holds `frozen` = '1' while the graph is over the size
- * ceiling set on System › Storage: nothing new is written to it then.
+ * `cinema_graph_state` is cinema's key/value state (e.g. `vectors_in_sqlite`,
+ * `catalogue_out_of_graph`).
  */
 export const cinemaGraphLimitsMigration: Migration = {
   version: 21,

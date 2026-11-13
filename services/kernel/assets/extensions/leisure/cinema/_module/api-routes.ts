@@ -32,9 +32,8 @@ import type { CinemaService } from "./service.js";
 import type { CinemaSubsService, PublisherTrust } from "./subs-service.js";
 import type { DiscoveryRegistry } from "./discovery/registry.js";
 import type { EmbedRunner } from "./embed-runner.js";
-import type { GraphProjectionRunner } from "./graph-projection-runner.js";
-import type { GraphResolveRunner } from "./graph-resolve-runner.js";
-import { clearStaleProposalStamps, resolveComponents, revertGraphProposals } from "./graph-resolve.js";
+import type { AliasResolveRunner } from "./alias-resolve-runner.js";
+import { clearStaleProposalStamps, resolveComponents, revertGraphProposals } from "./alias-resolve.js";
 import type { TranslateRunner } from "./translate-runner.js";
 import type { CanonicalService } from "./canonical/service.js";
 import type { CanonicalRunner, CanonicalPhase } from "./canonical/runner.js";
@@ -100,8 +99,7 @@ export function registerCinemaRoutes(
   canonicalRunnerRef: () => CanonicalRunner | null = () => null,
   mediaRunnerRef: () => MediaProbeRunner | null = () => null,
   sqliteRef: () => SqliteDb | null = () => null,
-  graphProjectionRunnerRef: () => GraphProjectionRunner | null = () => null,
-  graphResolveRunnerRef: () => GraphResolveRunner | null = () => null,
+  aliasResolveRunnerRef: () => AliasResolveRunner | null = () => null,
 ): void {
   // ── GET /api/cinema/titles ──────────────────────────────────────
   server.route("GET", "/api/cinema/titles", async ({ query: params }) => {
@@ -382,7 +380,7 @@ export function registerCinemaRoutes(
     return { tags, total: tags.length };
   });
 
-  // ── Embedding runner (drives the bge-m3 → Neo4j vector indexer) ─
+  // ── Embedding runner (fills the SQLite vector store) ────────────
   // GET  /api/cinema/embed/status — full snapshot for the UI progress bar
   // POST /api/cinema/embed/start  { batch_size? }
   // POST /api/cinema/embed/stop   (graceful, finishes current batch)
@@ -395,40 +393,28 @@ export function registerCinemaRoutes(
   server.route("POST", "/api/cinema/embed/stop", () =>
     wired(embedRunnerRef(), "embed runner").stop());
 
-  // ── Catalogue → graph projection ─────────────────────────────────
-  // GET  /api/cinema/graph/status — per-entity cursors + rate
-  // POST /api/cinema/graph/start  { batch_size?, reset? }
-  // POST /api/cinema/graph/stop   (graceful, finishes current batch)
-  server.route("GET", "/api/cinema/graph/status", () =>
-    wired(graphProjectionRunnerRef(), "graph projection runner").snapshot());
-
-  server.route<{ batch_size?: number; reset?: boolean }>("POST", "/api/cinema/graph/start", ({ body }) =>
-    wired(graphProjectionRunnerRef(), "graph projection runner")
-      .start({ batchSize: body?.batch_size, reset: body?.reset === true }));
-
-  server.route("POST", "/api/cinema/graph/stop", () =>
-    wired(graphProjectionRunnerRef(), "graph projection runner").stop());
-
-  // ── Graph-assisted identity recovery ─────────────────────────────
+  // ── Alias full-text identity recovery ────────────────────────────
+  // (The paths keep "graph" from when this ran on the graph; it runs on
+  // SQLite FTS5 now and the catalogue is not in the graph.)
   // GET  /api/cinema/graph/resolve/status
   // POST /api/cinema/graph/resolve/start      { batch_size?, reset? }
   // POST /api/cinema/graph/resolve/stop
-  // POST /api/cinema/graph/resolve/components  run WCC, send proposals to review
-  // POST /api/cinema/graph/resolve/revert      undo every graph proposal
+  // POST /api/cinema/graph/resolve/components  group candidates, send proposals to review
+  // POST /api/cinema/graph/resolve/revert      undo every proposal from this path
   server.route("GET", "/api/cinema/graph/resolve/status", () =>
-    wired(graphResolveRunnerRef(), "resolve runner").snapshot());
+    wired(aliasResolveRunnerRef(), "resolve runner").snapshot());
 
   server.route<{ batch_size?: number; reset?: boolean }>("POST", "/api/cinema/graph/resolve/start", ({ body }) =>
-    wired(graphResolveRunnerRef(), "resolve runner")
+    wired(aliasResolveRunnerRef(), "resolve runner")
       .start({ batchSize: body?.batch_size, reset: body?.reset === true }));
 
   server.route("POST", "/api/cinema/graph/resolve/stop", () =>
-    wired(graphResolveRunnerRef(), "resolve runner").stop());
+    wired(aliasResolveRunnerRef(), "resolve runner").stop());
 
   server.route("POST", "/api/cinema/graph/resolve/components", async () => {
     const db = wired(sqliteRef(), "sqlite");
     const t0 = Date.now();
-    const result = await resolveComponents(db, graphRef());
+    const result = resolveComponents(db);
     return { ...result, duration_ms: Date.now() - t0 };
   });
 

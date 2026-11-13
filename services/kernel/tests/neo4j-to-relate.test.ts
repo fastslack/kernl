@@ -44,7 +44,9 @@ async function seedNeo4j() {
     CREATE (c:Concept {label_lower: 'route planning', label: 'Route planning', gravity: 4.5, mention_count: 7})
     CREATE (a:Article {link: 'https://example.com/a', title: 'Trucks', published: localdatetime('2026-10-01T08:00:00')})
     CREATE (e)-[:HAS_MEMORY]->(m), (m)-[:EXPRESSES]->(c), (m)-[:MENTIONS]->(l)
-    CREATE (t:CinemaTitle {id: 'ct1', title: 'Nueve reinas', embedding: [0.5, 0.25, 0.125, 0.0625]})
+    CREATE (t:CinemaTitle {identifier: 'ct1', title: 'Nueve reinas'})
+    CREATE (w:CanonicalWork {qid: 'Q1'}), (g:Genre {name: 'drama'}), (d:Person {name_norm: 'fabian bielinsky', name: 'Fabián Bielinsky'})
+    CREATE (t)-[:IDENTIFIED_AS]->(w), (w)-[:HAS_GENRE]->(g), (w)-[:DIRECTED_BY]->(d), (t)-[:CREATED_BY]->(l)
   `);
   await s.run("CREATE CONSTRAINT person_id IF NOT EXISTS FOR (p:Person) REQUIRE p.id IS UNIQUE");
   await s.close();
@@ -55,7 +57,7 @@ describe.skipIf(!URI || !relateClientInstalled())("Neo4j to Relate", () => {
   const drivers: RelateGraphDriver[] = [];
   afterAll(async () => { for (const d of drivers) await d.stop(); });
 
-  it("copies every node and relationship, with temporal, point, big-integer and list values", async () => {
+  it("copies every node and relationship but the cinema catalogue's, with temporal, point, big-integer and list values", async () => {
     await seedNeo4j();
     const dir = mkdtempSync(join(tmpdir(), "kernl-n2r-"));
     const to = join(dir, "graph");
@@ -63,7 +65,9 @@ describe.skipIf(!URI || !relateClientInstalled())("Neo4j to Relate", () => {
     const entry = join(dir, "task.ts");
     writeFileSync(entry, `const m = await import(${JSON.stringify(join(import.meta.dir, "../src/core/db-drivers/builtins/neo4j-to-relate.ts"))}); await m.runNeo4jImportTask();\n`);
     const summary = await runNeo4jImportChild(src, to, { entry });
-    expect(summary).toStartWith("7 nodes, 4 relationships");
+    // 6 nodes and 4 relationships: the title, work, genre and director stay behind,
+    // and so do their edges — the one onto a CRM person included.
+    expect(summary).toStartWith("6 nodes, 4 relationships");
 
     const g = new RelateGraphDriver();
     g.configure({ path: to });
@@ -94,6 +98,11 @@ describe.skipIf(!URI || !relateClientInstalled())("Neo4j to Relate", () => {
 
     const a = await one("MATCH (a:Article) RETURN valueType(a.published) AS t, count(*) AS c");
     expect(String(a.get("t"))).toStartWith("LOCAL DATETIME");
+    const cinema = await one(`MATCH (n) WHERE n:CinemaTitle OR n:CanonicalWork OR n:Genre OR (n:Person AND n.id IS NULL)
+      RETURN count(n) AS c`);
+    expect(Number(cinema.get("c"))).toBe(0);
+    const people = await one("MATCH (p:Person) RETURN count(p) AS c");
+    expect(Number(people.get("c"))).toBe(2);
     const left = await one("MATCH (n:__KernlImport) RETURN count(n) AS c");
     expect(Number(left.get("c"))).toBe(0);
   }, 60_000);
@@ -101,8 +110,8 @@ describe.skipIf(!URI || !relateClientInstalled())("Neo4j to Relate", () => {
   it("estimates the graph's size in Relate from Neo4j's counts and a sample of its properties", async () => {
     await seedNeo4j();
     const e = await estimateRelateBytes(src);
-    expect(e.nodes).toBeGreaterThan(0);
-    expect(e.relationships).toBeGreaterThan(0);
+    expect(e.nodes).toBe(6);
+    expect(e.relationships).toBe(4);
     expect(e.bytes).toBeGreaterThanOrEqual(e.nodes * RELATE_BYTES.node + e.relationships * RELATE_BYTES.rel);
   }, 30_000);
 

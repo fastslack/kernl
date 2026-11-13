@@ -19,14 +19,16 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
     (los stacks viejos guardaban ahí la memoria del chat aun con el grafo
     apagado), se copia ese.
   - **Con Neo4j antes** (toda instalación Docker): Kernl arranca sobre Neo4j
-    como siempre y copia el grafo entero a Relate en segundo plano (memoria del
-    chat, vínculos entre contactos, noticias, el catálogo de cine y sus
-    vectores). Cuando termina y los conteos coinciden, pasa a Relate sin
+    como siempre y copia el grafo a Relate en segundo plano (memoria del chat,
+    vínculos entre contactos, noticias, las lecciones y decisiones de los
+    agentes), todo menos el catálogo de cine, que ya no vive en el grafo (ver
+    abajo). Cuando termina y los conteos coinciden, pasa a Relate sin
     reiniciar y trae lo que llegó a Neo4j durante la copia. Neo4j queda tal
     cual; volver a activarlo en /extensions es el camino de vuelta. La copia
-    tarda cerca de 1 ms por nodo o relación en una Mac M (un grafo de 0,95M
-    nodos y 2,3M relaciones: 53 minutos) y Kernl sigue funcionando todo ese
-    tiempo. Si se reinicia durante la copia, la copia empieza de nuevo.
+    tarda cerca de 1 ms por nodo o relación en una Mac M y Kernl sigue
+    funcionando todo ese tiempo. En una instalación real el catálogo de cine
+    era 0,93M de 0,95M nodos; sin él, el resto (13k nodos, 7,5k relaciones) se
+    copió en 7 segundos. Si se reinicia durante la copia, la copia empieza de nuevo.
   - **Neo4j apagado en ese momento**: Kernl arranca igual sobre Relate, lleno
     desde SQLite, y trae lo que vive solo en Neo4j (memoria del chat, vínculos,
     noticias) en cuanto Neo4j responde. Lo revisa en cada arranque y cada
@@ -40,10 +42,11 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
     de Relate. Un grafo más grande que lo que entra se queda en Neo4j, y la
     copia se reintenta recién cuando hay más memoria (o un
     `RELATE_LOGICAL_GRAPH_SIZE_LIMIT` mayor), no en cada arranque.
-  - **Memoria y tiempo de arranque**: Relate tiene todo el grafo en RAM. El
-    grafo de arriba ocupa 3,3 GB en disco y llegó a 12,2 GB de memoria al
-    copiarse; abrirlo tarda unos dos minutos en cada arranque. Dale ese margen a
-    la máquina de un grafo grande.
+  - **Memoria y tiempo de arranque**: Relate tiene todo el grafo en RAM. La
+    instalación de arriba, sin el catálogo, ocupa 2,7 MB en disco, llegó a
+    230 MB al copiarse y abre en menos de un segundo; con el catálogo eran
+    3,3 GB, 12,2 GB y dos minutos. Un grafo grande propio sigue necesitando
+    ese margen.
   - Lo que pasó queda en la tabla `kernl_upgrades` y en el log
     (`Graph upgrade: …`).
   - Para quedarte en Neo4j (porque usás Graph Data Science, por ejemplo), poné
@@ -60,6 +63,23 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
   la tabla de auditoría. No hay que hacer nada a mano.
 - **La migración agents 64 corre al arrancar**: las preguntas guardan de qué
   tratan y quién las respondió, por qué canal.
+- **Las extensiones incluidas que cambiaron traen versión nueva** (Cinema
+  1.38.0, y Agent Advanced, CRM, Google Sync, Metas, Notas, Recordatorios,
+  Repos, Compras y Tareas un patch arriba), así una instalación cuya copia vive
+  en la carpeta de extensiones toma el código nuevo en vez de quedarse con el
+  de la 0.4.6.
+- **El catálogo de cine sale del grafo.** Era una proyección de SQLite (obras,
+  identidades de Wikidata, directores, géneros, temas, colecciones) que nadie
+  leía desde que sus vectores pasaron a SQLite, y en una instalación real era
+  ~90% del grafo. La copia desde Neo4j lo deja atrás, y un grafo incluido que
+  ya lo tiene lo devuelve una vez al arrancar (las personas del CRM quedan:
+  solo se van los directores sin id del CRM). Navegar, buscar, títulos
+  similares y "para vos" funcionan igual. El rescate de uploads sin año por
+  sus alias corre ahora sobre un índice de texto completo de SQLite (la
+  migración cinema 22 lo arma con los alias ya descargados), y sus propuestas
+  siguen yendo a revisión. La parte de cine del grafo ya no aparece en
+  Sistema › Almacenamiento; los títulos que un límite dejó afuera ahí siguen
+  fuera de la búsqueda semántica.
 
 ### Agregado
 

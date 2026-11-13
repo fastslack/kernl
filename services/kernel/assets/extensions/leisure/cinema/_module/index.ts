@@ -5,7 +5,7 @@
  * Owns:
  *   - cinema_titles + cinema_ingest_runs SQLite tables
  *   - the scrape-API ingester
- *   - the embeddings worker that writes (:CinemaTitle) nodes to Neo4j
+ *   - the embeddings worker (vectors in SQLite, searched in-process)
  *   - HTTP API: /api/cinema/titles, /search, /title/:id, /watchlist,
  *     /watched, /ingest/{status,run}
  *
@@ -32,7 +32,6 @@ import {
   type SqliteDb,
   type AgentDriver,
   type RetentionPolicy,
-  type GraphBudget,
   log,
 } from "@kernl/extension-sdk";
 import { cinemaMigrations } from "./migrations/001_cinema_titles.js";
@@ -51,8 +50,8 @@ import { ConvertJobService } from "./convert-jobs.js";
 import { cinemaTools } from "./tools.js";
 import { EmbedRunner } from "./embed-runner.js";
 import { migrateGraphVectors, bulkEmbeddingAllowed } from "./embeddings.js";
-import { GraphProjectionRunner } from "./graph-projection-runner.js";
-import { GraphResolveRunner } from "./graph-resolve-runner.js";
+import { AliasResolveRunner } from "./alias-resolve-runner.js";
+import { dropCatalogueFromGraph } from "./graph-cleanup.js";
 import { TranslateRunner } from "./translate-runner.js";
 import { CanonicalService } from "./canonical/service.js";
 import { CanonicalRunner } from "./canonical/runner.js";
@@ -61,7 +60,6 @@ import { MediaProbeRunner } from "./media-runner.js";
 import { ingestNextChunk } from "./ingester.js";
 import { cinemaAgentDrivers } from "./agent-drivers.js";
 import { cinemaRetentionPolicies } from "./retention.js";
-import { cinemaGraphBudget } from "./graph-budget.js";
 import path from "node:path";
 
 export interface CinemaModule extends ExtensibleModule {
@@ -71,8 +69,7 @@ export interface CinemaModule extends ExtensibleModule {
   getDirectoriesProvider(): NostrDirectoriesProvider | null;
   getDiscoveryRegistry(): DiscoveryRegistry | null;
   getEmbedRunner(): EmbedRunner | null;
-  getGraphProjectionRunner(): GraphProjectionRunner | null;
-  getGraphResolveRunner(): GraphResolveRunner | null;
+  getAliasResolveRunner(): AliasResolveRunner | null;
   getTranslateRunner(): TranslateRunner | null;
   /** Wire the semantic-search dependencies. Called from index.ts AFTER
    *  the embeddings client is created (which itself depends on config
@@ -111,8 +108,7 @@ export function createCinemaModule(): CinemaModule {
   let graphRef: GraphDriver | null = null;
   let embeddingsRef: EmbeddingsClient | null = null;
   let embedRunner: EmbedRunner | null = null;
-  let graphProjectionRunner: GraphProjectionRunner | null = null;
-  let graphResolveRunner: GraphResolveRunner | null = null;
+  let aliasResolveRunner: AliasResolveRunner | null = null;
   let translateRunner: TranslateRunner | null = null;
   let canonicalService: CanonicalService | null = null;
   let canonicalRunner: CanonicalRunner | null = null;
@@ -149,15 +145,10 @@ export function createCinemaModule(): CinemaModule {
       // stop / status) drive it. Lazy-resolves embedder + graph at run
       // time so it picks up post-bootstrap wiring.
       embedRunner = new EmbedRunner(service, () => embeddingsRef);
-      // GraphProjectionRunner — projects the catalogue's structure (release
-      // groups, canonical identities, people, genres, subjects) into Neo4j as
-      // nodes and edges. Independent of the embedder: it MERGEs onto the same
-      // (:CinemaTitle) nodes, so vectors and edges converge without either
-      // pass waiting on the other.
-      graphProjectionRunner = new GraphProjectionRunner(ctx.sqlite, () => graphRef);
-      // GraphResolveRunner — recovers identities the year-blocked matcher cannot
-      // reach, via the alias full-text index. Proposals only; nothing auto-accepted.
-      graphResolveRunner = new GraphResolveRunner(ctx.sqlite, () => graphRef);
+      // AliasResolveRunner — recovers identities the year-blocked matcher
+      // cannot reach, via the alias full-text index (SQLite FTS5). Proposals
+      // only; nothing auto-accepted. The catalogue is not in the graph.
+      aliasResolveRunner = new AliasResolveRunner(ctx.sqlite);
       // TranslateRunner — fills cinema_titles.description_es via the
       // kernel-wide llm() chain. No graph/embedder dependency; writes ES
       // text to SQLite and clears each row's embed bookkeeping so the
@@ -242,6 +233,9 @@ export function createCinemaModule(): CinemaModule {
               }
             })
             .catch((err) => log.warn("cinema: moving vectors out of the graph failed — will retry on next start", err))
+            // Then the catalogue nodes themselves, from a built-in graph that holds them.
+            .then(() => dropCatalogueFromGraph(graph, db))
+            .catch((err) => log.warn("cinema: taking the catalogue out of the graph failed — will retry on next start", err))
         : Promise.resolve();
       if (embedRunner && embeddings) {
         const runner = embedRunner;
@@ -314,12 +308,8 @@ export function createCinemaModule(): CinemaModule {
       return embedRunner;
     },
 
-    getGraphProjectionRunner() {
-      return graphProjectionRunner;
-    },
-
-    getGraphResolveRunner() {
-      return graphResolveRunner;
+    getAliasResolveRunner() {
+      return aliasResolveRunner;
     },
 
     getTranslateRunner() {
@@ -359,11 +349,6 @@ export function createCinemaModule(): CinemaModule {
       return cinemaRetentionPolicies();
     },
 
-    /** Its share of the graph, bounded on System › Storage (graph-budget.ts). */
-    getGraphBudgets(): GraphBudget[] {
-      return [cinemaGraphBudget()];
-    },
-
     getAgentDrivers(): AgentDriver[] {
       return cinemaAgentDrivers({
         service: () => service,
@@ -398,8 +383,7 @@ export function createCinemaModule(): CinemaModule {
       const getSqlite = () => sqliteRef;
       const getTranscribeJobs = () => transcribeJobs;
       const getConvertJobs = () => convertJobs;
-      const getGraphProjectionRunner = () => graphProjectionRunner;
-      const getGraphResolveRunner = () => graphResolveRunner;
+      const getAliasResolveRunner = () => aliasResolveRunner;
       return {
         // No nav entry yet — /cinema is already registered from the
         // dashboard module's static routes. Stage 3 swaps the data
@@ -412,8 +396,7 @@ export function createCinemaModule(): CinemaModule {
               getGraph, getEmbedder, getRegistry, getEmbedRunner,
               getDirectories, getDirectoriesProvider, getLocalIdentity,
               getTranslateRunner, getCanonical, getCanonicalRunner,
-              getMediaRunner, getSqlite, getGraphProjectionRunner,
-              getGraphResolveRunner,
+              getMediaRunner, getSqlite, getAliasResolveRunner,
             );
           }
           // Media-serving layer (archive.org proxy/transcode/probe + subtitle

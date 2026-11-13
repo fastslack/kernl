@@ -2,16 +2,35 @@
  * Background runner for candidate proposal.
  *
  * One full-text query per unmatched title over ~120k titles is minutes of work,
- * so it gets the same treatment as the projection: a loop that can be stopped,
- * resumed, and watched. The component pass that follows is a single GDS call and
- * is invoked directly rather than looped.
+ * so it is a loop that can be stopped, resumed, and watched; its cursor lives in
+ * `cinema_graph_cursors` (the table the old graph projection kept its cursors
+ * in). The component pass that follows is one read of the candidates and is
+ * invoked directly rather than looped.
  */
 
-import { log, type SqliteDb, type GraphDriver } from "@kernl/extension-sdk";
-import { readCursor, writeCursor } from "./graph-projection.js";
-import { DEFAULT_RESOLVE_BATCH, proposeBatch } from "./graph-resolve.js";
+import { log, type SqliteDb } from "@kernl/extension-sdk";
+import { DEFAULT_RESOLVE_BATCH, proposeBatch } from "./alias-resolve.js";
 
 const ENTITY = "resolve";
+
+interface CursorRow { cursor: string; projected: number; done: number }
+
+function readCursor(db: SqliteDb, entity: string): CursorRow {
+  const row = db
+    .prepare("SELECT cursor, projected, done FROM cinema_graph_cursors WHERE entity = ?")
+    .get(entity) as CursorRow | undefined;
+  return row ?? { cursor: "", projected: 0, done: 0 };
+}
+
+function writeCursor(db: SqliteDb, entity: string, cursor: string, projected: number, done: boolean): void {
+  db.prepare(
+    `INSERT INTO cinema_graph_cursors (entity, cursor, projected, done, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(entity) DO UPDATE SET
+       cursor = excluded.cursor, projected = excluded.projected,
+       done = excluded.done, updated_at = excluded.updated_at`,
+  ).run(entity, cursor, projected, done ? 1 : 0, new Date().toISOString());
+}
 const MAX_CONSECUTIVE_FAILURES = 5;
 
 export type ResolveStatus = "idle" | "running" | "stopping" | "stopped" | "done" | "failed";
@@ -29,7 +48,7 @@ export interface ResolveSnapshot {
   error: string;
 }
 
-export class GraphResolveRunner {
+export class AliasResolveRunner {
   private status: ResolveStatus = "idle";
   private runPromise: Promise<void> | null = null;
   private startedAt: string | null = null;
@@ -43,10 +62,7 @@ export class GraphResolveRunner {
   private stopRequested = false;
   private failures = 0;
 
-  constructor(
-    private db: SqliteDb,
-    private getGraph: () => GraphDriver | null,
-  ) {}
+  constructor(private db: SqliteDb) {}
 
   snapshot(): ResolveSnapshot {
     const elapsed = this.startedAtMs > 0 ? (Date.now() - this.startedAtMs) / 1000 : 0;
@@ -66,10 +82,6 @@ export class GraphResolveRunner {
 
   start(opts: { batchSize?: number; reset?: boolean } = {}): ResolveSnapshot {
     if (this.status === "running" || this.status === "stopping") return this.snapshot();
-    const graph = this.getGraph();
-    if (!graph?.capabilities.cypher) {
-      throw new Error("graph driver unavailable — activate Neo4j in /extensions");
-    }
     if (opts.reset) writeCursor(this.db, ENTITY, "", 0, false);
 
     this.batchSize = Math.max(50, Math.min(opts.batchSize ?? DEFAULT_RESOLVE_BATCH, 5000));
@@ -104,14 +116,16 @@ export class GraphResolveRunner {
     while (!this.stopRequested) {
       const state = readCursor(this.db, ENTITY);
       try {
-        const batch = await proposeBatch(this.db, this.getGraph(), state.cursor, this.batchSize);
+        const batch = proposeBatch(this.db, state.cursor, this.batchSize);
+        // Yield between batches: they are synchronous SQLite work.
+        await new Promise((r) => setTimeout(r, 0));
         if (batch.titles === 0) {
           writeCursor(this.db, ENTITY, state.cursor, state.projected, true);
           this.status = "done";
           this.finishedAt = new Date().toISOString();
           log.info(
             `cinema resolve: proposal pass complete — ${this.scanned} titles scanned, ` +
-            `${this.withCandidates} with candidates, ${this.candidates} edges`,
+            `${this.withCandidates} with candidates, ${this.candidates} candidates`,
           );
           return;
         }

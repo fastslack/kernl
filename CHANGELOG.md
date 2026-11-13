@@ -19,14 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (older stacks wrote chat memory there even with the graph switched off),
     it is copied instead.
   - **Neo4j before** (every Docker install): Kernl starts on Neo4j as before
-    and copies the whole graph into Relate in the background (chat memory,
-    contact links, news, the cinema catalogue and its vectors included). When
+    and copies the graph into Relate in the background (chat memory, contact
+    links, news, the agents' lessons and decisions), all of it but the cinema
+    catalogue, which no longer lives in the graph (see below). When
     the copy is done and the counts check out it switches to Relate without a
     restart, then brings over what reached Neo4j during the copy. Neo4j is left
     exactly as it was; activating it again in /extensions is the way back. The
-    copy takes about 1 ms per node or relationship on an M-series Mac (a
-    graph of 0.95M nodes and 2.3M relationships: 53 minutes), and Kernl keeps
-    working all along. A restart during the copy starts it over.
+    copy takes about 1 ms per node or relationship on an M-series Mac, and
+    Kernl keeps working all along. On a real install the cinema catalogue was
+    0.93M of 0.95M nodes; without it the rest (13k nodes, 7.5k relationships)
+    copied in 7 seconds. A restart during the copy starts it over.
   - **Neo4j not running at that moment**: Kernl starts on Relate anyway, filled
     from SQLite, and brings over what lives only in Neo4j (chat memory, contact
     links, news) as soon as Neo4j answers. It checks on every start and every
@@ -40,10 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     A graph larger than the machine can hold stays on Neo4j, and the copy is
     only tried again once there is more memory (or a larger
     `RELATE_LOGICAL_GRAPH_SIZE_LIMIT`), not on every start.
-  - **Memory and start time**: Relate holds the whole graph in RAM. The graph
-    above takes 3.3 GB on disk and peaked at 12.2 GB of memory while copying;
-    opening it takes about two minutes on every start. Give a large graph's
-    machine that much headroom.
+  - **Memory and start time**: Relate holds the whole graph in RAM. The
+    install above, without the catalogue, takes 2.7 MB on disk, peaked at
+    230 MB while copying and opens in a fraction of a second; with the
+    catalogue it was 3.3 GB, 12.2 GB and two minutes. A large graph of your
+    own still needs that kind of headroom.
   - What happened is recorded in the `kernl_upgrades` table and the log
     (`Graph upgrade: …`).
   - To stay on Neo4j (you use Graph Data Science, say), set
@@ -60,6 +63,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Nothing to do by hand.
 - **Migration agents 64 runs on start**: questions remember what they are
   about and who answered them, through which channel.
+- **Bundled extensions that changed carry a new version** (Cinema 1.38.0, and
+  Agent Advanced, CRM, Google Sync, Goals, Notes, Reminders, Repos, Shopping
+  and Tasks one patch up), so an install whose copy lives in the extensions
+  folder takes the new code instead of keeping 0.4.6's.
+- **The cinema catalogue leaves the graph.** It was a projection of SQLite
+  (works, Wikidata identities, directors, genres, subjects, collections) that
+  nothing read any more once its vectors moved to SQLite, and on a real
+  install it was ~90% of the graph. The copy from Neo4j leaves it behind, and
+  a built-in graph that already holds it gives it back once on start (the
+  CRM's people stay: only directors without a CRM id go). Browsing, search,
+  similar titles and "for you" work as before. Recovering yearless uploads by
+  their aliases now runs on a SQLite full-text index (migration cinema 22
+  builds it from the aliases already pulled), and its proposals still go to
+  review. The cinema share of the graph is gone from System › Storage; titles
+  a limit there left out stay out of semantic search.
 
 ### Added
 

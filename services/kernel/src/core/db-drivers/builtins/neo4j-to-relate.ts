@@ -5,9 +5,10 @@
  * SQLite is the system of record for most of what Kernl projects into the
  * graph, and the backfills rebuild it. Not all of it: chat long-term memory
  * (Memory, Episode, Concept — strength, reinforcement, gravity), the CRM's
- * KNOWS edges, the news Article archive and the cinema graph's vectors live
- * only in the graph. So an install that leaves Neo4j copies the whole graph,
- * not a projection of it.
+ * KNOWS edges and the news Article archive live only in the graph. So an
+ * install that leaves Neo4j copies the whole graph, not a projection of it —
+ * with one exception: the cinema catalogue (see CINEMA_LABELS), which was a
+ * projection of SQLite that nothing reads any more and was most of the graph.
  *
  * Reads stream over Bolt (one query per kind, records pulled as they are
  * written, so the source never has to fit in memory); writes go to the new
@@ -39,6 +40,26 @@ export interface Neo4jImportResult {
   schemaSkipped: number;
   ms: number;
 }
+
+/**
+ * The cinema catalogue's nodes, left behind by the copy. Cinema projected its
+ * catalogue from SQLite (works, Wikidata identities, people, genres, subjects,
+ * collections); since 0.5.0 its vectors live in SQLite and it no longer writes
+ * to or reads from the graph. On a real install it was ~90% of the graph —
+ * most of the copy's time and of the memory Relate would hold.
+ *
+ * Its directors and creators are `Person` nodes keyed by `name_norm`; the
+ * CRM's people always carry an `id`, so a `Person` without one is cinema's.
+ * Relationships with either end left behind are left behind too.
+ */
+export const CINEMA_LABELS = ["CanonicalWork", "CinemaTitle", "CinemaWork", "Subject", "Genre", "Country", "Collection"] as const;
+
+/** Cypher predicate: `v` is a node the copy keeps. Takes `$cinemaLabels`. */
+export const keptNode = (v: string) =>
+  `(NOT any(l IN labels(${v}) WHERE l IN $cinemaLabels) AND NOT (${v}:Person AND ${v}.id IS NULL))`;
+const KEPT_PARAMS = { cinemaLabels: [...CINEMA_LABELS] };
+const COUNT_NODES = `MATCH (n) WHERE ${keptNode("n")} RETURN count(n) AS n`;
+const COUNT_RELS = `MATCH (a)-[r]->(b) WHERE ${keptNode("a")} AND ${keptNode("b")} RETURN count(r) AS n`;
 
 const TEMP_LABEL = "__KernlImport";
 const TEMP_KEY = "__kernl_import";
@@ -124,7 +145,7 @@ async function countOn(conn: RelateConnection, cypher: string): Promise<number> 
 }
 
 async function countNeo4j(session: Session, cypher: string): Promise<number> {
-  const r = await session.run(cypher);
+  const r = await session.run(cypher, KEPT_PARAMS);
   return plain(r.records[0]?.get("n")).value as number;
 }
 
@@ -196,14 +217,16 @@ export async function estimateRelateBytes(src: Neo4jSource): Promise<RelateSizeE
   const driver = await connectNeo4j(src);
   const session = driver.session({ database: src.database, defaultAccessMode: neo4j.session.READ });
   try {
-    const nodes = await countNeo4j(session, "MATCH (n) RETURN count(n) AS n");
-    const relationships = await countNeo4j(session, "MATCH ()-[r]->() RETURN count(r) AS n");
+    const nodes = await countNeo4j(session, COUNT_NODES);
+    const relationships = await countNeo4j(session, COUNT_RELS);
     // Measured here, not in Cypher: Neo4j 5 refuses toString() of a map
     // ("expected Boolean, Float, … but was Map"), which Relate accepts — the
     // estimate failed against the very graph it exists for.
-    const avg = async (q: string) => averagePrintedChars((await session.run(q)).records.map((r) => r.get("p")));
-    const nodePropChars = nodes ? await avg("MATCH (n) WITH n LIMIT 5000 RETURN properties(n) AS p") : 0;
-    const relPropChars = relationships ? await avg("MATCH ()-[r]->() WITH r LIMIT 5000 RETURN properties(r) AS p") : 0;
+    const avg = async (q: string) => averagePrintedChars((await session.run(q, KEPT_PARAMS)).records.map((r) => r.get("p")));
+    const nodePropChars = nodes ? await avg(`MATCH (n) WHERE ${keptNode("n")} WITH n LIMIT 5000 RETURN properties(n) AS p`) : 0;
+    const relPropChars = relationships
+      ? await avg(`MATCH (a)-[r]->(b) WHERE ${keptNode("a")} AND ${keptNode("b")} WITH r LIMIT 5000 RETURN properties(r) AS p`)
+      : 0;
     const bytes = Math.ceil(nodes * (RELATE_BYTES.node + nodePropChars / 2) + relationships * (RELATE_BYTES.rel + relPropChars / 2));
     return { nodes, relationships, nodePropChars, relPropChars, bytes };
   } finally {
@@ -224,9 +247,9 @@ export async function importNeo4jIntoRelate(
   const dstDb = mod.Database.open(toPath);
   const dst = dstDb.connect();
   try {
-    const totalNodes = await countNeo4j(session, "MATCH (n) RETURN count(n) AS n");
-    const totalRels = await countNeo4j(session, "MATCH ()-[r]->() RETURN count(r) AS n");
-    log(`copying ${totalNodes} nodes and ${totalRels} relationships from ${src.uri}`);
+    const totalNodes = await countNeo4j(session, COUNT_NODES);
+    const totalRels = await countNeo4j(session, COUNT_RELS);
+    log(`copying ${totalNodes} nodes and ${totalRels} relationships from ${src.uri} (the cinema catalogue stays behind)`);
     await dst.queryAsync(`CREATE INDEX ${TEMP_INDEX} IF NOT EXISTS FOR (n:${TEMP_LABEL}) ON (n.${TEMP_KEY})`);
 
     // Nodes, streamed.
@@ -249,7 +272,10 @@ export async function importNeo4jIntoRelate(
       batch = [];
       if (copied % 20_000 < NODE_BATCH) log(`  ${copied}/${totalNodes} nodes`);
     };
-    const nodeResult = session.run("MATCH (n) RETURN elementId(n) AS id, labels(n) AS labels, properties(n) AS props");
+    const nodeResult = session.run(
+      `MATCH (n) WHERE ${keptNode("n")} RETURN elementId(n) AS id, labels(n) AS labels, properties(n) AS props`,
+      KEPT_PARAMS,
+    );
     for await (const rec of nodeResult) {
       batch.push({ id: String(rec.get("id")), labels: rec.get("labels") as string[], ...convert(rec.get("props") as Record<string, unknown>) });
       if (batch.length >= NODE_BATCH) await flushNodes();
@@ -275,7 +301,9 @@ export async function importNeo4jIntoRelate(
       rbatch = [];
     };
     const relResult = session.run(
-      "MATCH (a)-[r]->(b) RETURN elementId(a) AS a, elementId(b) AS b, type(r) AS t, properties(r) AS p",
+      `MATCH (a)-[r]->(b) WHERE ${keptNode("a")} AND ${keptNode("b")}
+       RETURN elementId(a) AS a, elementId(b) AS b, type(r) AS t, properties(r) AS p`,
+      KEPT_PARAMS,
     );
     for await (const rec of relResult) {
       rbatch.push({ a: String(rec.get("a")), b: String(rec.get("b")), t: String(rec.get("t")), ...convert(rec.get("p") as Record<string, unknown>) });
@@ -306,6 +334,8 @@ export async function importNeo4jIntoRelate(
       }
     } catch { /* an edition without SHOW: the modules recreate their schema */ }
     for (const s of statements) {
+      // The catalogue's constraints and indexes (cinema_title_identifier, …) stay behind with it.
+      if (/^CREATE (CONSTRAINT|INDEX|RANGE INDEX|TEXT INDEX|POINT INDEX) `?cinema/i.test(s)) continue;
       try {
         await dst.queryAsync(s.replace(/^CREATE (CONSTRAINT|INDEX) (\S+) /i, "CREATE $1 $2 IF NOT EXISTS ").replace(/IF NOT EXISTS IF NOT EXISTS/i, "IF NOT EXISTS").replace(/\s+OPTIONS\s+\{[\s\S]*\}\s*$/i, ""));
         schema++;
