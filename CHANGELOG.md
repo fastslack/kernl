@@ -46,7 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and fails if they differ. `restore.sh` puts it back for `--docker` and
   `--native`, keeping the store it replaces as `graph.before-restore-<time>`.
   A Docker restore also hands the restored files to the kernel's user:
-  `docker compose cp` wrote them as root.
+  `docker compose cp` wrote them as root. On Docker the snapshot is verified
+  inside the kernel container, so a host without bun (most servers) can run
+  `backup.sh`: it stopped at "bun not found" before.
 
 ## [0.5.0] - 2026-11-13
 

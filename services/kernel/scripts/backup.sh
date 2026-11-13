@@ -186,9 +186,20 @@ case "$MODE" in
       -e KERNL_SNAPSHOT_SRC="$CONTAINER_DB" -e KERNL_SNAPSHOT_DEST="$CONTAINER_TMP" \
       "$KERNEL_SERVICE" bun -e "$SNAPSHOT_JS" \
       || die "VACUUM INTO failed inside the $KERNEL_SERVICE container."
+    # Verified where the snapshot was made: a Docker host need not have bun
+    # (production's does not), the container always does. The copy out is
+    # then checked by size.
+    note "[2/6] Verifying the snapshot…"
+    docker compose --project-directory "$REPO_ROOT" exec -T \
+      -e KERNL_VERIFY_DB="$CONTAINER_TMP" "$KERNEL_SERVICE" bun -e "$VERIFY_JS" \
+      || die "the snapshot did not verify — NOT a usable backup."
+    SNAPSHOT_BYTES="$(docker compose --project-directory "$REPO_ROOT" exec -T "$KERNEL_SERVICE" \
+      stat -c %s "$CONTAINER_TMP" | tr -d '\r')"
     docker compose --project-directory "$REPO_ROOT" cp \
       "$KERNEL_SERVICE:$CONTAINER_TMP" "$BACKUP/data/kernel.db" \
       || die "could not copy the snapshot out of the container."
+    [ "$(wc -c < "$BACKUP/data/kernel.db" | tr -d ' ')" = "$SNAPSHOT_BYTES" ] \
+      || die "the snapshot copied out of the container is incomplete — NOT a usable backup."
     docker compose --project-directory "$REPO_ROOT" exec -T "$KERNEL_SERVICE" \
       rm -f "$CONTAINER_TMP" || true
 
@@ -222,11 +233,13 @@ case "$MODE" in
 esac
 
 # ── 2. Verify the snapshot before calling it a backup ────────────────
-note "[2/6] Verifying the snapshot…"
 [ -s "$BACKUP/data/kernel.db" ] || die "the snapshot is empty."
-command -v bun >/dev/null 2>&1 || die "bun not found — needed to verify the snapshot."
-KERNL_VERIFY_DB="$BACKUP/data/kernel.db" bun -e "$VERIFY_JS" \
-  || die "the snapshot did not verify — NOT a usable backup."
+if [ "$MODE" = "native" ]; then
+  note "[2/6] Verifying the snapshot…"
+  command -v bun >/dev/null 2>&1 || die "bun not found — needed to verify the snapshot."
+  KERNL_VERIFY_DB="$BACKUP/data/kernel.db" bun -e "$VERIFY_JS" \
+    || die "the snapshot did not verify — NOT a usable backup."
+fi
 
 DB_SIZE=$(du -h "$BACKUP/data/kernel.db" | cut -f1)
 note "      database: $DB_SIZE"

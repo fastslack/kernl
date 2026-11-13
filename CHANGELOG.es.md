@@ -50,7 +50,9 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
   devuelve en `--docker` y `--native`, y guarda el store que reemplaza como
   `graph.before-restore-<hora>`. Un restore en Docker además le devuelve los
   archivos restaurados al usuario del kernel: `docker compose cp` los dejaba
-  a nombre de root.
+  a nombre de root. En Docker la copia se verifica dentro del contenedor del
+  kernel, así que un host sin bun (la mayoría de los servidores) puede correr
+  `backup.sh`: antes cortaba con "bun not found".
 
 ## [0.5.0] - 2026-11-13
 
