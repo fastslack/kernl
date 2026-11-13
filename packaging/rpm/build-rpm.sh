@@ -21,6 +21,8 @@ cp "$FILES_DIR/kernl.sh"       "$SRC_TREE/packaging/kernl.sh"
 cp "$FILES_DIR/kernl.service"  "$SRC_TREE/packaging/kernl.service"
 cp "$FILES_DIR/kernl.desktop"  "$SRC_TREE/packaging/kernl.desktop"
 cp "$FILES_DIR/env.example"        "$SRC_TREE/packaging/env.example"
+cp "$FILES_DIR/kernl-system-update"  "$SRC_TREE/packaging/kernl-system-update"
+cp "$FILES_DIR/kernl-update.sudoers" "$SRC_TREE/packaging/kernl-update.sudoers"
 
 # Icon: a committed 256×256 PNG, not something rendered at build time.
 #

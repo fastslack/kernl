@@ -53,7 +53,8 @@ mkdir -p \
   "$DATA_ROOT/usr/lib/systemd/user" \
   "$DATA_ROOT/usr/share/applications" \
   "$DATA_ROOT/usr/share/icons/hicolor/256x256/apps" \
-  "$DATA_ROOT/etc/kernl"
+  "$DATA_ROOT/etc/kernl" \
+  "$DATA_ROOT/etc/sudoers.d"
 
 # Application tree under /opt/kernl.
 cp -a "$SRC_TREE/bin"            "$DATA_ROOT/opt/kernl/"
@@ -67,6 +68,11 @@ install -m 0755 "$RPM_FILES_DIR/kernl.sh"      "$DATA_ROOT/usr/bin/kernl"
 install -m 0644 "$RPM_FILES_DIR/kernl.service" "$DATA_ROOT/usr/lib/systemd/user/kernl.service"
 install -m 0644 "$RPM_FILES_DIR/kernl.desktop" "$DATA_ROOT/usr/share/applications/kernl.desktop"
 install -m 0644 "$RPM_FILES_DIR/env.example"       "$DATA_ROOT/etc/kernl/env.example"
+
+# Passwordless upgrade from the update button: a root-owned script and the one
+# sudoers line that lets the kernel's account run it (see the script's header).
+install -m 0755 "$RPM_FILES_DIR/kernl-system-update"  "$DATA_ROOT/opt/kernl/bin/kernl-system-update"
+install -m 0440 "$RPM_FILES_DIR/kernl-update.sudoers" "$DATA_ROOT/etc/sudoers.d/kernl-update"
 
 # Icon — same fallback chain as the RPM build.
 if [ -f "$RPM_FILES_DIR/kernl.png" ]; then
@@ -106,8 +112,9 @@ install -m 0755 "$SCRIPT_DIR/postrm"   "$CONTROL_ROOT/postrm"
 ( cd "$DATA_ROOT" && find . -type f -exec md5sum {} + | sed 's|  \./|  |' ) \
   > "$CONTROL_ROOT/md5sums"
 
-# Mark the env template as a conffile so dpkg preserves user edits.
-echo "/etc/kernl/env.example" > "$CONTROL_ROOT/conffiles"
+# Mark the env template and the sudoers drop-in as conffiles so dpkg preserves
+# an admin's edits (and a deletion) across upgrades.
+printf '%s\n' /etc/kernl/env.example /etc/sudoers.d/kernl-update > "$CONTROL_ROOT/conffiles"
 
 # ── 3) Tarball the two trees ───────────────────────────────────────
 TAR_DATA="$STAGE_DIR/data.tar.zst"

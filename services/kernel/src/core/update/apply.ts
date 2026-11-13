@@ -31,9 +31,10 @@
  * A directory nobody else owns (portable Windows, portable Linux, a macOS
  * bundle) is swapped. An MSI install is handed back to msiexec, which owns its
  * registry entry, its uninstaller and its elevation. A dpkg or rpm install is
- * upgraded by its package manager through the desktop's administrator prompt —
- * replacing files under /opt by hand would leave a package database that
- * disagrees with the disk.
+ * upgraded by its package manager — through the root-owned updater the package
+ * ships (sudo, no password; the only route a server without a desktop has),
+ * else through the desktop's administrator prompt. Replacing files under /opt
+ * by hand would leave a package database that disagrees with the disk.
  *
  * ── Untested on the platforms it matters most ──────────────────────────────
  * Written and exercised on Linux. The Windows and macOS helpers are generated
@@ -58,6 +59,8 @@ import {
   relaunchCommandFor,
   restartMethodFor,
   stagingParentFor,
+  SYSTEM_UPDATER_OWN_CODES,
+  systemUpdaterArgv,
   usesInstaller,
   type AssetSpec,
   type InstallKind,
@@ -546,7 +549,31 @@ async function applyPackage(
     isRoot: process.getuid?.() === 0,
     find: (tool) => findOnPath(tool),
   });
-  if (!plan.argv) {
+  // First the passwordless route the package ships (sudoers + a root-owned
+  // updater), which is the only one a server without a desktop has. When sudo
+  // says no, the route is not set up here, and pkexec gets its turn.
+  let installed = false;
+  const viaSudo = systemUpdaterArgv(to, file, {
+    isRoot: process.getuid?.() === 0,
+    find: (tool) => findOnPath(tool),
+    exists: (path) => existsSync(path),
+  });
+  if (viaSudo) {
+    phase({ phase: "installing" });
+    const run = await runCommand(viaSudo);
+    if (run.code === 0) {
+      installed = true;
+    } else if (run.code >= SYSTEM_UPDATER_OWN_CODES) {
+      return refuse(
+        `The system updater did not install it (exit ${run.code})${run.tail ? `: ${run.tail}` : ""}.`,
+        plan.manual,
+      );
+    } else {
+      log.info(`Passwordless package upgrade not available (${run.tail || `exit ${run.code}`}); trying pkexec.`);
+    }
+  }
+
+  if (!installed && !plan.argv) {
     return refuse(
       "Installing a system package needs administrator rights, and this machine has no graphical " +
         "password prompt (pkexec). The package is downloaded and verified — install it with:",
@@ -554,20 +581,22 @@ async function applyPackage(
     );
   }
 
-  phase({ phase: "installing" });
-  const run = await runCommand(plan.argv);
-  if (run.code === 126 || run.code === 127) {
-    return refuse(
-      "The administrator password prompt was dismissed or could not be shown, so nothing was " +
-        "installed. The package is downloaded and verified — install it with:",
-      plan.manual,
-    );
-  }
-  if (run.code !== 0) {
-    return refuse(
-      `The package manager failed (exit ${run.code})${run.tail ? `: ${run.tail}` : ""}.`,
-      plan.manual,
-    );
+  if (!installed && plan.argv) {
+    phase({ phase: "installing" });
+    const run = await runCommand(plan.argv);
+    if (run.code === 126 || run.code === 127) {
+      return refuse(
+        "The administrator password prompt was dismissed or could not be shown, so nothing was " +
+          "installed. The package is downloaded and verified — install it with:",
+        plan.manual,
+      );
+    }
+    if (run.code !== 0) {
+      return refuse(
+        `The package manager failed (exit ${run.code})${run.tail ? `: ${run.tail}` : ""}.`,
+        plan.manual,
+      );
+    }
   }
 
   // Installed. What is still running is the previous version.

@@ -152,6 +152,12 @@ install -m 0644 packaging/kernl.png %{buildroot}%{_datadir}/icons/hicolor/256x25
 install -d %{buildroot}%{_sysconfdir}/%{appname}
 install -m 0644 packaging/env.example %{buildroot}%{_sysconfdir}/%{appname}/env.example
 
+# Passwordless upgrade from the update button: a root-owned script and the one
+# sudoers line that lets the kernel's account run it (see the script's header).
+install -m 0755 packaging/kernl-system-update %{buildroot}%{appdir}/bin/kernl-system-update
+install -d %{buildroot}%{_sysconfdir}/sudoers.d
+install -m 0440 packaging/kernl-update.sudoers %{buildroot}%{_sysconfdir}/sudoers.d/kernl-update
+
 %files
 %{appdir}
 %{_bindir}/%{appname}
@@ -160,6 +166,9 @@ install -m 0644 packaging/env.example %{buildroot}%{_sysconfdir}/%{appname}/env.
 %{_datadir}/icons/hicolor/256x256/apps/%{appname}.png
 %dir %{_sysconfdir}/%{appname}
 %config %{_sysconfdir}/%{appname}/env.example
+# noreplace keeps an admin's edits. To turn passwordless upgrades off, create
+# /etc/kernl/system-update.disabled (a deleted config file comes back on upgrade).
+%config(noreplace) %attr(0440,root,root) %{_sysconfdir}/sudoers.d/kernl-update
 
 %post
 # Refresh icon and desktop caches so the launcher appears immediately.

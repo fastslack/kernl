@@ -1,0 +1,12 @@
+# Installed as /etc/sudoers.d/kernl-update by the kernl deb and rpm.
+#
+# Lets the Kernl kernel, which runs as an ordinary account, upgrade its own
+# package from the dashboard without a password prompt. It allows exactly one
+# program, which installs only an official Kernl release newer than the one
+# installed, verified against that release's checksums — see the comment at
+# the top of /opt/kernl/bin/kernl-system-update.
+#
+# To turn it off, create /etc/kernl/system-update.disabled; the update button
+# then shows the sudo command to run instead. (Deleting this file works too,
+# but rpm puts a missing config file back on the next upgrade.)
+ALL ALL=(root) NOPASSWD: /opt/kernl/bin/kernl-system-update

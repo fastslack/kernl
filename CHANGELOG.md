@@ -15,6 +15,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own.** On a busy install the 0.5.0 copy from Neo4j failed and stayed on
   Neo4j (`Neo4j import incomplete` in the log): nothing was lost, and the
   first start of 0.5.1 copies it again. Nothing to do by hand.
+- **A deb or rpm install still needs the command once, for this update.** The
+  updater arrives with this package, so the install that is upgraded to it
+  runs the old way; every update after it goes through the button.
+
+### Added
+
+- **A deb or rpm install updates from the button without a password,
+  servers included.** The kernel runs as an ordinary account, and the only way
+  it had to ask for root was the desktop's password prompt (pkexec), so on a
+  machine without a desktop the button downloaded the package and handed back
+  a `sudo apt-get install …` to run by hand. The packages now ship
+  `/opt/kernl/bin/kernl-system-update` and one sudoers line that lets any
+  account run that script, and only it, as root. It copies the file somewhere
+  root owns, checks it against the release's `SHA256SUMS` fetched by root from
+  the official repository, refuses anything that is not the kernl package or
+  not newer than the one installed, and installs it with the distribution's
+  own tool. To turn it off, create `/etc/kernl/system-update.disabled`; the
+  button then falls back to pkexec and the printed command, as before.
 
 ### Fixed
 

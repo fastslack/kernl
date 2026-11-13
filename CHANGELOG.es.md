@@ -16,6 +16,25 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
   desde Neo4j fallaba y quedaba en Neo4j (`Neo4j import incomplete` en el
   log): no se perdió nada, y el primer arranque de la 0.5.1 la copia de nuevo.
   No hay que hacer nada a mano.
+- **Una instalación deb o rpm todavía necesita el comando una vez, para esta
+  actualización.** El actualizador llega con este paquete, así que la
+  instalación que se actualiza a él lo hace como antes; todas las siguientes
+  van por el botón.
+
+### Agregado
+
+- **Una instalación deb o rpm se actualiza desde el botón sin contraseña,
+  también en servidores.** El kernel corre con una cuenta común y la única
+  forma que tenía de pedir root era el aviso de contraseña del escritorio
+  (pkexec); en una máquina sin escritorio el botón bajaba el paquete y devolvía
+  un `sudo apt-get install …` para correr a mano. Los paquetes ahora traen
+  `/opt/kernl/bin/kernl-system-update` y una línea de sudoers que deja a
+  cualquier cuenta correr ese script, y solo ese, como root. Copia el archivo a
+  un lugar de root, lo verifica contra el `SHA256SUMS` de la release que baja
+  root desde el repositorio oficial, rechaza todo lo que no sea el paquete
+  kernl o no sea más nuevo que el instalado, y lo instala con la herramienta de
+  la distribución. Para apagarlo, crear `/etc/kernl/system-update.disabled`;
+  el botón vuelve a pkexec y al comando impreso, como antes.
 
 ### Corregido
 
