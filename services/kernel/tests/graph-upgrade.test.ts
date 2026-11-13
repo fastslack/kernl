@@ -7,7 +7,7 @@ import { runMigrations } from "../src/core/db/migrations.js";
 import { extensionsMigrations } from "../src/modules/extensions/migrations.js";
 import { GraphDriverRegistry } from "../src/core/db-drivers/graph-driver-registry.js";
 import type { GraphDriver } from "../src/core/db-drivers/graph-driver.js";
-import { upgradeGraphOnBoot, readUpgrade, neo4jCandidates, chooseGraphLimit, parseSize } from "../src/core/graph-upgrade.js";
+import { upgradeGraphOnBoot, readUpgrade, neo4jCandidates, chooseGraphLimit, parseSize, importTimeoutMs } from "../src/core/graph-upgrade.js";
 import type { Neo4jSource } from "../src/core/db-drivers/builtins/neo4j-to-relate.js";
 
 /**
@@ -271,6 +271,14 @@ describe("graph upgrade to 0.5.0", () => {
     // 1.5× would pass the ceiling: the whole GiBs under it.
     expect(chooseGraphLimit(7 * GIB, 2 * GIB, 8.5 * GIB)).toBe(8 * GIB);
     expect(chooseGraphLimit(9 * GIB, 2 * GIB, 8 * GIB)).toBeNull();
+  });
+
+  it("gives the copy time in proportion to the graph, so a production-sized one is not killed at the hour", () => {
+    const HOUR = 60 * 60_000;
+    expect(importTimeoutMs(1000)).toBe(HOUR);
+    // The rehearsal's graph took 53 minutes: it now gets ~2.7 hours.
+    expect(importTimeoutMs(947_761 + 2_334_384)).toBeGreaterThan(2.5 * HOUR);
+    expect(importTimeoutMs(0)).toBe(6 * HOUR);
   });
 
   it("looks for the old Neo4j where 0.4.x put it: saved config, environment, the shipped defaults", () => {

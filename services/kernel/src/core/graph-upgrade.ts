@@ -176,6 +176,18 @@ export function memoryCeilingBytes(): number {
 }
 
 /**
+ * How long the copy may run before it is killed. A fixed hour was too close:
+ * the rehearsal against a production graph (0.95M nodes, 2.3M relationships)
+ * took 53 minutes on an M-series Mac, about 1 ms per node or relationship, and
+ * a server CPU can be slower. So 3 ms each, never under an hour; six hours when
+ * the counts are unknown (the estimate failed), since the copy still has to finish.
+ */
+export function importTimeoutMs(elements: number): number {
+  if (!elements) return 6 * 60 * 60_000;
+  return Math.max(60 * 60_000, Math.ceil(elements * 3));
+}
+
+/**
  * The cap to copy under: 1.5× the estimate, whole GiB, at least what is
  * configured; null when even the estimate does not fit under the ceiling.
  */
@@ -246,8 +258,13 @@ export async function upgradeGraphOnBoot(reg: GraphDriverRegistry, db: SqliteDb,
       const configured = explicit ?? parseSize(typeof saved === "string" ? saved : null) ?? parseSize(DEFAULT_GRAPH_SIZE_LIMIT)!;
       const ceiling = explicit ?? (opts.memoryCeiling ?? memoryCeilingBytes)();
       let estimate = 0;
+      let elements = 0;
       try {
-        estimate = await (opts.sizeOf ?? (async (s) => (await estimateRelateBytes(s)).bytes))(src);
+        estimate = await (opts.sizeOf ?? (async (s) => {
+          const e = await estimateRelateBytes(s);
+          elements = e.nodes + e.relationships;
+          return e.bytes;
+        }))(src);
       } catch (err) {
         log.warn(`Graph upgrade: could not estimate the graph's size (${err instanceof Error ? err.message : String(err)}) — copying under ${formatGib(configured)}`);
       }
@@ -261,7 +278,7 @@ export async function upgradeGraphOnBoot(reg: GraphDriverRegistry, db: SqliteDb,
         return readUpgrade(db);
       }
       const runImport = (cap: number) => (opts.importGraph ?? ((s, to, l) =>
-        runNeo4jImportChild(s, to, { onLine: (line) => log.info(`Graph upgrade: ${line}`), env: { RELATE_LOGICAL_GRAPH_SIZE_LIMIT: l } })))(src, staging, formatGib(cap));
+        runNeo4jImportChild(s, to, { onLine: (line) => log.info(`Graph upgrade: ${line}`), env: { RELATE_LOGICAL_GRAPH_SIZE_LIMIT: l }, timeoutMs: importTimeoutMs(elements) })))(src, staging, formatGib(cap));
       try {
         log.info(`Graph upgrade: copying the Neo4j graph at ${src.uri} into Relate (${storePath}) under a ${formatGib(limit)} cap` +
           `${estimate ? ` (estimated ${formatGib(estimate)})` : ""} — once, before the kernel starts`);

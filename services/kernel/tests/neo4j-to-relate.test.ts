@@ -4,7 +4,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import neo4j from "neo4j-driver";
 import { writeFileSync } from "node:fs";
-import { runNeo4jImportChild, mergeGraphOnlyFromNeo4j, connectNeo4j, estimateRelateBytes, RELATE_BYTES, type Neo4jSource } from "../src/core/db-drivers/builtins/neo4j-to-relate.js";
+import { runNeo4jImportChild, mergeGraphOnlyFromNeo4j, connectNeo4j, estimateRelateBytes, averagePrintedChars, RELATE_BYTES, type Neo4jSource } from "../src/core/db-drivers/builtins/neo4j-to-relate.js";
+
+// The estimate used to print the maps in Cypher (toString(properties(n))): Relate
+// accepts it, Neo4j 5.22 refuses it, and the rehearsal against production's
+// Neo4j failed right there. The maps are measured in the client now.
+describe("measuring property maps for the size estimate", () => {
+  it("counts what the values hold, however the driver boxes them", () => {
+    const int = neo4j.int(42);
+    const dt = new neo4j.types.DateTime(2026, 11, 12, 14, 50, 0, 0, 0);
+    expect(averagePrintedChars([])).toBe(0);
+    expect(averagePrintedChars([{ a: 42 }, { a: int }])).toBe(JSON.stringify({ a: 42 }).length);
+    expect(averagePrintedChars([{ at: dt }])).toBe(JSON.stringify({ at: dt.toString() }).length);
+    expect(averagePrintedChars([{ e: [0.1, 0.2] }, null])).toBe((JSON.stringify({ e: [0.1, 0.2] }).length + 2) / 2);
+  });
+});
 import { relateClientInstalled, RelateGraphDriver } from "../src/core/db-drivers/builtins/relate-graph-driver.js";
 
 // The 0.5.0 upgrade of a Neo4j install: the whole graph moves, types intact.

@@ -162,6 +162,30 @@ export interface RelateSizeEstimate {
 }
 
 /**
+ * Average length of property maps printed as text — what the estimate scales.
+ * Driver integers count as the number they hold and temporal values as their
+ * ISO text, so the size does not depend on how the driver boxes them.
+ */
+export function averagePrintedChars(maps: unknown[]): number {
+  if (maps.length === 0) return 0;
+  // Before stringifying: the driver's Integer has a toJSON of its own that a replacer would only see the output of.
+  const plain = (v: unknown): unknown => {
+    if (typeof v === "bigint") return Number(v);
+    if (Array.isArray(v)) return v.map(plain);
+    if (v && typeof v === "object") {
+      const o = v as { toNumber?: () => number; toString?: () => string; constructor?: { name?: string } };
+      if (typeof o.toNumber === "function") return o.toNumber();
+      if (o.constructor && o.constructor.name !== "Object" && typeof o.toString === "function") return o.toString();
+      return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, plain(x)]));
+    }
+    return v;
+  };
+  let total = 0;
+  for (const m of maps) total += JSON.stringify(plain(m ?? {})).length;
+  return total / maps.length;
+}
+
+/**
  * How much of Relate's size cap a Neo4j graph will take once copied: counts
  * from Neo4j, plus a sample of how large the properties are. A property list
  * prints at ~20 characters a float against ~9 bytes stored, and strings are
@@ -174,13 +198,12 @@ export async function estimateRelateBytes(src: Neo4jSource): Promise<RelateSizeE
   try {
     const nodes = await countNeo4j(session, "MATCH (n) RETURN count(n) AS n");
     const relationships = await countNeo4j(session, "MATCH ()-[r]->() RETURN count(r) AS n");
-    const avg = async (q: string) => {
-      const r = await session.run(q);
-      const v = r.records[0]?.get("a");
-      return v == null ? 0 : Number(typeof v === "object" && "toNumber" in v ? v.toNumber() : v);
-    };
-    const nodePropChars = nodes ? await avg("MATCH (n) WITH n LIMIT 5000 RETURN avg(size(toString(properties(n)))) AS a") : 0;
-    const relPropChars = relationships ? await avg("MATCH ()-[r]->() WITH r LIMIT 5000 RETURN avg(size(toString(properties(r)))) AS a") : 0;
+    // Measured here, not in Cypher: Neo4j 5 refuses toString() of a map
+    // ("expected Boolean, Float, … but was Map"), which Relate accepts — the
+    // estimate failed against the very graph it exists for.
+    const avg = async (q: string) => averagePrintedChars((await session.run(q)).records.map((r) => r.get("p")));
+    const nodePropChars = nodes ? await avg("MATCH (n) WITH n LIMIT 5000 RETURN properties(n) AS p") : 0;
+    const relPropChars = relationships ? await avg("MATCH ()-[r]->() WITH r LIMIT 5000 RETURN properties(r) AS p") : 0;
     const bytes = Math.ceil(nodes * (RELATE_BYTES.node + nodePropChars / 2) + relationships * (RELATE_BYTES.rel + relPropChars / 2));
     return { nodes, relationships, nodePropChars, relPropChars, bytes };
   } finally {
