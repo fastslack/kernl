@@ -107,6 +107,17 @@ add the host overlay — then name the same files on every later `compose` comma
 docker compose -f docker-compose.yml -f docker-compose.host.yml up -d
 ```
 
+**Already running 0.4.x in Docker?** Update with `scripts/kernl.sh update` (it pulls,
+builds while the old kernel keeps serving, and recreates with the offices drained).
+On its first start 0.5.0 moves your graph from Neo4j to the built-in one by itself:
+it keeps serving from Neo4j while it copies, checks the counts and switches over
+live. Leave Neo4j running until the log says `Graph upgrade: caught up with what
+reached Neo4j during the copy`; after that
+`scripts/kernl.sh stop neo4j` is safe and your data stays in its volume. The cinema
+catalogue stays out of the graph now, which makes the copy seconds instead of an
+hour on a large catalogue. To stay on Neo4j (for Graph Data Science), set
+`KERNL_KEEP_NEO4J=1` first. Details in the [changelog](./CHANGELOG.md).
+
 </details>
 
 ## Your AI is brilliant — and amnesiac.
