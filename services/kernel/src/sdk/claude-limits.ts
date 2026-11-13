@@ -338,10 +338,89 @@ export function routeAroundClaudeLimit(requested: string, now: number = Date.now
   return claudeLimitFallback(requested, now) ?? requested;
 }
 
+/** Where one attempt of a call runs. */
+export interface ClaudeRoute {
+  accountId: string;
+  model: string;
+}
+
+/**
+ * Thrown by an attempt whose account's CLI session could not be used (expired,
+ * revoked). With other accounts connected the call moves on and the account
+ * sits out for a while; with none it surfaces as `cause`.
+ */
+export class ClaudeAccountSessionError extends Error {
+  constructor(message: string, readonly accountId: string) {
+    super(message);
+    this.name = "ClaudeAccountSessionError";
+  }
+}
+
+/**
+ * Run `attempt` across the subscription accounts: the first connected account
+ * not limited on `requested`, then the next one each time an attempt hits a
+ * usage limit, and only once every account is out on `requested`, its
+ * fallback model (pickClaudeRoute's order). Each limit is remembered on the
+ * account that hit it, so the next call starts on an account still free.
+ *
+ * `pinnedAccount` keeps every attempt on that account (only the model may
+ * change), for a caller that deliberately addresses one subscription.
+ *
+ * Not retried: a limit that hit after work was streamed (`partial`) and any
+ * error that is not a limit or a dead session. When no route is left the last
+ * limit error is thrown, which the provider chain treats as exhausted.
+ */
+export async function withClaudeAccountRotation<T>(
+  requested: string,
+  attempt: (route: ClaudeRoute) => Promise<T>,
+  opts: { pinnedAccount?: string; now?: () => number; onMove?: (from: ClaudeRoute, to: ClaudeRoute, reason: string) => void } = {},
+): Promise<T> {
+  const now = opts.now ?? Date.now;
+  const pinned = opts.pinnedAccount;
+  const next = (): ClaudeRoute | null => {
+    if (pinned !== undefined) {
+      if (!isClaudeModelLimited(requested, now(), pinned)) return { accountId: pinned, model: requested };
+      const model = claudeLimitFallback(requested, now(), pinned);
+      return model ? { accountId: pinned, model } : null;
+    }
+    return pickClaudeRoute(requested, now());
+  };
+  // Nothing known to be free: try the first route anyway, the CLI has the last word.
+  let route: ClaudeRoute = next()
+    ?? (pinned !== undefined
+      ? { accountId: pinned, model: requested }
+      : { accountId: primaryClaudeAccountId(), model: routeAroundClaudeLimit(requested, now()) });
+  const tried = new Set<string>();
+  for (;;) {
+    tried.add(`${route.accountId}|${route.model}`);
+    let reason: string;
+    try {
+      return await attempt(route);
+    } catch (err) {
+      if (err instanceof ClaudeUsageLimitError) {
+        rememberClaudeLimit(route.model, err.hit, now(), route.accountId);
+        if (err.partial) throw err;
+        reason = `usage limit (${err.hit.limitType ?? err.hit.kind})`;
+      } else if (err instanceof ClaudeAccountSessionError && pinned === undefined && listClaudeAccounts().length > 1) {
+        rememberClaudeAccountDown(route.accountId, now());
+        reason = "session unusable";
+      } else {
+        throw err;
+      }
+      const to = next();
+      if (!to || tried.has(`${to.accountId}|${to.model}`)) throw err;
+      log.warn(`Claude Code: ${reason} on account ${route.accountId} / ${route.model} — retrying on ${to.accountId} / ${to.model}`);
+      opts.onMove?.(route, to, reason);
+      route = to;
+    }
+  }
+}
+
 /**
  * Run `attempt` on `requested` (or on its fallback while it is limited); on a
  * usage limit, remember it and run once more on the fallback model. A limit
- * that hit after work was done (`partial`) is not retried.
+ * that hit after work was done (`partial`) is not retried. Primary account
+ * only — callers that can run on any account use withClaudeAccountRotation.
  */
 export async function withClaudeLimitFallback<T>(
   requested: string,
