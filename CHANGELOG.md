@@ -11,17 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The graph is built in now, and your install moves to it on its own.** On
   the first start of this version Kernl switches to Relate, the embedded graph,
-  once, before anything else runs. Nothing to do by hand:
+  once. Nothing to do by hand:
   - **No graph before** (the desktop app): Relate is switched on and filled from
     your SQLite data in the first minute. If a Neo4j with data in it answers
     (older stacks wrote chat memory there even with the graph switched off),
     it is copied instead.
-  - **Neo4j before** (every Docker install): the whole graph is copied into
-    Relate (chat memory, contact links, news, the cinema catalogue and its
-    vectors included), the counts are checked, then Kernl uses Relate. Neo4j is
-    left exactly as it was; activating it again in /extensions is the way back.
-    The first start takes longer by the time the copy needs, about a minute
-    per 100,000 nodes.
+  - **Neo4j before** (every Docker install): Kernl starts on Neo4j as before
+    and copies the whole graph into Relate in the background (chat memory,
+    contact links, news, the cinema catalogue and its vectors included). When
+    the copy is done and the counts check out it switches to Relate without a
+    restart, then brings over what reached Neo4j during the copy. Neo4j is left
+    exactly as it was; activating it again in /extensions is the way back. The
+    copy takes about 1 ms per node or relationship on an M-series Mac (a
+    graph of 0.95M nodes and 2.3M relationships: 53 minutes), and Kernl keeps
+    working all along. A restart during the copy starts it over.
   - **Neo4j not running at that moment**: Kernl starts on Relate anyway, filled
     from SQLite, and brings over what lives only in Neo4j (chat memory, contact
     links, news) as soon as Neo4j answers. It checks on every start and every
@@ -35,11 +38,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     A graph larger than the machine can hold stays on Neo4j, and the copy is
     only tried again once there is more memory (or a larger
     `RELATE_LOGICAL_GRAPH_SIZE_LIMIT`), not on every start.
+  - **Memory and start time**: Relate holds the whole graph in RAM. The graph
+    above takes 3.3 GB on disk and peaked at 12.2 GB of memory while copying;
+    opening it takes about two minutes on every start. Give a large graph's
+    machine that much headroom.
   - What happened is recorded in the `kernl_upgrades` table and the log
     (`Graph upgrade: …`).
   - To stay on Neo4j (you use Graph Data Science, say), set
     `KERNL_KEEP_NEO4J=1`. `KERNL_GRAPH_UPGRADE=off` skips the step entirely.
-- **Docker:** keep updating with `scripts/kernl.sh`. While the `neo4j-data`
+- **Docker:** update with `scripts/kernl.sh update` — it pulls, builds while
+  the old kernel keeps serving, and recreates the kernel and the dashboard with
+  the offices drained first, as `restart` does. While the `neo4j-data`
   volume exists it keeps the Neo4j service up, so the copy can read it. Once
   the log says the upgrade is done you can stop it with
   `scripts/kernl.sh stop neo4j`; your data stays in the volume.
@@ -47,6 +56,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   datetimes, embeddings become `VECTOR<FLOAT32>`, lessons get the time they
   were learned, and the provenance links are rebuilt from the audit table.
   Nothing to do by hand.
+
+### Fixed
+
+- **`LIMIT $n` on Neo4j.** The JavaScript driver sends every number as a
+  float, which Neo4j refuses after `LIMIT` and `SKIP` ("'5000.0' is not a valid
+  value"): the cinema graph's orphan cleanup, the graph explorer, chat memory
+  and the lesson constellation failed on Neo4j. The parameters a statement
+  pages with are now sent as integers.
+- **`AGENTS_SCHEDULER=off` left the inbox sweep running**, which woke agents
+  for letters already waiting. It is off with the scheduler now.
+- **Chat with Claude Code moves to the next connected account** when one hits
+  its usage limit, and to the rest of the model chain when every account is
+  out, instead of ending the turn on a 429.
+- **Relate's memory limit is applied.** Under Bun the cap never reached the
+  engine; a limit chosen in /extensions (or the one the upgrade sizes) is now
+  enforced, and no limit is applied unless one is chosen.
 
 ## [0.4.6] - 2026-11-08
 

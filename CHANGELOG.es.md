@@ -7,6 +7,73 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Actualizar desde 0.4.6
+
+- **El grafo ahora viene incluido y tu instalación se pasa sola.** En el primer
+  arranque de esta versión Kernl cambia a Relate, el grafo embebido, una sola
+  vez. No hay que hacer nada a mano:
+  - **Sin grafo antes** (la app de escritorio): se activa Relate y se llena con
+    tus datos de SQLite en el primer minuto. Si responde un Neo4j con datos
+    (los stacks viejos guardaban ahí la memoria del chat aun con el grafo
+    apagado), se copia ese.
+  - **Con Neo4j antes** (toda instalación Docker): Kernl arranca sobre Neo4j
+    como siempre y copia el grafo entero a Relate en segundo plano (memoria del
+    chat, vínculos entre contactos, noticias, el catálogo de cine y sus
+    vectores). Cuando termina y los conteos coinciden, pasa a Relate sin
+    reiniciar y trae lo que llegó a Neo4j durante la copia. Neo4j queda tal
+    cual; volver a activarlo en /extensions es el camino de vuelta. La copia
+    tarda cerca de 1 ms por nodo o relación en una Mac M (un grafo de 0,95M
+    nodos y 2,3M relaciones: 53 minutos) y Kernl sigue funcionando todo ese
+    tiempo. Si se reinicia durante la copia, la copia empieza de nuevo.
+  - **Neo4j apagado en ese momento**: Kernl arranca igual sobre Relate, lleno
+    desde SQLite, y trae lo que vive solo en Neo4j (memoria del chat, vínculos,
+    noticias) en cuanto Neo4j responde. Lo revisa en cada arranque y cada
+    30 minutos.
+  - **Si la copia falla**, Kernl sigue en Neo4j con todos sus datos y lo vuelve
+    a intentar en el próximo arranque.
+  - **Grafos grandes**: Relate tiene el grafo en memoria, sin límite salvo que
+    se elija uno. Antes de copiar, Kernl estima cuánto va a ocupar y copia con
+    1,5× eso como tope, hasta lo que la máquina puede dar (el límite de memoria
+    del contenedor, o el 80% de la RAM), y deja ese tope como límite de memoria
+    de Relate. Un grafo más grande que lo que entra se queda en Neo4j, y la
+    copia se reintenta recién cuando hay más memoria (o un
+    `RELATE_LOGICAL_GRAPH_SIZE_LIMIT` mayor), no en cada arranque.
+  - **Memoria y tiempo de arranque**: Relate tiene todo el grafo en RAM. El
+    grafo de arriba ocupa 3,3 GB en disco y llegó a 12,2 GB de memoria al
+    copiarse; abrirlo tarda unos dos minutos en cada arranque. Dale ese margen a
+    la máquina de un grafo grande.
+  - Lo que pasó queda en la tabla `kernl_upgrades` y en el log
+    (`Graph upgrade: …`).
+  - Para quedarte en Neo4j (porque usás Graph Data Science, por ejemplo), poné
+    `KERNL_KEEP_NEO4J=1`. `KERNL_GRAPH_UPGRADE=off` saltea el paso entero.
+- **Docker:** actualizá con `scripts/kernl.sh update`: hace pull, construye
+  mientras el kernel viejo sigue atendiendo y recrea el kernel y el dashboard
+  pausando antes las oficinas, como `restart`. Mientras exista el volumen
+  `neo4j-data` mantiene levantado el servicio de Neo4j, así la copia puede
+  leerlo. Cuando el log diga que el upgrade terminó podés frenarlo con
+  `scripts/kernl.sh stop neo4j`; tus datos quedan en el volumen.
+- **El esquema del grafo se actualiza al arrancar**: los tiempos de los hechos
+  pasan a fechas nativas, los embeddings a `VECTOR<FLOAT32>`, las lecciones
+  guardan cuándo se aprendieron y los vínculos de procedencia se rearman desde
+  la tabla de auditoría. No hay que hacer nada a mano.
+
+### Corregido
+
+- **`LIMIT $n` en Neo4j.** El driver de JavaScript manda todo número como
+  float, y Neo4j lo rechaza después de `LIMIT` y `SKIP` ("'5000.0' is not a
+  valid value"): fallaban la limpieza de huérfanos del grafo de cine, el
+  explorador del grafo, la memoria del chat y la constelación de lecciones. Los
+  parámetros de paginado ahora viajan como enteros.
+- **`AGENTS_SCHEDULER=off` dejaba andando el barrido de la bandeja**, que
+  despertaba agentes por cartas que ya estaban esperando. Ahora se apaga junto
+  con el scheduler.
+- **El chat con Claude Code pasa a la siguiente cuenta conectada** cuando una
+  llega a su límite de uso, y al resto de la cadena de modelos cuando todas se
+  agotaron, en vez de terminar el turno con un 429.
+- **Se aplica el límite de memoria de Relate.** Bajo Bun el tope nunca llegaba
+  al motor; ahora se respeta el que se elige en /extensions (o el que calcula el
+  upgrade), y no se aplica ninguno si nadie lo elige.
+
 ## [0.4.6] - 2026-11-08
 
 ### Actualizar desde 0.4.5
