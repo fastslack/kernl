@@ -7,6 +7,19 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Corregido
+
+- **Los backups ahora incluyen el grafo integrado.** Desde 0.5.0 el store de
+  Relate (`data/graph`) es la única copia de la memoria de largo plazo del chat,
+  los vínculos entre contactos y el archivo de noticias, y `backup.sh` lo
+  dejaba afuera. Ahora copia el store con el kernel andando (una instantánea de
+  solo lectura escrita como un store nuevo), reabre la copia, compara la
+  cantidad de nodos y relaciones y falla si no coinciden. `restore.sh` lo
+  devuelve en `--docker` y `--native`, y guarda el store que reemplaza como
+  `graph.before-restore-<hora>`. Un restore en Docker además le devuelve los
+  archivos restaurados al usuario del kernel: `docker compose cp` los dejaba
+  a nombre de root.
+
 ## [0.5.0] - 2026-11-13
 
 ### Actualizar desde 0.4.6

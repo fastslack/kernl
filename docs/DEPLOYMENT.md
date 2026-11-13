@@ -198,7 +198,8 @@ docker compose logs kernel -f --tail 100
 bash services/kernel/scripts/backup.sh ~/backup.zip
 ```
 
-This archives the SQLite database, the generated secrets, and configuration.
+This archives the SQLite database, the generated secrets, configuration, and the
+built-in graph store (`data/graph`, see [Graph Backup](#graph-backup)).
 
 ### Automated Backup (Cron)
 
@@ -239,29 +240,43 @@ bash services/kernel/scripts/restore.sh ~/backup.zip --docker /path/to/kernl
 bash services/kernel/scripts/restore.sh ~/backup.zip --native ~/.local/share/kernl/data
 ```
 
-Restoring replaces the target database, so it asks for confirmation; pass
-`--yes` for automation. The target mode is explicit on purpose — an earlier
+Restoring replaces the target database — and the graph store, when the archive
+has one — so it asks for confirmation; pass `--yes` for automation. The target mode is explicit on purpose — an earlier
 version guessed, guessed the repo's `./data`, and so "restored" a Docker
 deployment into a directory nothing reads.
 
 ### Graph Backup
 
 The built-in graph (Relate) lives in `data/graph`, next to the SQLite database —
-inside the `kernel-data` volume on Docker. **`backup.sh` does not include it yet.**
-Most of the graph is rebuilt from SQLite on start (the backfills), but not all of
-it: chat long-term memory, the links between contacts and the news archive live
-only in the graph. To keep those, archive the store with the kernel stopped (the
-kernel holds it open):
+inside the `kernel-data` volume on Docker. **`backup.sh` includes it.** Most of the
+graph is rebuilt from SQLite on start (the backfills), but not all of it: chat
+long-term memory, the links between contacts and the news archive live only in
+the graph, so a backup without it loses them.
 
-```bash
-scripts/kernl.sh stop kernel
-# Same caveat as below: confirm the volume name with `docker volume ls`.
-docker run --rm -v kernl-public_kernel-data:/data -v "$(pwd)/backups:/backup" \
-  alpine tar czf /backup/kernl-graph.tar.gz /data/graph
-scripts/kernl.sh start kernel
-```
+The kernel keeps running. The store is never copied file by file — the kernel
+holds it open, and a copy taken mid-checkpoint would mix two states. Instead
+`backup.sh` runs the kernel's own store copier (inside the `kernel` container on
+Docker, from the repo with `bun` on a native install): it opens the live store
+read-only, which sees every committed write including those still in the
+write-ahead log, and writes a fresh store from that snapshot. The copy is then
+reopened in a separate process and must have the same node and relationship
+counts, or the backup fails. While it runs, the copy needs memory for about one
+more copy of the graph.
 
-On a package or source install, stop Kernl and copy `<data-dir>/graph`.
+- `KERNEL_BACKUP_GRAPH_DIR` points native mode at a store elsewhere (default
+  `<data-dir>/graph`; under Docker the script follows `RELATE_DATABASE` as the
+  kernel does).
+- `KERNEL_BACKUP_SKIP_GRAPH=1` leaves the graph out — the backup then lacks
+  everything that lives only there.
+- An install still on the old single-file store (`graph.rl`, held exclusively by
+  the kernel) makes the backup fail rather than skip it; a 0.5+ kernel moves it
+  to `data/graph` on its first start.
+
+`restore.sh` puts the store back (`--docker` and `--native`). The store it
+replaces is not deleted: it is kept beside it as `graph.before-restore-<time>`,
+since it may hold what was written after the backup. Delete it once the restored
+kernel looks right. An archive without a graph store leaves the target's graph
+as it is.
 
 ### Neo4j Backup (optional server)
 
