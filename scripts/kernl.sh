@@ -15,6 +15,7 @@
 #   scripts/kernl.sh up [service...]        start; recreate broken ones — no build
 #   scripts/kernl.sh restart [service...]   restart containers (default: kernel)
 #   scripts/kernl.sh recreate <service...>  force-recreate from the repo compose
+#   scripts/kernl.sh update [--force]       pull, build kernel + dashboard, recreate both (drained)
 #   scripts/kernl.sh stop [service...]      stop containers (volumes untouched)
 #   scripts/kernl.sh logs [service] [-f] [--since 10m] [--errors]
 #   scripts/kernl.sh doctor                 status + why the kernel last died
@@ -26,6 +27,14 @@
 # the running ones get up to KERNL_DRAIN_TIMEOUT seconds (default 600) to finish
 # — and resumed after. Only the offices it paused are resumed. --no-drain skips
 # the wait (an emergency restart).
+#
+# `update` is the upgrade path for this stack: a fast-forward pull of the
+# current branch, the new images built while the old kernel keeps serving, and
+# only then the kernel and dashboard recreated through the same door. The first
+# boot on the new code runs whatever upgrade the release carries (0.5.0 moves
+# the graph to Relate, reading the Neo4j it was on, which stays in the compose
+# set while its volume exists). Nothing new upstream → nothing is rebuilt,
+# unless --force.
 #
 # Services: kernel dashboard mtw-request whatsapp-bridge searxng, plus neo4j
 # when docker-compose.neo4j.yml is in play (see below).
@@ -352,6 +361,43 @@ with_kernel_door() {
   trap - EXIT
 }
 
+# ── update ───────────────────────────────────────────────────────────────────
+
+cmd_update() {
+  local force=0 pulled=0 a
+  for a in "$@"; do
+    case "$a" in
+      --force)  force=1 ;;
+      --pulled) pulled=1 ;; # internal: re-run of the freshly pulled script
+      *)        die "update takes no services (it builds and recreates kernel + dashboard); unknown: $a" ;;
+    esac
+  done
+  preflight
+  local git=(git -C "$REPO")
+  if ((!pulled)); then
+    local branch before after
+    branch="$("${git[@]}" symbolic-ref --short -q HEAD)" \
+      || die "the repo is on a detached HEAD — check out the branch to follow, then re-run"
+    before="$("${git[@]}" rev-parse HEAD)"
+    info "pulling $branch (fast-forward only)"
+    "${git[@]}" pull --ff-only \
+      || die "git pull --ff-only failed (local commits or edits in the way) — nothing was rebuilt or restarted"
+    after="$("${git[@]}" rev-parse HEAD)"
+    if [[ "$before" == "$after" ]]; then
+      ((force)) || { info "already up to date at $(git -C "$REPO" log -1 --format='%h %s')"; info "nothing to do (--force rebuilds anyway)"; return 0; }
+    else
+      info "$("${git[@]}" log --oneline "$before..$after" | wc -l | tr -d ' ') new commit(s): ${before:0:8} → ${after:0:8}"
+    fi
+    # The pull may have changed this very script: the rest runs on the new one.
+    local again=(update --pulled); ((NO_DRAIN)) && again+=(--no-drain)
+    exec "$REPO/scripts/kernl.sh" "${again[@]}"
+  fi
+  info "building kernel + dashboard (the running kernel keeps serving meanwhile)"
+  compose build kernel dashboard || die "build failed — the running stack was left as it was"
+  with_kernel_door cmd_recreate kernel dashboard
+  info "updated to $(git -C "$REPO" log -1 --format='%h %s') — $(git -C "$REPO" describe --tags --always 2>/dev/null)"
+}
+
 # ── logs / doctor ────────────────────────────────────────────────────────────
 
 cmd_logs() {
@@ -422,7 +468,8 @@ case "$cmd" in
   stop|down) cmd_stop "$@" ;;
   logs|log) cmd_logs "$@" ;;
   doctor)   cmd_doctor ;;
+  update)   cmd_update "$@" ;;
   resume-offices) resume_drained ;;
   -h|--help|help) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (status|up|restart|recreate|stop|logs|doctor|resume-offices)" ;;
+  *) die "unknown command '$cmd' (status|up|restart|recreate|update|stop|logs|doctor|resume-offices)" ;;
 esac

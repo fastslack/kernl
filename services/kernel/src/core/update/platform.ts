@@ -469,6 +469,11 @@ export const DOCKER_UPDATE_HINT =
  * started from, so the command is rebuilt from those labels; `cd` first,
  * because the overrides read their variables from that directory's .env.
  * Without labels (not started by compose) the generic line is all there is.
+ *
+ * The stack scripts/kernl.sh manages (project kernl-public, with host.yml) is
+ * told to run `scripts/kernl.sh update` instead: same pull and build, but the
+ * kernel is recreated through the script's door — offices paused and running
+ * agent runs given time to finish — and with the compose files it picks.
  */
 export function dockerUpdateHint(
   labels?: Record<string, string | undefined> | null,
@@ -488,6 +493,9 @@ export function dockerUpdateHint(
   const dir = labels?.["com.docker.compose.project.working_dir"]?.trim() ?? "";
   if (files.length === 0 || !dir) return DOCKER_UPDATE_HINT;
   const quote = (p: string) => (/^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, "'\\''")}'`);
+  if (labels?.["com.docker.compose.project"] === "kernl-public" && files.some((f) => /docker-compose\.host\.yml$/.test(f))) {
+    return `cd ${quote(dir)} && scripts/kernl.sh update`;
+  }
   const prefix = dir.endsWith("/") ? dir : `${dir}/`;
   const fileArgs = files
     .map((f) => `-f ${quote(f.startsWith(prefix) ? f.slice(prefix.length) : f)}`)

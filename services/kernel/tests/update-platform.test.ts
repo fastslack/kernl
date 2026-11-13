@@ -308,6 +308,18 @@ describe("dockerUpdateHint", () => {
     expect(hint).toStartWith("cd '/home/op/my stack' && git pull && docker compose -f docker-compose.yml -f /etc/kernl/extra.yml build");
   });
 
+  it("sends the stack scripts/kernl.sh manages to its update command, which drains the kernel first", () => {
+    expect(dockerUpdateHint({ ...labels, "com.docker.compose.project": "kernl-public" }, { neo4j: true }))
+      .toBe("cd /home/op/kernl && scripts/kernl.sh update");
+    // Another project, or one without host.yml, was not started by the script.
+    expect(dockerUpdateHint({ ...labels, "com.docker.compose.project": "mine" })).toContain("git pull && docker compose");
+    expect(dockerUpdateHint({
+      "com.docker.compose.project": "kernl-public",
+      "com.docker.compose.project.working_dir": "/home/op/kernl",
+      "com.docker.compose.project.config_files": "/home/op/kernl/docker-compose.yml",
+    })).toContain("git pull && docker compose");
+  });
+
   it("falls back to the generic line without compose labels", () => {
     expect(dockerUpdateHint(null)).toBe(DOCKER_UPDATE_HINT);
     expect(dockerUpdateHint({})).toBe(DOCKER_UPDATE_HINT);
