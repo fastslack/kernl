@@ -95,6 +95,13 @@ export async function runGraphBackfills(
  * every so often — a pass where every store already has them costs one small
  * query per module.
  */
+let passNow: (() => void) | null = null;
+
+/** Run a backfill pass now rather than at the next tick (after the graph was replaced, say). */
+export function requestGraphBackfillPass(): void {
+  passNow?.();
+}
+
 export function scheduleGraphBackfills(
   listModules: () => KernelModule[],
   getGraph: () => GraphDriver | null,
@@ -102,11 +109,16 @@ export function scheduleGraphBackfills(
 ): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
+  let running = false;
   const tick = async () => {
+    if (running) return;
+    running = true;
     try {
       await runGraphBackfills(collectGraphBackfills(listModules()), getGraph());
     } catch (err) {
       log.warn(`graph backfill pass failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      running = false;
     }
     if (stopped) return;
     timer = setTimeout(() => void tick(), opts.everyMs ?? 30 * 60_000);
@@ -114,8 +126,14 @@ export function scheduleGraphBackfills(
   };
   timer = setTimeout(() => void tick(), opts.firstDelayMs ?? 20_000);
   timer.unref?.();
+  passNow = () => {
+    if (stopped) return;
+    if (timer) clearTimeout(timer);
+    void tick();
+  };
   return () => {
     stopped = true;
+    passNow = null;
     if (timer) clearTimeout(timer);
   };
 }

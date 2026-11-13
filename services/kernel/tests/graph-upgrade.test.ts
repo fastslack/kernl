@@ -7,7 +7,7 @@ import { runMigrations } from "../src/core/db/migrations.js";
 import { extensionsMigrations } from "../src/modules/extensions/migrations.js";
 import { GraphDriverRegistry } from "../src/core/db-drivers/graph-driver-registry.js";
 import type { GraphDriver } from "../src/core/db-drivers/graph-driver.js";
-import { upgradeGraphOnBoot, readUpgrade, neo4jCandidates, chooseGraphLimit, parseSize, importTimeoutMs } from "../src/core/graph-upgrade.js";
+import { upgradeGraphOnBoot, runBackgroundCopy, readUpgrade, neo4jCandidates, chooseGraphLimit, parseSize, importTimeoutMs } from "../src/core/graph-upgrade.js";
 import type { Neo4jSource } from "../src/core/db-drivers/builtins/neo4j-to-relate.js";
 
 /**
@@ -17,12 +17,14 @@ import type { Neo4jSource } from "../src/core/db-drivers/builtins/neo4j-to-relat
  * neo4j-to-relate.test.ts.
  */
 
-function stub(name: string): GraphDriver {
+function stub(name: string, ready = false): GraphDriver {
+  let up = false;
   return {
     name, kind: "graph", deployment: "external-server",
-    capabilities: { cypher: false, gds: false, vectorSimilarity: false, mlPipelines: false, embedded: false, parameterised: false, transactions: false },
+    run: async () => ({ records: [] }),
+    capabilities: { cypher: ready, gds: false, vectorSimilarity: false, mlPipelines: false, embedded: false, parameterised: false, transactions: false },
     getConfigSchema: () => [], validateConfig: () => ({ valid: true }), configure: () => {},
-    start: async () => {}, stop: async () => {}, isReady: () => false,
+    start: async () => { up = ready; }, stop: async () => { up = false; }, isReady: () => up,
     getStatus: () => ({ slug: name, name, kind: "graph", ready: false }),
     canSelfConfigure: () => false,
   } as unknown as GraphDriver;
@@ -36,7 +38,7 @@ describe("graph upgrade to 0.5.0", () => {
   let store: string;
 
   /** A 0.4.x database: the drivers it knew, one of them active. */
-  function from04x(active: "noop" | "neo4j" | null) {
+  function from04x(active: "noop" | "neo4j" | null, relateStarts = false) {
     reg = new GraphDriverRegistry();
     reg.setDb(db as never);
     reg.registerFactory("noop", () => stub("noop"));
@@ -45,7 +47,7 @@ describe("graph upgrade to 0.5.0", () => {
     db.prepare("UPDATE installed_extensions SET status = 'installed' WHERE type = 'db-driver'").run();
     if (active) db.prepare("UPDATE installed_extensions SET status = 'active' WHERE slug = ?").run(active);
     // 0.5.0 adds Relate; seeding never touches the active row.
-    reg.registerFactory("relate", () => stub("relate"));
+    reg.registerFactory("relate", () => stub("relate", relateStarts));
     reg.seedBuiltinRows();
   }
 
@@ -71,8 +73,11 @@ describe("graph upgrade to 0.5.0", () => {
   const GIB = 1024 ** 3;
   const opts = (o: {
     reachable?: boolean; copy?: (to: string) => void; fail?: string | ((limit: string) => string | null); relate?: boolean; data?: boolean;
-    size?: number; ceiling?: number; caps?: string[];
+    size?: number; ceiling?: number; caps?: string[]; background?: boolean; merged?: string[];
   } = {}) => ({
+    // Most cases test the copy itself, run inline; the background flow has its own.
+    background: o.background ?? false,
+    mergeGraphOnly: (async () => { o.merged?.push("merge"); return { nodes: 3, relationships: 1, ms: 1 }; }) as never,
     relateAvailable: () => o.relate ?? true,
     storePath: () => store,
     locate: async () => (o.reachable ? NEO4J : null),
@@ -133,6 +138,58 @@ describe("graph upgrade to 0.5.0", () => {
     expect(r?.detail).toContain("7 nodes, 4 relationships");
     expect(reg.getActiveRowSlug()).toBe("relate");
     expect(readdirSync(store)).toEqual(["copied"]);
+    expect(existsSync(`${store}.importing`)).toBe(false);
+  });
+
+  it("by default the kernel starts on Neo4j and the copy runs after start, then switches to Relate live", async () => {
+    from04x("neo4j", true);
+    const merged: string[] = [];
+    const o = opts({ reachable: true, background: true, merged });
+    const r = await upgradeGraphOnBoot(reg, db as never, o);
+    await reg.startActive();
+    // Boot is not held up: nothing copied yet, still on Neo4j.
+    expect(r?.state).toBe("copying");
+    expect(reg.getActiveRowSlug()).toBe("neo4j");
+    expect(existsSync(store)).toBe(false);
+    const done = await runBackgroundCopy(reg, db as never, o);
+    expect(done?.state).toBe("done");
+    expect(done?.attempts).toBe(1);
+    expect(reg.getActiveSlug()).toBe("relate");
+    expect(reg.getActiveRowSlug()).toBe("relate");
+    expect(readdirSync(store)).toEqual(["copied"]);
+    // What reached Neo4j during the copy is merged in after the switch.
+    expect(merged).toEqual(["merge"]);
+    // Nothing left to do on a second call.
+    expect((await runBackgroundCopy(reg, db as never, o))?.state).toBe("done");
+  });
+
+  it("an install on no driver whose legacy client wrote into a Neo4j is served from that Neo4j while it is copied", async () => {
+    from04x("noop", true);
+    const o = opts({ reachable: true, data: true, background: true });
+    expect((await upgradeGraphOnBoot(reg, db as never, o))?.state).toBe("copying");
+    expect(reg.getActiveRowSlug()).toBe("neo4j");
+    expect(reg.loadConfig("neo4j").uri).toBe(NEO4J.uri);
+    expect((await runBackgroundCopy(reg, db as never, o))?.state).toBe("done");
+    expect(reg.getActiveSlug()).toBe("relate");
+  });
+
+  it("a background copy whose Relate does not come up stays on Neo4j, and is tried again on the next boot", async () => {
+    from04x("neo4j", false);
+    const o = opts({ reachable: true, background: true });
+    await upgradeGraphOnBoot(reg, db as never, o);
+    const r = await runBackgroundCopy(reg, db as never, o);
+    expect(r?.state).toBe("failed");
+    expect(r?.detail).toContain("Relate did not start");
+    expect(reg.getActiveRowSlug()).toBe("neo4j");
+    expect((await upgradeGraphOnBoot(reg, db as never, o))?.state).toBe("copying");
+  });
+
+  it("a background copy that fails leaves the kernel on Neo4j", async () => {
+    from04x("neo4j", true);
+    const o = opts({ reachable: true, background: true, fail: "disk full" });
+    await upgradeGraphOnBoot(reg, db as never, o);
+    expect((await runBackgroundCopy(reg, db as never, o))?.state).toBe("failed");
+    expect(reg.getActiveRowSlug()).toBe("neo4j");
     expect(existsSync(`${store}.importing`)).toBe(false);
   });
 

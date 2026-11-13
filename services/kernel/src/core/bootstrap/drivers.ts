@@ -99,16 +99,19 @@ export async function initDrivers(args: {
 
   // ── DB drivers — seed, upgrade, start active ────────
   // A fresh install starts on Relate (built in) when its client is present.
-  // An install from 0.4.x moves to Relate once, with its data, before the
-  // driver starts (core/graph-upgrade.ts): no graph → rebuilt from SQLite;
-  // Neo4j → copied whole, or rebuilt now and merged in when Neo4j answers.
+  // An install from 0.4.x moves to Relate once, with its data
+  // (core/graph-upgrade.ts): no graph → rebuilt from SQLite; Neo4j → copied
+  // whole in the background while the kernel runs on it, then switched live;
+  // Neo4j down → rebuilt now and merged in when Neo4j answers.
   // The legacy Neo4jClient stays the source of truth for ctx.neo4j until
   // consumers migrate to ctx.graph.
   dbRegistry.seedBuiltins();
-  const { upgradeGraphOnBoot, schedulePendingImport } = await import("../graph-upgrade.js");
+  const { upgradeGraphOnBoot, schedulePendingImport, scheduleBackgroundCopy } = await import("../graph-upgrade.js");
   await upgradeGraphOnBoot(dbRegistry.getGraphRegistry(), sqlite);
   await dbRegistry.startAllActive();
   schedulePendingImport(dbRegistry.getGraphRegistry(), sqlite);
+  // A reachable Neo4j is copied after start, the kernel serving from it meanwhile.
+  scheduleBackgroundCopy(dbRegistry.getGraphRegistry(), sqlite);
 
   // ── Skill Registry ──
   const skillRegistry = createSkillRegistry(process.cwd(), events);

@@ -464,9 +464,14 @@ export function runNeo4jImportChild(
     });
     child.stderr?.on("data", (d) => { err += String(d); });
     const timer = setTimeout(() => child.kill("SIGKILL"), opts.timeoutMs ?? 60 * 60_000);
-    child.on("error", (e) => { clearTimeout(timer); reject(e); });
+    // The copy runs while the kernel serves: a kernel that stops takes it along
+    // (the next boot starts it over), instead of leaving it writing the staging store.
+    const stopWithKernel = () => { child.kill("SIGKILL"); };
+    process.once("exit", stopWithKernel);
+    child.on("error", (e) => { clearTimeout(timer); process.off("exit", stopWithKernel); reject(e); });
     child.on("exit", (code) => {
       clearTimeout(timer);
+      process.off("exit", stopWithKernel);
       if (code === 0) resolve(out.trim().split("\n").at(-1) ?? "");
       else reject(new Error(`import exited with ${code}: ${err.trim().split("\n").slice(-3).join(" ")}`));
     });
@@ -482,6 +487,10 @@ export async function runNeo4jImportTask(): Promise<void> {
     database: process.env.KERNL_N2R_DATABASE || undefined,
   };
   const to = process.env.KERNL_N2R_TO ?? "";
+  // A kernel killed outright cannot stop its child: the child stops itself once
+  // it has been reparented.
+  const parent = process.ppid;
+  setInterval(() => { if (process.ppid !== parent) process.exit(3); }, 5_000).unref();
   try {
     const { loadRelateClient } = await import("./relate-graph-driver.js");
     const r = await importNeo4jIntoRelate(await loadRelateClient(), src, to, (m) => process.stdout.write(`${m}\n`));

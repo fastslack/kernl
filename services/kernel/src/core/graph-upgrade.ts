@@ -10,9 +10,14 @@
  *                              unless a Neo4j answers with data in it (older
  *                              stacks wrote there through the legacy client
  *                              while the driver was noop): then it is copied.
- *   Neo4j, reachable         → the whole graph is copied into a new Relate store
- *                              (neo4j-to-relate.ts, in a child process), counts
- *                              are checked, Relate becomes active. Neo4j is left
+ *   Neo4j, reachable         → the kernel starts on Neo4j as before, and the
+ *                              whole graph is copied into a new Relate store in
+ *                              the background (neo4j-to-relate.ts, in a child
+ *                              process); counts are checked, then the kernel
+ *                              switches to Relate live and catches up with what
+ *                              reached Neo4j during the copy. A production graph
+ *                              (~1M nodes) takes most of an hour to copy, which
+ *                              the kernel no longer spends down. Neo4j is left
  *                              untouched: activating it again in /extensions
  *                              is the way back. (Every 0.4.x Docker install.)
  *   Neo4j, not reachable     → Relate becomes active anyway, so the kernel is
@@ -23,8 +28,8 @@
  *                              every boot and every 30 minutes.
  *   Relate already           → nothing here.
  *
- * Size: Relate keeps the graph in memory under a cap (RELATE_LOGICAL_GRAPH_SIZE_LIMIT,
- * 2 GiB by default). Before copying, the graph's size in Relate is estimated
+ * Size: Relate keeps the graph in memory, under a cap when one is set
+ * (RELATE_LOGICAL_GRAPH_SIZE_LIMIT, or the driver's memoryLimit). Before copying, the graph's size in Relate is estimated
  * from Neo4j (estimateRelateBytes); the copy runs under 1.5× that, never below
  * the cap configured, and never above what this machine can hold (its cgroup
  * limit, or 80% of RAM). The cap chosen is saved as the relate driver's
@@ -42,6 +47,7 @@
 import { existsSync, readFileSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { totalmem } from "node:os";
 import { log } from "./logger.js";
+import { requestGraphBackfillPass } from "./graph-backfill.js";
 import type { SqliteDb } from "./db/sqlite.js";
 import type { GraphDriverRegistry } from "./db-drivers/graph-driver-registry.js";
 import { DEFAULT_GRAPH_SIZE_LIMIT, defaultRelatePath, operatorGraphCap, relateClientInstalled } from "./db-drivers/builtins/relate-graph-driver.js";
@@ -51,7 +57,7 @@ import {
 
 export const GRAPH_UPGRADE_STEP = "graph-relate-0.5.0";
 
-export type UpgradeState = "done" | "pending-import" | "failed" | "skipped";
+export type UpgradeState = "done" | "pending-import" | "copying" | "failed" | "skipped";
 
 export interface UpgradeRecord {
   state: UpgradeState;
@@ -213,6 +219,99 @@ export interface UpgradeOptions {
   hasData?: (src: Neo4jSource) => Promise<boolean>;
   relateAvailable?: () => boolean;
   storePath?: () => string;
+  /**
+   * Copy a reachable Neo4j after the kernel starts (default) rather than
+   * before: the boot step only records the copy, runBackgroundCopy() does it.
+   * False copies inline, before any driver starts.
+   */
+  background?: boolean;
+  /** Merges the graph-only data written to Neo4j during the copy; replaced in tests. */
+  mergeGraphOnly?: typeof mergeGraphOnlyFromNeo4j;
+}
+
+/**
+ * Copy `src` into a fresh directory, then swap it in: a half-done copy
+ * never becomes the store. On failure the install stays on `keep` (its
+ * graph as it was) and the copy is tried again on the next boot.
+ */
+async function copyNeo4jIntoRelate(
+  reg: GraphDriverRegistry, db: SqliteDb, opts: UpgradeOptions, prev: UpgradeRecord | null,
+  src: Neo4jSource, from: string, keep: string,
+  activate: () => Promise<void>, when: string,
+): Promise<UpgradeRecord | null> {
+  const storePath = (opts.storePath ?? defaultRelatePath)();
+  const attempts = (prev?.attempts ?? 0) + 1;
+  const staging = `${storePath}.importing`;
+  rmSync(staging, { recursive: true, force: true });
+
+  // Size the cap before copying. An explicit RELATE_LOGICAL_GRAPH_SIZE_LIMIT
+  // (the operator's, not the one the Relate driver leaves in the
+  // environment) is a ceiling the kernel must live under afterwards too.
+  const explicit = parseSize(operatorGraphCap());
+  const saved = reg.loadConfig("relate").memoryLimit;
+  const configured = explicit ?? parseSize(typeof saved === "string" ? saved : null) ?? parseSize(DEFAULT_GRAPH_SIZE_LIMIT)!;
+  const ceiling = explicit ?? (opts.memoryCeiling ?? memoryCeilingBytes)();
+  let estimate = 0;
+  let elements = 0;
+  try {
+    estimate = await (opts.sizeOf ?? (async (s) => {
+      const e = await estimateRelateBytes(s);
+      elements = e.nodes + e.relationships;
+      return e.bytes;
+    }))(src);
+  } catch (err) {
+    log.warn(`Graph upgrade: could not estimate the graph's size (${err instanceof Error ? err.message : String(err)}) — copying under ${formatGib(configured)}`);
+  }
+  let limit = estimate ? chooseGraphLimit(estimate, configured, ceiling) : configured;
+  if (limit === null) {
+    const detail = `[capacity needs=${estimate} ceiling=${ceiling}] The Neo4j graph needs about ${formatGib(estimate)} in Relate; ` +
+      `this machine can give it ${formatGib(ceiling)}${explicit ? " (RELATE_LOGICAL_GRAPH_SIZE_LIMIT)" : ""}. Staying on ${keep}; ` +
+      `the copy is tried again once there is more room${explicit ? " (raise RELATE_LOGICAL_GRAPH_SIZE_LIMIT)" : ""}.`;
+    writeUpgrade(db, { state: "failed", from, attempts, detail });
+    log.warn(`Graph upgrade: ${detail.replace(CAPACITY_TAG, "").trim()}`);
+    return readUpgrade(db);
+  }
+  const runImport = (cap: number) => (opts.importGraph ?? ((s, to, l) =>
+    runNeo4jImportChild(s, to, { onLine: (line) => log.info(`Graph upgrade: ${line}`), env: { RELATE_LOGICAL_GRAPH_SIZE_LIMIT: l }, timeoutMs: importTimeoutMs(elements) })))(src, staging, formatGib(cap));
+  try {
+    log.info(`Graph upgrade: copying the Neo4j graph at ${src.uri} into Relate (${storePath}) under a ${formatGib(limit)} cap` +
+      `${estimate ? ` (estimated ${formatGib(estimate)})` : ""} — once, ${when}`);
+    let summary: string;
+    try {
+      summary = await runImport(limit);
+    } catch (err) {
+      const bigger = Math.min(limit * 2, Math.floor(ceiling / GIB) * GIB || ceiling);
+      if (!CAPACITY.test(err instanceof Error ? err.message : String(err)) || bigger <= limit) throw err;
+      log.warn(`Graph upgrade: ${formatGib(limit)} was not enough — trying once more under ${formatGib(bigger)}`);
+      rmSync(staging, { recursive: true, force: true });
+      limit = bigger;
+      summary = await runImport(limit);
+    }
+    if (!isEmptyDir(storePath)) {
+      const aside = `${storePath}.before-0.5.0-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+      renameSync(storePath, aside);
+      log.info(`Graph upgrade: an existing Relate store was kept aside at ${aside}`);
+    } else {
+      rmSync(storePath, { recursive: true, force: true });
+    }
+    renameSync(staging, storePath);
+    // The kernel runs the graph under the cap it was copied under.
+    if (!explicit && limit > configured) {
+      reg.saveConfig("relate", { ...reg.loadConfig("relate"), memoryLimit: formatGib(limit) });
+    }
+    await activate();
+    writeUpgrade(db, { state: "done", from, attempts, detail: `Copied from ${src.uri} under a ${formatGib(limit)} cap: ${summary}. Neo4j was left as it was.` });
+    log.info(`Graph upgrade: Neo4j → Relate done (${summary}; cap ${formatGib(limit)})`);
+  } catch (err) {
+    rmSync(staging, { recursive: true, force: true });
+    const msg = err instanceof Error ? err.message : String(err);
+    // Out of room even after the retry: like a graph that does not fit,
+    // tried again only once the machine gives it more.
+    const tag = CAPACITY.test(msg) ? `[capacity needs=${Math.max(estimate, limit + 1)} ceiling=${ceiling}] ` : "";
+    writeUpgrade(db, { state: "failed", from, attempts, detail: `${tag}${msg}` });
+    log.error(`Graph upgrade: copying Neo4j into Relate failed (attempt ${attempts}) — staying on ${keep}${tag ? "" : ", retrying next boot"}: ${msg}`);
+  }
+  return readUpgrade(db);
 }
 
 /** Decide and do the upgrade. Never throws: a kernel that cannot upgrade boots as it was. */
@@ -227,7 +326,12 @@ export async function upgradeGraphOnBoot(reg: GraphDriverRegistry, db: SqliteDb,
       log.info("Graph upgrade: the Relate client is not installed here — staying on the current graph");
       return prev;
     }
-    const storePath = (opts.storePath ?? defaultRelatePath)();
+    // A reachable Neo4j is copied after the kernel starts, on Neo4j meanwhile
+    // (runBackgroundCopy); `background: false` copies it here, before any driver starts.
+    const copy = (src: Neo4jSource, from: string, keep: string): Promise<UpgradeRecord | null> =>
+      (opts.background ?? true)
+        ? Promise.resolve(recordBackgroundCopy(reg, db, prev, src, from))
+        : copyNeo4jIntoRelate(reg, db, opts, prev, src, from, keep, async () => reg.markActive("relate"), "before the kernel starts");
 
     // A graph too large for this machine is not copied again on every boot:
     // only once the room it had (its ceiling) grows.
@@ -240,86 +344,6 @@ export async function upgradeGraphOnBoot(reg: GraphDriverRegistry, db: SqliteDb,
       }
     }
 
-    /**
-     * Copy `src` into a fresh directory, then swap it in: a half-done copy
-     * never becomes the store. On failure the install stays on `keep` (its
-     * graph as it was) and the copy is tried again on the next boot.
-     */
-    const copyFrom = async (src: Neo4jSource, from: string, keep: string): Promise<UpgradeRecord | null> => {
-      const attempts = (prev?.attempts ?? 0) + 1;
-      const staging = `${storePath}.importing`;
-      rmSync(staging, { recursive: true, force: true });
-
-      // Size the cap before copying. An explicit RELATE_LOGICAL_GRAPH_SIZE_LIMIT
-      // (the operator's, not the one the Relate driver leaves in the
-      // environment) is a ceiling the kernel must live under afterwards too.
-      const explicit = parseSize(operatorGraphCap());
-      const saved = reg.loadConfig("relate").memoryLimit;
-      const configured = explicit ?? parseSize(typeof saved === "string" ? saved : null) ?? parseSize(DEFAULT_GRAPH_SIZE_LIMIT)!;
-      const ceiling = explicit ?? (opts.memoryCeiling ?? memoryCeilingBytes)();
-      let estimate = 0;
-      let elements = 0;
-      try {
-        estimate = await (opts.sizeOf ?? (async (s) => {
-          const e = await estimateRelateBytes(s);
-          elements = e.nodes + e.relationships;
-          return e.bytes;
-        }))(src);
-      } catch (err) {
-        log.warn(`Graph upgrade: could not estimate the graph's size (${err instanceof Error ? err.message : String(err)}) — copying under ${formatGib(configured)}`);
-      }
-      let limit = estimate ? chooseGraphLimit(estimate, configured, ceiling) : configured;
-      if (limit === null) {
-        const detail = `[capacity needs=${estimate} ceiling=${ceiling}] The Neo4j graph needs about ${formatGib(estimate)} in Relate; ` +
-          `this machine can give it ${formatGib(ceiling)}${explicit ? " (RELATE_LOGICAL_GRAPH_SIZE_LIMIT)" : ""}. Staying on ${keep}; ` +
-          `the copy is tried again once there is more room${explicit ? " (raise RELATE_LOGICAL_GRAPH_SIZE_LIMIT)" : ""}.`;
-        writeUpgrade(db, { state: "failed", from, attempts, detail });
-        log.warn(`Graph upgrade: ${detail.replace(CAPACITY_TAG, "").trim()}`);
-        return readUpgrade(db);
-      }
-      const runImport = (cap: number) => (opts.importGraph ?? ((s, to, l) =>
-        runNeo4jImportChild(s, to, { onLine: (line) => log.info(`Graph upgrade: ${line}`), env: { RELATE_LOGICAL_GRAPH_SIZE_LIMIT: l }, timeoutMs: importTimeoutMs(elements) })))(src, staging, formatGib(cap));
-      try {
-        log.info(`Graph upgrade: copying the Neo4j graph at ${src.uri} into Relate (${storePath}) under a ${formatGib(limit)} cap` +
-          `${estimate ? ` (estimated ${formatGib(estimate)})` : ""} — once, before the kernel starts`);
-        let summary: string;
-        try {
-          summary = await runImport(limit);
-        } catch (err) {
-          const bigger = Math.min(limit * 2, Math.floor(ceiling / GIB) * GIB || ceiling);
-          if (!CAPACITY.test(err instanceof Error ? err.message : String(err)) || bigger <= limit) throw err;
-          log.warn(`Graph upgrade: ${formatGib(limit)} was not enough — trying once more under ${formatGib(bigger)}`);
-          rmSync(staging, { recursive: true, force: true });
-          limit = bigger;
-          summary = await runImport(limit);
-        }
-        if (!isEmptyDir(storePath)) {
-          const aside = `${storePath}.before-0.5.0-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-          renameSync(storePath, aside);
-          log.info(`Graph upgrade: an existing Relate store was kept aside at ${aside}`);
-        } else {
-          rmSync(storePath, { recursive: true, force: true });
-        }
-        renameSync(staging, storePath);
-        // The kernel runs the graph under the cap it was copied under.
-        if (!explicit && limit > configured) {
-          reg.saveConfig("relate", { ...reg.loadConfig("relate"), memoryLimit: formatGib(limit) });
-        }
-        reg.markActive("relate");
-        writeUpgrade(db, { state: "done", from, attempts, detail: `Copied from ${src.uri} under a ${formatGib(limit)} cap: ${summary}. Neo4j was left as it was.` });
-        log.info(`Graph upgrade: Neo4j → Relate done (${summary}; cap ${formatGib(limit)})`);
-      } catch (err) {
-        rmSync(staging, { recursive: true, force: true });
-        const msg = err instanceof Error ? err.message : String(err);
-        // Out of room even after the retry: like a graph that does not fit,
-        // tried again only once the machine gives it more.
-        const tag = CAPACITY.test(msg) ? `[capacity needs=${Math.max(estimate, limit + 1)} ceiling=${ceiling}] ` : "";
-        writeUpgrade(db, { state: "failed", from, attempts, detail: `${tag}${msg}` });
-        log.error(`Graph upgrade: copying Neo4j into Relate failed (attempt ${attempts}) — staying on ${keep}${tag ? "" : ", retrying next boot"}: ${msg}`);
-      }
-      return readUpgrade(db);
-    };
-
     // ── No graph driver → Relate ──
     // Older stacks ran with the noop driver while the legacy Neo4j client wrote
     // into a Neo4j all the same (chat memory, KNOWS). If one answers and holds
@@ -329,7 +353,7 @@ export async function upgradeGraphOnBoot(reg: GraphDriverRegistry, db: SqliteDb,
       const from = active ?? "none";
       const src = await (opts.locate ?? findNeo4j)(neo4jCandidates(reg));
       const holds = src ? await (opts.hasData ?? neo4jHasData)(src) : false;
-      if (src && holds) return await copyFrom(src, `${from}+neo4j`, /* keepOnFailure */ from);
+      if (src && holds) return await copy(src, `${from}+neo4j`, /* keepOnFailure */ from);
       if (!src && (process.env.NEO4J_URI ?? "").trim() && process.env.KERNL_KEEP_NEO4J !== "1") {
         reg.markActive("relate");
         writeUpgrade(db, {
@@ -367,11 +391,91 @@ export async function upgradeGraphOnBoot(reg: GraphDriverRegistry, db: SqliteDb,
       return readUpgrade(db);
     }
 
-    return await copyFrom(src, "neo4j", "neo4j");
+    return await copy(src, "neo4j", "neo4j");
   } catch (err) {
     log.error(`Graph upgrade: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
+}
+
+/**
+ * Note a copy to run once the kernel is up, and keep the kernel on Neo4j
+ * until it is done. An install that was on no graph driver while its legacy
+ * client wrote into this Neo4j is served from that Neo4j meanwhile.
+ */
+function recordBackgroundCopy(reg: GraphDriverRegistry, db: SqliteDb, prev: UpgradeRecord | null, src: Neo4jSource, from: string): UpgradeRecord | null {
+  if (reg.getActiveRowSlug() !== "neo4j") {
+    reg.saveConfig("neo4j", { ...reg.loadConfig("neo4j"), uri: src.uri, user: src.user, password: src.password });
+    reg.markActive("neo4j");
+  }
+  writeUpgrade(db, {
+    state: "copying", from, attempts: prev?.attempts ?? 0,
+    detail: `Copying ${src.uri} into Relate while the kernel runs on Neo4j; it switches to Relate when the copy is done.`,
+  });
+  log.info(`Graph upgrade: starting on Neo4j; its graph is copied into Relate in the background, then the kernel switches over`);
+  return readUpgrade(db);
+}
+
+let copyRunning = false;
+
+/**
+ * The copy the boot step recorded: Neo4j into a new Relate store while the
+ * kernel keeps serving from Neo4j, then a live switch to Relate. What reached
+ * Neo4j during the copy is caught up afterwards: the graph-only data (chat
+ * memory, KNOWS, news) merged from Neo4j, and what the modules project from
+ * SQLite projected again by the backfills. A no-op unless a copy is recorded.
+ */
+export async function runBackgroundCopy(reg: GraphDriverRegistry, db: SqliteDb, opts: UpgradeOptions = {}): Promise<UpgradeRecord | null> {
+  const prev = readUpgrade(db);
+  if (prev?.state !== "copying" || copyRunning) return prev;
+  copyRunning = true;
+  try {
+    const src = await (opts.locate ?? findNeo4j)(neo4jCandidates(reg));
+    if (!src) {
+      log.warn("Graph upgrade: Neo4j stopped answering before the copy — staying on it; tried again on the next boot");
+      return prev;
+    }
+    const rec = await copyNeo4jIntoRelate(reg, db, opts, prev, src, prev.from, "neo4j", async () => {
+      if (!(await reg.setActive("relate"))) {
+        // setActive puts the previous driver back when it was running; the row is restored either way.
+        reg.markActive("neo4j");
+        throw new Error("Relate did not start on the copied store — back on Neo4j");
+      }
+    }, "while the kernel keeps running on Neo4j");
+    if (rec?.state === "done") await catchUpAfterSwitch(reg, src, opts);
+    return rec;
+  } catch (err) {
+    log.error(`Graph upgrade: ${err instanceof Error ? err.message : String(err)}`);
+    return readUpgrade(db);
+  } finally {
+    copyRunning = false;
+  }
+}
+
+async function catchUpAfterSwitch(reg: GraphDriverRegistry, src: Neo4jSource, opts: UpgradeOptions): Promise<void> {
+  const g = reg.getActive();
+  if (!g?.capabilities.cypher) return;
+  try {
+    const r = await (opts.mergeGraphOnly ?? mergeGraphOnlyFromNeo4j)(src, (q, p) => g.run(q, p), (m) => log.info(`Graph upgrade: ${m}`));
+    log.info(`Graph upgrade: caught up with what reached Neo4j during the copy (${r.nodes} nodes, ${r.relationships} relationships)`);
+  } catch (err) {
+    log.warn(`Graph upgrade: catching up from Neo4j after the switch failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  try {
+    // The copy carried the backfill markers; dropped, the next pass projects SQLite again.
+    await g.run("MATCH (m:KernlGraphBackfill) DETACH DELETE m");
+    requestGraphBackfillPass();
+  } catch (err) {
+    log.warn(`Graph upgrade: could not queue the backfills after the switch: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** Start the recorded copy shortly after boot; returns a stop function. */
+export function scheduleBackgroundCopy(reg: GraphDriverRegistry, db: SqliteDb, delayMs = 30_000): () => void {
+  if (readUpgrade(db)?.state !== "copying") return () => {};
+  const t = setTimeout(() => void runBackgroundCopy(reg, db), delayMs);
+  t.unref?.();
+  return () => clearTimeout(t);
 }
 
 /**
