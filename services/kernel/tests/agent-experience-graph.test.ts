@@ -196,7 +196,7 @@ describe.skipIf(!relateClientInstalled())("AgentExperienceGraph on Relate", () =
     expect(hits.map((h) => h.id)).toEqual(["l-web"]);
   });
 
-  it("projects what each run was given as RECALLED, even on a first sync", async () => {
+  it("projects what each run was given as RECALLED, and measures whether a lesson helped", async () => {
     // b's runs after l-mail exists: two carried it (one failed), two did not (one failed).
     addRun("rb1", "b", "2026-11-11T11:00:00.000Z");
     addRun("rb2", "b", "2026-11-11T11:10:00.000Z", [], "failed");
@@ -217,6 +217,60 @@ describe.skipIf(!relateClientInstalled())("AgentExperienceGraph on Relate", () =
     ]);
     expect(edges.records[0].get("content")).toContain("email address");
 
+    const impact = (await xp.learningImpact("l-mail"))!;
+    expect(impact.owner).toEqual({ id: "a", name: "Mailer" });
+    expect(impact.with).toEqual({ runs: 2, ok: 1 });
+    expect(impact.without).toEqual({ runs: 2, ok: 1 });
+    expect(impact.agents).toEqual([{ id: "b", name: "Reporter", runs: 2, ok: 1, shared: true }]);
+    expect(typeof impact.query_ms).toBe("number");
+    expect(await xp.learningImpact("nope")).toBeNull();
+  });
+
+  it("follows a lesson's lineage, and lays out the library with how often each lesson was carried", async () => {
+    // l-mail (a, from r1) → carried by b's rb1, which produced l-b1 → carried by c's rc1 (failed).
+    addRun("rb1", "b", "2026-11-11T11:00:00.000Z");
+    addRun("rc1", "c", "2026-11-11T12:00:00.000Z", [], "failed");
+    addRun("rc2", "c", "2026-11-11T12:30:00.000Z");
+    addLearning("l-b1", "b", "Confirm the address before mailing", near(vec(1), 0.04), { runs: ["rb1"], at: "2026-11-11T11:05:00.000Z" });
+    const give = db.prepare("INSERT INTO agent_run_learnings (run_id, learning_id, shared) VALUES (?, ?, 1)");
+    give.run("rb1", "l-mail");
+    give.run("rc2", "l-mail");
+    give.run("rc1", "l-b1");
+    await xp.sync();
+
+    const lin = (await xp.learningLineage("l-mail"))!;
+    expect(lin.nodes.map((n) => [n.id, n.depth, n.owner.name])).toEqual([["l-mail", 0, "Mailer"], ["l-b1", 1, "Reporter"]]);
+    expect(lin.nodes[0].from_runs).toEqual(["r1"]);
+    const uses = Object.fromEntries(lin.nodes[0].uses.map((u) => [u.run, u]));
+    expect(uses.rb1).toMatchObject({ agent: "b", status: "completed", child: "l-b1" });
+    expect(uses.rc2).toMatchObject({ agent: "c", child: null });
+    expect(lin.nodes[1].uses).toEqual([expect.objectContaining({ run: "rc1", agent: "c", status: "failed" })]);
+    expect(await xp.learningLineage("nope")).toBeNull();
+
+    const lib = (await xp.learningLibrary("office-1"))!;
+    expect(lib.agents.map((a) => a.name).sort()).toEqual(["Mailer", "Reporter"]);
+    const mail = lib.agents.find((a) => a.id === "a")!.books.find((b) => b.id === "l-mail")!;
+    expect(mail).toMatchObject({ uses: 2, shared_uses: 2, last_used: "2026-11-11T12:30:00.000Z", active: true });
+    const all = (await xp.learningLibrary())!;
+    expect(all.agents.map((a) => a.id).sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("lays the lessons out as a constellation: alike lessons linked and grouped, by Relate's cosine", async () => {
+    await xp.sync();
+    const c = (await xp.learningConstellation())!;
+    expect(c.stars.length).toBe(5);
+    // The four mail lessons are near-copies of one vector: their links are the strongest,
+    // and they share a group. (The test's web vector correlates with them at ~0.7.)
+    const mail = ["l-mail", "l-own", "l-proj", "l-off"];
+    const inMail = (l: { a: string; b: string }) => mail.includes(l.a) && mail.includes(l.b);
+    const minMail = Math.min(...c.links.filter(inMail).map((l) => l.s));
+    const maxWeb = Math.max(...c.links.filter((l) => !inMail(l)).map((l) => l.s));
+    expect(minMail).toBeGreaterThan(0.95);
+    expect(maxWeb).toBeLessThan(minMail);
+    const groupOf = new Map(c.stars.map((st) => [st.id, st.group]));
+    expect(new Set(mail.map((id) => groupOf.get(id))).size).toBe(1);
+    expect(c.groups[0].name).toContain("mail");
+    for (const st of c.stars) { expect(Math.abs(st.x)).toBeLessThanOrEqual(1); expect(Math.abs(st.y)).toBeLessThanOrEqual(1); }
   });
 
   it("picks up an embedding that arrives after the learning was synced", async () => {

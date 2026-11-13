@@ -34,6 +34,7 @@ import { log } from "../../../core/logger.js";
 import { blobToVector } from "../../../core/ranking/relevance.js";
 import { type GraphRunner, inGraphTransaction } from "../../../sdk/graph-batch.js";
 import { asVector, ensureVectorIndex, fulltextSearchClause, runVectorSearch } from "../../../sdk/graph-vectors.js";
+import { buildConstellation, type Constellation } from "./learning-constellation.js";
 
 export const LEARNING_VECTOR_INDEX = "agent-learning-embeddings";
 export const LEARNING_TEXT_INDEX = "agent-learning-text";
@@ -132,6 +133,86 @@ export function luceneTerms(text: string, max = 12): string {
  * from a colleague in the same office, ranks above an equally similar one
  * that did not.
  */
+export interface LearningImpact {
+  learning_id: string;
+  owner: { id: string; name: string };
+  type: string;
+  content: string;
+  confidence: number;
+  active: boolean;
+  /** Runs whose prompt carried it, and how many of them completed. */
+  with: { runs: number; ok: number };
+  /** Runs by the same agents since the lesson exists, without it. */
+  without: { runs: number; ok: number };
+  agents: Array<{ id: string; name: string; runs: number; ok: number; shared: boolean }>;
+  query_ms: number | null;
+  cypher: string;
+}
+
+/**
+ * The runs that carried a lesson, and the runs the same agents made without it
+ * since the lesson exists. Completed counts as ok; failed does not.
+ */
+export const LEARNING_IMPACT_CYPHER = `
+MATCH (l:AgentLearning {id: $id})
+OPTIONAL MATCH (owner:Agent)-[:LEARNED]->(l)
+OPTIONAL MATCH (a:Agent)-[:RAN]->(w:AgentRun)-[:RECALLED]->(l)
+WITH l, owner, collect(DISTINCT a) AS users, collect(DISTINCT w) AS carriedRuns,
+     collect(CASE WHEN w IS NULL THEN null ELSE {run: w.id, ok: w.status = 'completed', aid: a.id, name: a.name} END) AS carried
+OPTIONAL MATCH (u:Agent)-[:RAN]->(o:AgentRun)
+WHERE u IN users AND NOT o IN carriedRuns AND datetime(o.created_at) >= l.created_at
+WITH l, owner, carried, collect(DISTINCT o) AS others
+RETURN l.type AS type, l.content AS content, l.confidence AS confidence, l.active AS active,
+       owner.id AS ownerId, owner.name AS ownerName, carried,
+       size(others) AS withoutN, size([x IN others WHERE x.status = 'completed']) AS withoutOk`;
+
+/**
+ * Everything that came out of one lesson, in one traversal: a quantified path
+ * pattern walks lesson → run that recalled it → lesson that run produced, up to
+ * three hops; each lesson found then brings who learned it, the run it came
+ * from and every run that carried it (agent, outcome, the lesson it gave rise to).
+ */
+export const LEARNING_LINEAGE_CYPHER = `
+MATCH p = (root:AgentLearning {id: $id})(()<-[:RECALLED]-(:AgentRun)<-[:DERIVED_FROM]-(:AgentLearning)){0,3}
+WITH last(nodes(p)) AS l, min(length(p)) / 2 AS depth
+OPTIONAL MATCH (owner:Agent)-[:LEARNED]->(l)
+OPTIONAL MATCH (l)-[:DERIVED_FROM]->(src:AgentRun)
+OPTIONAL MATCH (ra:Agent)-[:RAN]->(r:AgentRun)-[:RECALLED]->(l)
+OPTIONAL MATCH (child:AgentLearning)-[:DERIVED_FROM]->(r)
+WITH l, depth, owner, collect(DISTINCT src.id) AS fromRuns,
+     collect(DISTINCT CASE WHEN r IS NULL THEN null ELSE {run: r.id, agent: ra.id, name: ra.name, status: r.status, at: r.created_at, child: child.id} END) AS uses
+RETURN l.id AS id, depth, l.type AS type, l.content AS content, l.confidence AS confidence, l.active AS active,
+       toString(l.created_at) AS createdAt, owner.id AS ownerId, owner.name AS ownerName, fromRuns, uses
+ORDER BY depth, createdAt`;
+
+/**
+ * The library: every lesson of every agent (of one office, or all), with how
+ * often runs carried it — COUNT {} subqueries over RECALLED — and when last.
+ */
+export const LEARNING_LIBRARY_CYPHER = `
+MATCH (a:Agent)-[:LEARNED]->(l:AgentLearning)
+WHERE $flow = '' OR a.flow_id = $flow
+OPTIONAL MATCH (r:AgentRun)-[:RECALLED]->(l)
+WITH a, l, max(r.created_at) AS lastUsed
+RETURN a.id AS agentId, a.name AS agentName, a.flow_id AS flowId,
+       l.id AS id, l.type AS type, l.content AS content, l.confidence AS confidence, l.active AS active,
+       toString(l.created_at) AS createdAt, lastUsed,
+       COUNT { (:AgentRun)-[:RECALLED]->(l) } AS uses,
+       COUNT { (:AgentRun)-[:RECALLED {shared: true}]->(l) } AS sharedUses
+ORDER BY agentName, confidence DESC
+LIMIT 3000`;
+
+export interface LineageNode {
+  id: string; depth: number; type: string; content: string; confidence: number; active: boolean;
+  created_at: string; owner: { id: string; name: string }; from_runs: string[];
+  uses: Array<{ run: string; agent: string; name: string; status: string; at: string; child: string | null }>;
+}
+
+export interface LibraryBook {
+  id: string; type: string; content: string; confidence: number; active: boolean;
+  created_at: string; last_used: string | null; uses: number; shared_uses: number;
+}
+
 export function scoreSharedLearning(c: {
   relevance: number;
   confidence: number;
@@ -164,6 +245,12 @@ export class AgentExperienceGraph {
 
   get available(): boolean {
     return this.ready() !== null;
+  }
+
+  /** A3 · every lesson as a star placed by meaning (learning-constellation.ts); null without a graph. */
+  async learningConstellation(): Promise<Constellation | null> {
+    const g = this.ready();
+    return g ? buildConstellation(this.db, g) : null;
   }
 
   // ── Schema ─────────────────────────────────────────
@@ -445,6 +532,90 @@ export class AgentExperienceGraph {
    * Learnings of other agents that fit this goal, best first. Empty when the
    * graph is unavailable, the query fails, or nothing clears the bar.
    */
+  /**
+   * Did this lesson help? The runs that carried it (RECALLED) against the runs
+   * the same agents made without it since it exists — one traversal, the
+   * comparison that says whether learning pays. Null without a graph or when
+   * the lesson is not in it yet.
+   */
+  async learningImpact(id: string): Promise<LearningImpact | null> {
+    const g = this.ready();
+    if (!g) return null;
+    const r = await g.run(LEARNING_IMPACT_CYPHER, { id });
+    const rec = r.records[0];
+    if (!rec) return null;
+    const runs = (rec.get("carried") as Array<Record<string, unknown>> | null) ?? [];
+    const byAgent = new Map<string, { id: string; name: string; runs: number; ok: number }>();
+    for (const c of runs) {
+      const aid = str(c.aid);
+      const a = byAgent.get(aid) ?? { id: aid, name: str(c.name), runs: 0, ok: 0 };
+      a.runs++;
+      if (c.ok === true) a.ok++;
+      byAgent.set(aid, a);
+    }
+    const ownerId = str(rec.get("ownerId"));
+    return {
+      learning_id: id,
+      owner: { id: ownerId, name: str(rec.get("ownerName")) },
+      type: str(rec.get("type")),
+      content: str(rec.get("content")),
+      confidence: num(rec.get("confidence")),
+      active: rec.get("active") === true,
+      with: { runs: runs.length, ok: runs.filter((c) => c.ok === true).length },
+      without: { runs: num(rec.get("withoutN")), ok: num(rec.get("withoutOk")) },
+      agents: [...byAgent.values()].sort((a, b) => b.runs - a.runs).map((a) => ({ ...a, shared: a.id !== ownerId })),
+      query_ms: r.summary?.resultAvailableAfterMs ?? null,
+      cypher: LEARNING_IMPACT_CYPHER.trim(),
+    };
+  }
+
+  /** A lesson's lineage (LEARNING_LINEAGE_CYPHER); null without a graph or when the lesson is not in it. */
+  async learningLineage(id: string): Promise<{ nodes: LineageNode[]; query_ms: number | null; cypher: string } | null> {
+    const g = this.ready();
+    if (!g) return null;
+    const r = await g.run(LEARNING_LINEAGE_CYPHER, { id });
+    if (r.records.length === 0) return null;
+    const nodes = r.records.map((rec) => ({
+      id: str(rec.get("id")),
+      depth: num(rec.get("depth")),
+      type: str(rec.get("type")),
+      content: str(rec.get("content")).slice(0, 400),
+      confidence: num(rec.get("confidence")),
+      active: rec.get("active") === true,
+      created_at: str(rec.get("createdAt")),
+      owner: { id: str(rec.get("ownerId")), name: str(rec.get("ownerName")) },
+      from_runs: ((rec.get("fromRuns") as unknown[]) ?? []).map(str).filter(Boolean),
+      uses: ((rec.get("uses") as Array<Record<string, unknown>>) ?? []).map((u) => ({
+        run: str(u.run), agent: str(u.agent), name: str(u.name), status: str(u.status), at: str(u.at),
+        child: u.child == null ? null : str(u.child),
+      })),
+    }));
+    return { nodes, query_ms: r.summary?.resultAvailableAfterMs ?? null, cypher: LEARNING_LINEAGE_CYPHER.trim() };
+  }
+
+  /** Every agent's lessons with their use counts (LEARNING_LIBRARY_CYPHER), grouped by agent. */
+  async learningLibrary(flowId = ""): Promise<{
+    agents: Array<{ id: string; name: string; flow_id: string; books: LibraryBook[] }>;
+    query_ms: number | null; cypher: string;
+  } | null> {
+    const g = this.ready();
+    if (!g) return null;
+    const r = await g.run(LEARNING_LIBRARY_CYPHER, { flow: flowId });
+    const agents = new Map<string, { id: string; name: string; flow_id: string; books: LibraryBook[] }>();
+    for (const rec of r.records) {
+      const aid = str(rec.get("agentId"));
+      const a = agents.get(aid) ?? { id: aid, name: str(rec.get("agentName")), flow_id: str(rec.get("flowId")), books: [] };
+      a.books.push({
+        id: str(rec.get("id")), type: str(rec.get("type")), content: str(rec.get("content")).slice(0, 300),
+        confidence: num(rec.get("confidence")), active: rec.get("active") === true,
+        created_at: str(rec.get("createdAt")), last_used: rec.get("lastUsed") == null ? null : str(rec.get("lastUsed")),
+        uses: num(rec.get("uses")), shared_uses: num(rec.get("sharedUses")),
+      });
+      agents.set(aid, a);
+    }
+    return { agents: [...agents.values()], query_ms: r.summary?.resultAvailableAfterMs ?? null, cypher: LEARNING_LIBRARY_CYPHER.trim() };
+  }
+
   async findSharedLearnings(q: SharedLearningQuery): Promise<SharedLearning[]> {
     const g = this.ready();
     if (!g) return [];

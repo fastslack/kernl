@@ -404,6 +404,64 @@ export function registerAgentRoutes(
 
   // GET /api/agents/conversations — list recent conversations
   //   query params: agent_id, kind (chat|meeting|debate), status (open|closed), limit
+  // GET /api/agents/learnings/:id/impact — did this lesson help? The runs that
+  // carried it against the same agents' runs without it (one graph traversal),
+  // and its confidence history (SQLite). The graph part is null without one.
+  server.route("GET", "/api/agents/learnings/:id/impact", async ({ params: { id } }) => {
+    const graph = service.getExperienceGraph();
+    let impact = null;
+    try {
+      impact = graph?.available ? await graph.learningImpact(id) : null;
+    } catch (err) {
+      log.debug(`Learning impact failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return { impact, history: service.getConfidenceHistory(id) };
+  });
+
+  // GET /api/agents/learnings/library?flow= — every agent's lessons (one office
+  // or all) with how often runs carried them (graph), and how each one's
+  // confidence moved over time (SQLite), for the library and its time slider.
+  server.route("GET", "/api/agents/learnings/library", async ({ query }) => {
+    const graph = service.getExperienceGraph();
+    const flow = query.get("flow") ?? "";
+    let lib = null;
+    try {
+      lib = graph?.available ? await graph.learningLibrary(flow) : null;
+    } catch (err) {
+      log.debug(`Learning library failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!lib) return { agents: [], timelines: {}, query_ms: null, cypher: "", graph: false };
+    const ids = lib.agents.flatMap((a) => a.books.map((b) => b.id));
+    return { ...lib, timelines: service.getConfidenceTimelines(ids), graph: true };
+  });
+
+  // GET /api/agents/learnings/constellation — every lesson as a star placed by
+  // meaning: Relate compares them pairwise by embedding, Kernl projects and groups.
+  server.route("GET", "/api/agents/learnings/constellation", async () => {
+    const graph = service.getExperienceGraph();
+    if (!graph?.available) return { stars: [], links: [], groups: [], query_ms: null, pairs: 0, cypher: "", graph: false };
+    try {
+      const c = await graph.learningConstellation();
+      return c ? { ...c, graph: true } : { stars: [], links: [], groups: [], query_ms: null, pairs: 0, cypher: "", graph: false };
+    } catch (err) {
+      log.debug(`Constellation failed: ${err instanceof Error ? err.message : String(err)}`);
+      return { stars: [], links: [], groups: [], query_ms: null, pairs: 0, cypher: "", graph: true };
+    }
+  });
+
+  // GET /api/agents/learnings/:id/lineage — where a lesson came from and what
+  // came out of it: one quantified-path traversal on the experience graph.
+  server.route("GET", "/api/agents/learnings/:id/lineage", async ({ params: { id } }) => {
+    const graph = service.getExperienceGraph();
+    if (!graph?.available) return { lineage: null, graph: false };
+    try {
+      return { lineage: await graph.learningLineage(id), graph: true };
+    } catch (err) {
+      log.debug(`Learning lineage failed: ${err instanceof Error ? err.message : String(err)}`);
+      return { lineage: null, graph: true };
+    }
+  });
+
   server.route("GET", "/api/agents/conversations", ({ query }) => {
     const conversations = service.listConversations({
       agent_id: query.get("agent_id") || undefined,
