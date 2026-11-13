@@ -10,6 +10,7 @@ const hit = (id: string, content: string): SharedLearning => ({
 function ctx(found: SharedLearning[]) {
   const events: Array<{ event_subtype: string }> = [];
   const recorded: string[][] = [];
+  const emitted: Array<{ name: string; fields: Record<string, any> }> = [];
   const c = {
     agent: { id: "me", flow_id: "", allowed_tools: "[]" },
     config: { agents: { sharedLearnings: true } },
@@ -22,9 +23,13 @@ function ctx(found: SharedLearning[]) {
       getEmbeddingsClient: () => ({ model: "m" }),
       recordInjectedLearnings: (_run: string, ids: string[]) => recorded.push(ids),
     },
-    recorder: { runId: "run-1", logEvent: (e: { event_subtype: string }) => events.push(e) },
+    recorder: {
+      runId: "run-1",
+      logEvent: (e: { event_subtype: string }) => events.push(e),
+      emit: (name: string, fields: Record<string, any>) => emitted.push({ name, fields }),
+    },
   } as unknown as SystemPromptContext;
-  return { c, events, recorded };
+  return { c, events, recorded, emitted };
 }
 
 describe("shared learnings in the prompt", () => {
@@ -35,6 +40,15 @@ describe("shared learnings in the prompt", () => {
     expect(block).toContain('<external source="shared-learning" from="Closer" trust="untrusted">');
     expect(block).toContain("Confirm the invoice address before sending");
     expect(recorded).toEqual([["l1"]]);
+  });
+
+  it("announce each recalled lesson live, with the agent that learned it", async () => {
+    const { c, emitted } = ctx([hit("l1", "Confirm the invoice address before sending")]);
+    await sharedLearnings(c);
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0].name).toBe("agent:flow:learning_recalled");
+    expect(emitted[0].fields.mode).toBe("vector");
+    expect(emitted[0].fields.items[0]).toMatchObject({ learning_id: "l1", source_agent_id: "a", source_agent_name: "Closer", score: 0.8 });
   });
 
   it("leave out a learning that reads like prompt injection, and say so in the run log", async () => {

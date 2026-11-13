@@ -270,7 +270,7 @@ export async function initCoreModules(args: {
   // Office knowledge packs: export an office's lessons, import others' through review.
   registry.register(createOfficePacksModule(() => {
     const svc = agentsModule.getService();
-    return svc ? (input) => svc.addLearning(input) : null;
+    return svc ? (input) => svc.addLearning({ ...input, source: "office-pack" }) : null;
   }));
   // Office environments moved to the paid DevOps extension. The shared
   // container an office's agents run commands in is a DevOps capability, not a
@@ -358,7 +358,7 @@ export async function initCoreModules(args: {
       const e = p as { agent_id: string; project_id: string | null; note: string };
       if (!e.agent_id) return;
       agentsModule.getService()?.addLearning({
-        agent_id: e.agent_id, type: "avoid", content: `Rejected draft: ${e.note}`, confidence: 0.7, project_id: e.project_id ?? undefined,
+        agent_id: e.agent_id, type: "avoid", content: `Rejected draft: ${e.note}`, confidence: 0.7, project_id: e.project_id ?? undefined, source: "outbox",
       });
     });
     // A bundle reinstall replaces an office agent's schedules → re-clone.

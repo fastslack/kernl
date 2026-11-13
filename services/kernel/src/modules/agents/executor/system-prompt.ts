@@ -258,6 +258,17 @@ export const sharedLearnings: SystemPromptStep = (ctx) => {
           mode: vector ? "vector" : "fulltext",
         },
       });
+      // Live: the 3D office draws each recalled lesson travelling from the
+      // agent that learned it to the one now using it.
+      ctx.recorder.emit("agent:flow:learning_recalled", {
+        mode: vector ? "vector" : "fulltext",
+        items: found.filter((f) => items.some((k) => k.id === f.id)).map((i) => ({
+          learning_id: i.id, source_agent_id: i.agentId, source_agent_name: i.agentName,
+          learning_type: i.type, content: i.content, confidence: i.confidence,
+          score: Number(i.score.toFixed(3)), relevance: Number(i.relevance.toFixed(3)),
+          tool_overlap: i.toolOverlap, same_office: i.sameOffice,
+        })),
+      });
       return promptSharedLearningsBlock(ctx.lang, items) || null;
     } catch (err) {
       log.debug(`Shared learnings skipped: ${err instanceof Error ? err.message : String(err)}`);

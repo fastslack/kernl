@@ -107,7 +107,7 @@ const AGENT_PATCH: Record<string, PatchColumn> = {
  * logic of its own stays written out in the class.
  */
 const DELEGATED = {
-  memory: ["setEmbeddingsClient", "getEmbeddingsClient", "addLearning", "getLearnings", "addMemory", "getMemory", "clearMemory", "getRelevantMemory", "getRelevantMemoryByEmbedding", "findSimilarPastRuns", "findSimilarPastRunsByEmbedding", "getRelevantLearnings", "getRelevantLearningsByEmbedding", "updateLearningConfidence", "deactivateLearning", "getLearningsActiveAt", "reinforceLearningsForRun", "cleanupLowConfidenceLearnings", "recordInjectedLearnings", "getInjectedLearnings"],
+  memory: ["setEmbeddingsClient", "getEmbeddingsClient", "addLearning", "getLearnings", "addMemory", "getMemory", "clearMemory", "getRelevantMemory", "getRelevantMemoryByEmbedding", "findSimilarPastRuns", "findSimilarPastRunsByEmbedding", "getRelevantLearnings", "getRelevantLearningsByEmbedding", "updateLearningConfidence", "deactivateLearning", "getLearningsActiveAt", "reinforceLearningsForRun", "cleanupLowConfidenceLearnings", "recordInjectedLearnings", "getInjectedLearnings", "getConfidenceHistory", "getConfidenceTimelines"],
   flows: ["createFlow", "ensureOfficeHome", "resolveFlowHome", "getFlowWorkspace", "setFlowWorkspaceSpec", "prepareFlowWorkspace", "setFlowRepo", "listFlows", "getFlow", "updateFlow", "deleteFlow", "setFlowPaused", "isFlowPaused", "isAgentOfficePaused", "assignAgentToFlow", "syncLots"],
   ranks: ["createRank", "listRanks", "getRank", "getTopAgent", "updateRank", "deleteRank", "assignRankToAgent"],
   runs: ["createRun", "getRun", "listRuns", "cancelRun", "cleanupStaleRuns", "recoverStaleRuns", "addStep", "getSteps", "getRunEvents", "saveCheckpoint", "getCheckpoint", "reopenRun", "markCheckpointResumed", "deleteCheckpoint", "getRunConditions", "setRunCondition"],
@@ -252,7 +252,9 @@ export class AgentService {
       (id) => this.getConversation(id),
     );
     this.conversations = new AgentConversationsService(db, events);
-    this.memory = new AgentMemoryService(db);
+    // Learning events go out on the agents.flow stream (the 3D office, the live log).
+    this.memory = new AgentMemoryService(db, (name, payload) =>
+      (events as unknown as { emit(n: string, p: unknown): void }).emit(name, payload));
     this.flows = new AgentFlowsService(db, events, (id) => this.getAgent(id));
     this.ranks = new AgentRanksService(
       db,

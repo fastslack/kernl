@@ -19,6 +19,7 @@
  *   (:Agent)-[:LEARNED]->(:AgentLearning {id, type, content, confidence,
  *                                         active, project_id, embedding})
  *   (:AgentLearning)-[:DERIVED_FROM]->(:AgentRun)
+ *   (:AgentRun)-[:RECALLED {shared}]->(:AgentLearning)   what the run's prompt carried
  *
  * Watermarks live in the graph itself (`:AgentXpSync`), so they follow the
  * store: switch to a fresh store and the next sync backfills it.
@@ -32,7 +33,7 @@ import type { GraphDriver } from "../../../core/db-drivers/graph-driver.js";
 import { log } from "../../../core/logger.js";
 import { blobToVector } from "../../../core/ranking/relevance.js";
 import { type GraphRunner, inGraphTransaction } from "../../../sdk/graph-batch.js";
-import { asVector, ensureVectorIndex, runVectorSearch } from "../../../sdk/graph-vectors.js";
+import { asVector, ensureVectorIndex, fulltextSearchClause, runVectorSearch } from "../../../sdk/graph-vectors.js";
 
 export const LEARNING_VECTOR_INDEX = "agent-learning-embeddings";
 export const LEARNING_TEXT_INDEX = "agent-learning-text";
@@ -42,8 +43,11 @@ const BATCH = 500;
  * Bump when syncRuns writes something new for runs already synced.
  * 2: USED.errors counts failed tool results (they are tool_result steps
  * flagged is_error, not error steps).
+ * 3: RECALLED edges, from agent_run_learnings.
  */
-const RUNS_SYNC_VERSION = 2;
+const RUNS_SYNC_VERSION = 3;
+/** 2: learnings carry created_at (when they were learned), for the time machine. */
+const LEARNINGS_SYNC_VERSION = 2;
 /** Below this final score a shared learning is noise in the prompt, not help. */
 const MIN_SCORE = 0.4;
 
@@ -103,6 +107,7 @@ interface LearningRow {
   source_runs: string;
   active: number;
   project_id: string | null;
+  created_at: string;
   updated_at: string;
   embedding: Uint8Array | null;
   embedding_model: string | null;
@@ -220,15 +225,22 @@ export class AgentExperienceGraph {
   private async readWatermarks(g: GraphDriver): Promise<{ runs: string; learnings: string }> {
     const r = await g.run(
       `MERGE (s:AgentXpSync {id: 'agents'})
-       RETURN s.runs AS runs, s.learnings AS learnings, coalesce(s.runs_version, 1) AS runsVersion`,
+       RETURN s.runs AS runs, s.learnings AS learnings, coalesce(s.runs_version, 1) AS runsVersion,
+              coalesce(s.learnings_version, 1) AS learningsVersion`,
     );
     const rec = r.records[0];
-    // A store synced by an older version of syncRuns is synced again from the start.
+    // A store synced by an older version of a sync is synced again from the start.
+    let runs = str(rec?.get("runs"));
+    let learnings = str(rec?.get("learnings"));
     if (num(rec?.get("runsVersion")) < RUNS_SYNC_VERSION) {
       await g.run("MATCH (s:AgentXpSync {id: 'agents'}) SET s.runs = '', s.runs_version = $v", { v: RUNS_SYNC_VERSION });
-      return { runs: "", learnings: str(rec?.get("learnings")) };
+      runs = "";
     }
-    return { runs: str(rec?.get("runs")), learnings: str(rec?.get("learnings")) };
+    if (num(rec?.get("learningsVersion")) < LEARNINGS_SYNC_VERSION) {
+      await g.run("MATCH (s:AgentXpSync {id: 'agents'}) SET s.learnings = '', s.learnings_version = $v", { v: LEARNINGS_SYNC_VERSION });
+      learnings = "";
+    }
+    return { runs, learnings };
   }
 
   private async setWatermark(g: GraphRunner, key: "runs" | "learnings", value: string): Promise<void> {
@@ -283,6 +295,13 @@ export class AgentExperienceGraph {
             GROUP BY run_id, tool_name`,
         )
         .all(...ids) as Array<{ run_id: string; tool_name: string; calls: number; errors: number }>;
+      // The lessons each run was given: its own and, shared=1, other agents'.
+      let recalled: Array<{ run_id: string; learning_id: string; shared: number }> = [];
+      try {
+        recalled = this.db
+          .prepare(`SELECT run_id, learning_id, shared FROM agent_run_learnings WHERE run_id IN (${placeholders})`)
+          .all(...ids) as typeof recalled;
+      } catch { /* table arrives with agents migration 60 */ }
       const last = rows[rows.length - 1];
 
       // A batch's runs, the tools they used and the watermark past them land
@@ -308,6 +327,18 @@ export class AgentExperienceGraph {
             { rows: tools },
           );
         }
+        if (recalled.length > 0) {
+          // The learning may reach the graph later in this same pass (a first
+          // sync writes runs before learnings): MERGE by id, its properties follow.
+          await tx.run(
+            `UNWIND $rows AS row
+             MATCH (r:AgentRun {id: row.run_id})
+             MERGE (l:AgentLearning {id: row.learning_id})
+             MERGE (r)-[c:RECALLED]->(l)
+             SET c.shared = row.shared = 1`,
+            { rows: recalled },
+          );
+        }
         await this.setWatermark(tx, "runs", `${last.done_at}|${last.id}`);
       });
 
@@ -328,7 +359,7 @@ export class AgentExperienceGraph {
     const waiting = missing.records.map((r) => str(r.get("id")));
     const changed = this.db
       .prepare(
-        `SELECT id, agent_id, type, content, confidence, source_runs, active, project_id,
+        `SELECT id, agent_id, type, content, confidence, source_runs, active, project_id, created_at,
                 updated_at, embedding, embedding_model
            FROM agent_learnings WHERE updated_at > ? ORDER BY updated_at, id`,
       )
@@ -336,19 +367,19 @@ export class AgentExperienceGraph {
     const late = waiting.length
       ? (this.db
           .prepare(
-            `SELECT id, agent_id, type, content, confidence, source_runs, active, project_id,
+            `SELECT id, agent_id, type, content, confidence, source_runs, active, project_id, created_at,
                     updated_at, embedding, embedding_model
                FROM agent_learnings
               WHERE embedding IS NOT NULL AND id IN (${waiting.map(() => "?").join(",")})`,
           )
           .all(...waiting) as LearningRow[])
       : [];
-    const byId = new Map<string, LearningRow>();
-    for (const r of [...changed, ...late]) byId.set(r.id, r);
-    const rows = [...byId.values()];
-    if (rows.length === 0) return 0;
+    // Changed rows in watermark order, then the late ones (embedding arrived).
+    const seen = new Set(changed.map((r) => r.id));
+    const lateOnly = late.filter((r) => !seen.has(r.id));
+    if (changed.length + lateOnly.length === 0) return 0;
 
-    const payload = rows.map((r) => {
+    const toPayload = (r: LearningRow) => {
       const vec = blobToVector(r.embedding);
       let sources: string[] = [];
       try {
@@ -365,35 +396,47 @@ export class AgentExperienceGraph {
         confidence: r.confidence,
         active: r.active === 1,
         project_id: r.project_id,
+        created_at: r.created_at || null,
         embedding: vec && vec.length === EMBEDDING_DIM ? vec : null,
         embedding_model: vec && vec.length === EMBEDDING_DIM ? r.embedding_model : null,
         sources,
       };
-    });
+    };
+    const write = (tx: GraphRunner, rows: ReturnType<typeof toPayload>[]) =>
+      tx.run(
+        `UNWIND $rows AS row
+         MERGE (a:Agent {id: row.agent_id})
+         MERGE (l:AgentLearning {id: row.id})
+         SET l.agent_id = row.agent_id, l.type = row.type, l.content = row.content,
+             l.confidence = row.confidence, l.active = row.active,
+             l.project_id = row.project_id, l.created_at = datetime(row.created_at),
+             l.embedding = ${asVector(g, "row.embedding")},
+             l.embedding_model = row.embedding_model
+         MERGE (a)-[:LEARNED]->(l)
+         WITH l, row
+         UNWIND row.sources AS rid
+         MERGE (r:AgentRun {id: rid})
+         MERGE (l)-[:DERIVED_FROM]->(r)`,
+        { rows },
+      );
 
-    const newest = changed.length ? changed[changed.length - 1].updated_at : since;
-    // Every learning of this pass and the watermark past them, together.
-    await inGraphTransaction(g, async (tx) => {
-      for (let i = 0; i < payload.length; i += BATCH) {
-        await tx.run(
-          `UNWIND $rows AS row
-           MERGE (a:Agent {id: row.agent_id})
-           MERGE (l:AgentLearning {id: row.id})
-           SET l.agent_id = row.agent_id, l.type = row.type, l.content = row.content,
-               l.confidence = row.confidence, l.active = row.active,
-               l.project_id = row.project_id, l.embedding = ${asVector(g, "row.embedding")},
-               l.embedding_model = row.embedding_model
-           MERGE (a)-[:LEARNED]->(l)
-           WITH l, row
-           UNWIND row.sources AS rid
-           MERGE (r:AgentRun {id: rid})
-           MERGE (l)-[:DERIVED_FROM]->(r)`,
-          { rows: payload.slice(i, i + BATCH) },
-        );
-      }
-      if (newest > since) await this.setWatermark(tx, "learnings", newest);
-    });
-    return rows.length;
+    // One transaction per batch, each carrying the watermark past its own
+    // rows: a large backlog (a first sync, a version bump) commits in bounded
+    // pieces and resumes where it stopped, instead of one commit that can
+    // outgrow the store's limits and fail on every pass.
+    for (let i = 0; i < changed.length; i += BATCH) {
+      const slice = changed.slice(i, i + BATCH);
+      const mark = slice[slice.length - 1].updated_at;
+      await inGraphTransaction(g, async (tx) => {
+        await write(tx, slice.map(toPayload));
+        if (mark > since) await this.setWatermark(tx, "learnings", mark);
+      });
+    }
+    for (let i = 0; i < lateOnly.length; i += BATCH) {
+      const slice = lateOnly.slice(i, i + BATCH);
+      await inGraphTransaction(g, (tx) => write(tx, slice.map(toPayload)));
+    }
+    return changed.length + lateOnly.length;
   }
 
   // ── Query (graph → prompt) ─────────────────────────
@@ -502,9 +545,10 @@ export class AgentExperienceGraph {
     if (!terms) return [];
     const r = await g.run(
       AgentExperienceGraph.candidates(
-        `CALL db.index.fulltext.queryNodes($index, $terms) YIELD node AS l, score WHERE ${AgentExperienceGraph.CANDIDATE_WHERE}`,
+        // A generous k: the candidate filter (active, other agents, project) comes after the index.
+        `${fulltextSearchClause(g, { alias: "l", index: LEARNING_TEXT_INDEX, label: "AgentLearning", query: "$terms", k: 200 })} WHERE ${AgentExperienceGraph.CANDIDATE_WHERE}`,
       ),
-      { index: LEARNING_TEXT_INDEX, terms, model: null, agentId: q.agentId, projectId: q.projectId, tools: q.tools },
+      { terms, model: null, agentId: q.agentId, projectId: q.projectId, tools: q.tools },
     );
     // Full-text scores are unbounded, so they are read relative to the best
     // hit — which would make the best hit a perfect match by definition.

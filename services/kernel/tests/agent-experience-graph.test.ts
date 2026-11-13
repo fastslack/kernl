@@ -196,6 +196,29 @@ describe.skipIf(!relateClientInstalled())("AgentExperienceGraph on Relate", () =
     expect(hits.map((h) => h.id)).toEqual(["l-web"]);
   });
 
+  it("projects what each run was given as RECALLED, even on a first sync", async () => {
+    // b's runs after l-mail exists: two carried it (one failed), two did not (one failed).
+    addRun("rb1", "b", "2026-11-11T11:00:00.000Z");
+    addRun("rb2", "b", "2026-11-11T11:10:00.000Z", [], "failed");
+    addRun("rb3", "b", "2026-11-11T11:20:00.000Z");
+    addRun("rb4", "b", "2026-11-11T11:30:00.000Z", [], "failed");
+    addRun("rb0", "b", "2026-11-09T08:00:00.000Z"); // before the lesson: not compared
+    const give = db.prepare("INSERT INTO agent_run_learnings (run_id, learning_id, shared) VALUES (?, ?, ?)");
+    give.run("rb1", "l-mail", 1);
+    give.run("rb2", "l-mail", 1);
+    give.run("rb1", "l-own", 0);
+    // A first sync writes runs before learnings: the edge must survive that order.
+    await xp.sync();
+    const edges = await graph.run(
+      "MATCH (r:AgentRun)-[c:RECALLED]->(l:AgentLearning) RETURN r.id AS r, l.id AS l, c.shared AS s, l.content AS content ORDER BY r, l",
+    );
+    expect(edges.records.map((x) => [x.get("r"), x.get("l"), x.get("s")])).toEqual([
+      ["rb1", "l-mail", true], ["rb1", "l-own", false], ["rb2", "l-mail", true],
+    ]);
+    expect(edges.records[0].get("content")).toContain("email address");
+
+  });
+
   it("picks up an embedding that arrives after the learning was synced", async () => {
     addLearning("l-late", "c", "Late learning about mail contacts", null, { at: "2026-11-11T12:00:00.000Z" });
     await xp.sync();

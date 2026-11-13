@@ -1167,18 +1167,11 @@ export class AgentExecutor {
           // A lesson from a project run is that project's until proven
           // general (spec: when in doubt, scope to the project).
           project_id: run.project_id ?? null,
+          // The memory service announces it (agent:flow:learning_created).
+          source: "auto",
+          run_id: run.id,
         });
         learningCreated = { id: l.id, type: l.type, content: evalResult.lesson, confidence: l.confidence };
-
-        events?.emit("agent:flow:learning_created", {
-          agent_id: agent.id,
-          agent_name: agent.name,
-          run_id: run.id,
-          learning_id: l.id,
-          learning_type: l.type,
-          content: evalResult.lesson,
-          confidence: l.confidence,
-        });
       }
 
       // Learnings the cleanup retired (fell below the confidence floor): the

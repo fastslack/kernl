@@ -1064,6 +1064,27 @@ export const agentsMigrations: Migration[] = [
       ) WITHOUT ROWID;
     `,
   },
+  {
+    // Every change in a learning's confidence, with the run that caused it:
+    // the history behind "did this lesson help", and the time machine's view of
+    // how an agent's knowledge firmed up or faded. `agent_id` is the agent whose
+    // run moved it — another agent's, for a shared learning.
+    version: 63,
+    sql: `
+      CREATE TABLE IF NOT EXISTS agent_learning_confidence (
+        learning_id TEXT NOT NULL,
+        at          TEXT NOT NULL,
+        before      REAL,
+        after       REAL NOT NULL,
+        delta       REAL NOT NULL DEFAULT 0,
+        run_id      TEXT NOT NULL DEFAULT '',
+        agent_id    TEXT NOT NULL DEFAULT '',
+        cause       TEXT NOT NULL DEFAULT 'run'
+      );
+      CREATE INDEX IF NOT EXISTS idx_learning_confidence_learning ON agent_learning_confidence (learning_id, at);
+      CREATE INDEX IF NOT EXISTS idx_learning_confidence_run ON agent_learning_confidence (run_id);
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is
@@ -1072,5 +1093,5 @@ export const agentsMigrations: Migration[] = [
   //
   // NOTE: versions 61 and 62 are burned too. They belonged to a learning
   // import from other instances that was removed before any release; a dev
-  // DB may have recorded them. The next migration is 63.
+  // DB may have recorded them. The next migration is 64.
 ];

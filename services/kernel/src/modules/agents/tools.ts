@@ -727,6 +727,7 @@ export function agentsTools(
             content: input.lesson.trim(),
             confidence: input.rating >= 4 ? 0.8 : input.rating >= 3 ? 0.5 : 0.3,
             source_runs: [input.run_id],
+            source: "feedback",
           });
         }
 
@@ -809,6 +810,8 @@ export function agentsTools(
           content: input.content,
           confidence: input.confidence ?? 0.7,
           project_id: input.scope === "general" ? null : callerProject,
+          source: "tool",
+          run_id: callerRunId ?? undefined,
         });
 
         return textResult(`Learning added (${learning.id}): [${input.type}] ${input.content.slice(0, 100)}`);
