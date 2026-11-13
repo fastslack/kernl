@@ -81,6 +81,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Agents learn from each other.** Runs, the tools they used and the
+  lessons drawn from them are projected into a shared experience graph, and
+  an agent's prompt carries other agents' lessons that fit its goal, ranked by
+  relevance, confidence, shared tools and shared office, and marked as
+  untrusted data. Every change in what an agent knows is recorded and
+  announced.
+- **Office packs.** An office's lessons export as a JSON or Markdown file with
+  emails, phones, tokens and home paths blanked; importing one stages its
+  lessons for review (`kernel_office_pack_review`), with confidence capped at
+  0.6.
+- **Facts with two timelines.** `kernel_facts_assert`, `_retract` and `_query`
+  keep when each fact was true and when Kernl believed it; a new value ends or
+  corrects the old one and nothing is deleted. `kernel_facts_explain` answers
+  why Kernl acted and what it knew then.
+- **`kernel_brain_ask`:** one question over brain items, chat, memories, the
+  agents' lessons and the graph's people, tasks, notes, mail and events, by
+  meaning and by words, fused into one ranked list.
+- **One person across every source.** Contacts keep every email, phone and
+  handle they are known by; `kernel_crm_duplicates`, `kernel_crm_merge` (with a
+  snapshot) and `kernel_crm_not_duplicate`, and `kernel_crm_person_360`.
+- **Provenance.** Every write through a tool records who made it, whether it
+  worked and the ids it touched (kept 180 days); `kernel_audit_who_changed`
+  and `kernel_audit_changes`.
+- **Agents read the graph.** `kernel_graph_schema`, `kernel_graph_query`
+  (one read-only statement, checked three ways) and `kernel_graph_ask` (a
+  question in plain words); `kernel_graph_scratch` and `kernel_graph_slice`
+  give a run a private graph to write in. Outside MCP clients never see
+  `GRAPH_PRIVATE_LABELS` (mail, chat memory and facts by default).
+- **Graph analytics on any engine.** `kernel_graph_analyze`: PageRank,
+  communities, components and betweenness, with GDS when the graph has it, a
+  remote GDS when `GDS_REMOTE_URI` is set, and plain TypeScript otherwise.
+- **A graph explorer** at /graph: the graph in 3D, by label or search, with
+  neighbours pulled in one or two hops out.
+- **Code graph for repos.** `kernel_repos_code_hotspots`,
+  `kernel_repos_code_owners` and `kernel_repos_change_impact`, from git
+  history.
+- **Places.** Where events, trips and hotels are, and what is near
+  (`kernel_places_near`); geocoding only with `PLACES_GEOCODER=nominatim`.
 - **A time machine over what Kernl knew.** Pick a person, company or agent and
   a moment: Kernl rebuilds what it knew then, who wrote each fact, which ones
   were replaced later, and the agent runs that acted on a fact while it was
