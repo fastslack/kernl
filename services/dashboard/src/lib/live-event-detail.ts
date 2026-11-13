@@ -34,6 +34,8 @@ export type DetailSection =
 
 export interface LiveEventDetail {
   sections: DetailSection[];
+  /** Lessons this event is about: the view shows whether each one helped. */
+  lessonIds?: string[];
   /** Plain-text version of everything shown, for the copy button. */
   copyText: string;
 }
@@ -182,6 +184,50 @@ function build(e: AgentFlowEvent, type: string): DetailSection[] | null {
       ].filter(Boolean) as DetailSection[];
     }
 
+    case 'learning_recalled': {
+      const items = Array.isArray(d.items) ? (d.items as Array<Record<string, unknown>>) : [];
+      return [
+        {
+          kind: 'list', label: 'Lessons from other agents',
+          items: items.map((i) => ({
+            text: str(i.content).replace(/^\[auto\]\s*/, ''),
+            meta: [
+              str(i.source_agent_name) && `from ${str(i.source_agent_name)}`,
+              learningKind(i.learning_type).label,
+              `score ${pct(i.score)}`,
+              `relevance ${pct(i.relevance)}`,
+              num(i.tool_overlap) ? `${int(i.tool_overlap)} shared tools` : '',
+              i.same_office ? 'same office' : '',
+            ].filter(Boolean).join(' · '),
+          })),
+        },
+        {
+          kind: 'note',
+          body: `Found by ${str(d.mode) === 'fulltext' ? 'full-text search' : 'vector search with filters inside the index'} in the agents' experience graph, weighted by the tools and office this agent shares with the one that learned it.`,
+        },
+        fields([runIdField(d)]),
+      ].filter(Boolean) as DetailSection[];
+    }
+
+    case 'learning_reinforced': {
+      const items = Array.isArray(d.items) ? (d.items as Array<Record<string, unknown>>) : [];
+      const outcome = OUTCOMES[str(d.outcome)] ?? str(d.outcome);
+      return [
+        {
+          kind: 'list', label: `After a ${outcome.toLowerCase() || 'graded'} run`,
+          items: items.map((i) => {
+            const delta = num(i.delta) ?? 0;
+            return {
+              text: `${pct(i.before)} → ${pct(i.after)} (${delta >= 0 ? '+' : '−'}${Math.round(Math.abs(delta) * 100)})${i.deactivated ? ' · retired' : ''}`,
+              meta: [learningKind(i.learning_type).label, i.shared ? `${str(i.owner_agent_name) || 'another agent'}'s lesson` : 'own lesson'].join(' · '),
+            };
+          }),
+        },
+        { kind: 'note', body: 'A lesson the run carried gains confidence when the run succeeds and loses it when it fails; below the floor it is retired. An avoid lesson is never weakened by a failure: that is what it warned about.' },
+        fields([runIdField(d)]),
+      ].filter(Boolean) as DetailSection[];
+    }
+
     case 'learning_deactivated': {
       const retired = Array.isArray(d.learnings) ? (d.learnings as Array<Record<string, unknown>>) : [];
       const note: DetailSection = {
@@ -266,5 +312,17 @@ export function liveEventDetail(e: AgentFlowEvent): LiveEventDetail | null {
   if (PAYLOAD_STEPS.has(type)) return null;
   const sections = build(e, type);
   if (!sections || sections.length === 0) return null;
-  return { sections, copyText: toText(sections) };
+  const lessonIds = lessonIdsOf(e.data ?? {}, type);
+  return { sections, copyText: toText(sections), ...(lessonIds.length ? { lessonIds } : {}) };
+}
+
+/** The lessons an event is about, at most three. */
+function lessonIdsOf(d: Record<string, unknown>, type: string): string[] {
+  const items = Array.isArray(d.items) ? (d.items as Array<Record<string, unknown>>) : [];
+  const ids =
+    type === 'learning_created' ? [str(d.learning_id)]
+    : type === 'learning_recalled' ? items.map((i) => str(i.learning_id))
+    : type === 'learning_reinforced' ? items.filter((i) => i.shared).map((i) => str(i.learning_id))
+    : [];
+  return [...new Set(ids.filter(Boolean))].slice(0, 3);
 }

@@ -46,6 +46,32 @@ describe("liveEventDetail", () => {
     expect(d!.copyText).toContain(long.trim());
   });
 
+  it("lessons recalled: each one with who learned it and why it was chosen, and its impact card", () => {
+    const d = liveEventDetail(ev("learning_recalled", {
+      ...base, mode: "vector",
+      items: [{ learning_id: "l-1", source_agent_id: "a", source_agent_name: "Ana", learning_type: "avoid",
+        content: "[auto] Check the address", confidence: 0.6, score: 0.82, relevance: 0.9, tool_overlap: 2, same_office: true }],
+    }));
+    const list = section(d, "list", "Lessons from other agents")!;
+    expect(list.items[0].text).toBe("Check the address");
+    expect(list.items[0].meta).toBe("from Ana · Avoid · score 82% · relevance 90% · 2 shared tools · same office");
+    expect(d!.lessonIds).toEqual(["l-1"]);
+  });
+
+  it("lessons reinforced: before and after, whose lesson, and only shared ones get an impact card", () => {
+    const d = liveEventDetail(ev("learning_reinforced", {
+      ...base, outcome: "failure",
+      items: [
+        { learning_id: "own", shared: false, learning_type: "prefer", before: 0.5, after: 0.35, delta: -0.15, deactivated: false },
+        { learning_id: "theirs", shared: true, owner_agent_name: "Ana", learning_type: "insight", before: 0.2, after: 0.05, delta: -0.15, deactivated: true },
+      ],
+    }));
+    const list = section(d, "list", "After a failure run")!;
+    expect(list.items.map((i) => i.text)).toEqual(["50% → 35% (−15)", "20% → 5% (−15) · retired"]);
+    expect(list.items[1].meta).toBe("Insight · Ana's lesson");
+    expect(d!.lessonIds).toEqual(["theirs"]);
+  });
+
   it("self-eval: score meter, outcome in words, and every issue as its own line", () => {
     const d = liveEventDetail(ev("auto_eval", {
       ...base, score: 1, outcome: "failure", confidence: 0.8,

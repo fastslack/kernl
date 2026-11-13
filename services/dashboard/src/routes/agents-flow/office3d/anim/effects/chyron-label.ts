@@ -49,7 +49,14 @@ export function chyronLabel(scene: any, opts: ChyronLabelOpts): Ticker {
     min-width:${minW}px;text-align:center;letter-spacing:0.3px;
     transform:scale(0);opacity:0;
     transform-origin:center;pointer-events:none;will-change:transform,opacity;`;
-  const label = new CSS2D(div);
+  // The CSS2D renderer positions its element with `transform`; the pop-in
+  // scales the card with `transform` too, so the card sits inside a wrapper the
+  // renderer owns — on the same element, whichever wrote last won, and the card
+  // flashed in the top-left corner between renders.
+  const holder = document.createElement('div');
+  holder.style.pointerEvents = 'none';
+  holder.appendChild(div);
+  const label = new CSS2D(holder);
   label.position.set(opts.position.x, opts.position.y, opts.position.z);
   scene.add(label);
 
@@ -83,7 +90,7 @@ export function chyronLabel(scene: any, opts: ChyronLabelOpts): Ticker {
     },
     dispose() {
       if (label.parent) label.parent.remove(label);
-      div.remove();
+      holder.remove();
     },
   };
 }

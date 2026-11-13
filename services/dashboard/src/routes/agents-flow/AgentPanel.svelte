@@ -1099,6 +1099,8 @@ Boss says: "${msg || '(see the attached files)'}"`;
     bind:editingName
     bind:editNameValue
     bind:panelTab
+    timeMachine
+    on:timemachine={() => dispatch('timemachine', { agentId: selData?.id })}
     on:close={() => { selectedAgent = null; }}
     on:tab={(e) => selectPanelTab(e.detail.tab)}
     on:run={startAgent}

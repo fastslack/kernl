@@ -30,13 +30,18 @@
     createAnimationRegistry, initAnimEffects,
     cameraTween, haloPulse, risingParticles, bubbleFade, materialPulse,
     floatingGlyph, shake, convergingParticles,
-    curvedArrow, pillarOfLight, coinTrail, chyronLabel,
+    curvedArrow, pillarOfLight, coinTrail, chyronLabel, lessonThread,
     createNoteStack, type NoteStack,
     type AnimationRegistry,
     type DeliveryInfo,
     resolveFlowColor, CLAUDE_CODE_DEFAULT_MODEL, NAMEPLATE_HEIGHT, nameplateTransform,
     type Walker, type SpeechBubble, type HumanoidParts, type RoomInfo, type CorridorGrid, type Aabb2D, type HallwayLine,
   } from './office3d/index.js';
+  import { buildHologram, type HologramHandle, type HoloSnapshot } from './office3d/hologram.js';
+  import { buildLibrary, type LibraryHandle } from './office3d/library.js';
+  import { buildConstellation, type ConstellationHandle, type ConstellationView } from './office3d/constellation.js';
+  import { buildEngineRoom, type EngineRoomHandle, type EnginePulse, type PlanNodeView, type BlueprintView, type PathView } from './office3d/engine-room.js';
+  import type { Library, LineageHop } from '$lib/learning-library.js';
   import { propOf, tagProp, type InteractiveProp, type PropHit } from './office3d/wall-screen.js';
   import {
     createRenderer, configureRenderer, createLabelRenderer, applyEnvironment,
@@ -2881,6 +2886,7 @@
     spawnMeetingDecor, updateMeetingDecorTurn, disposeMeetingDecor,
     pushMgmtLog, playTopAgentChime, loadPendingQuestions,
     topAgent, highestRank, handleInfraToggle,
+    constellationPing,
   };
   function processEvents() {
     processLiveEvents(eventCtx);
@@ -3408,6 +3414,238 @@
   }
 
   // ── Imperative API for the /agents-flow shell (bind:this) ─────────
+  // ── Time machine (TimeMachine.svelte): a subject's graph at a moment,
+  //    projected above the office whose agents wrote it. ──────────────
+  let hologram: HologramHandle | null = null;
+  let hologramFlow: string | null = null;
+  let hologramSnap: HoloSnapshot | null = null;
+  let hologramAt = '';
+  export function timeMachineShow(flowId: string, snap: HoloSnapshot): boolean {
+    const room = roomMap.get(flowId);
+    if (!scene || !THREE || !room) return false;
+    const at = `${room.cx},${room.cz}`;
+    // A scene rebuild drops everything it did not build itself, and a layout
+    // change can move the office: build the projector again where it stands.
+    if (hologram && (hologramFlow !== flowId || hologram.group.parent !== scene || hologramAt !== at)) { hologram.dispose(); hologram = null; }
+    hologram ??= buildHologram(scene, room);
+    hologramFlow = flowId;
+    hologramAt = at;
+    hologramSnap = snap;
+    hologram.show(snap);
+    return true;
+  }
+  /** Called each frame: keep the hologram standing through scene rebuilds. */
+  function keepHologram(): void {
+    if (!hologram || !hologramFlow || !hologramSnap) return;
+    const room = roomMap.get(hologramFlow);
+    if (hologram.group.parent === scene && room && hologramAt === `${room.cx},${room.cz}`) return;
+    if (!room) return;
+    timeMachineShow(hologramFlow, hologramSnap);
+  }
+  /** Frame the office and the graph floating above it. */
+  export function timeMachineFocus(flowId: string): void {
+    const room = roomMap.get(flowId);
+    if (!room) return;
+    focusOffice({ cx: room.cx, cz: room.cz, w: Math.max(room.w, room.d) * 1.9, d: Math.max(room.w, room.d) * 1.9, y: 7 });
+  }
+  export function timeMachineClose(): void {
+    hologram?.dispose();
+    hologram = null;
+    hologramFlow = null;
+    hologramSnap = null;
+  }
+
+  // ── Experience library (LearningLibrary.svelte): every agent's lessons as
+  //    books in a pavilion on a free lot, set to any moment; a lesson's
+  //    lineage drawn as threads between the desks it reached. ───────────
+  let library: LibraryHandle | null = null;
+  let libraryData: Library | null = null;
+  let libraryLot: { cx: number; cz: number; w: number; d: number } | null = null;
+  let libraryAtMs = Date.now();
+  type LotRect = { cx: number; cz: number; w: number; d: number };
+  /** A free lot near the hall for a pavilion (library, engine room), not one another pavilion stands on. */
+  function pickPavilionLot(taken: Array<LotRect | null>): LotRect | null {
+    const busy = (l: LotRect) => taken.some((t) => t && Math.abs(t.cx - l.cx) < 0.01 && Math.abs(t.cz - l.cz) < 0.01);
+    const lot = [...freeLots].sort((a, b) => a.ring - b.ring || Math.abs(a.cz) - Math.abs(b.cz)).find((l) => !busy(l));
+    if (lot) return { cx: lot.cx, cz: lot.cz, w: lot.w, d: lot.d };
+    // No free lot: beside every room, on the open ground.
+    if (roomMap.size === 0) return null;
+    let maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const r of roomMap.values()) { maxX = Math.max(maxX, r.cx + r.w / 2); minZ = Math.min(minZ, r.cz - r.d / 2); maxZ = Math.max(maxZ, r.cz + r.d / 2); }
+    const side = { cx: maxX + 12, cz: (minZ + maxZ) / 2, w: 18, d: 16 };
+    return busy(side) ? { ...side, cx: side.cx + 22 } : side;
+  }
+  function pickLibraryLot(): LotRect | null { return pickPavilionLot([engineLot]); }
+  /** The direction from the target to the camera on the ground: pavilions turn to face it. */
+  function cameraFace(): { x: number; z: number } {
+    return camera && controls ? { x: camera.position.x - controls.target.x, z: camera.position.z - controls.target.z } : { x: 0, z: 1 };
+  }
+  /** Frame a pavilion left of centre: the side panel covers the right of the view. */
+  function focusPavilion(lot: LotRect, y = 2): void {
+    let sx = 0, sz = 0;
+    if (camera && controls) {
+      const dx = camera.position.x - controls.target.x, dz = camera.position.z - controls.target.z;
+      const l = Math.hypot(dx, dz) || 1;
+      const k = lot.w * 0.32;
+      sx = (dz / l) * k;
+      sz = (-dx / l) * k;
+    }
+    focusOffice({ cx: lot.cx + sx, cz: lot.cz + sz, w: lot.w * 1.15, d: lot.d * 1.15, y });
+  }
+
+  // ── Constellation (Constellation.svelte): every lesson as a star over the building. ──
+  let sky: ConstellationHandle | null = null;
+  let skyData: ConstellationView | null = null;
+  let skyFrame: { cx: number; cz: number; span: number; height: number } | null = null;
+  function buildingFrame(): { cx: number; cz: number; span: number; height: number } | null {
+    if (roomMap.size === 0) return null;
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const r of roomMap.values()) {
+      minX = Math.min(minX, r.cx - r.w / 2); maxX = Math.max(maxX, r.cx + r.w / 2);
+      minZ = Math.min(minZ, r.cz - r.d / 2); maxZ = Math.max(maxZ, r.cz + r.d / 2);
+    }
+    // Tight over the middle of the building: the camera that frames it sees a
+    // cone, and the projection pushes distinct groups out to the rim.
+    const span = Math.max(24, Math.max(maxX - minX, maxZ - minZ) * 0.42);
+    return { cx: (minX + maxX) / 2, cz: (minZ + maxZ) / 2, span, height: 22 + span * 0.2 };
+  }
+  export function constellationShow(c: ConstellationView): boolean {
+    if (!scene || !THREE) return false;
+    if (sky && (skyData !== c || sky.group.parent !== scene)) { sky.dispose(); sky = null; }
+    skyFrame ??= buildingFrame();
+    if (!skyFrame) return false;
+    skyData = c;
+    sky ??= buildConstellation(scene, skyFrame, c);
+    return true;
+  }
+  /**
+   * Frame the sky over the building: from high up and to the side, looking at
+   * the building through the canopy (the orbit controls keep the camera above
+   * its target, so the sky is seen from above, stars between us and the floor).
+   */
+  export function constellationFocus(): void {
+    if (!sky || !camera || !controls) return;
+    const b = sky.bounds();
+    const dx = camera.position.x - controls.target.x, dz = camera.position.z - controls.target.z;
+    const l = Math.hypot(dx, dz) || 1;
+    // From above the sky, looking down through it at the floor under its centre.
+    const back = b.radius * 1.5;
+    // Aim at the stars' centre itself: aiming at the floor under it pushes the sky off the top of the view.
+    tweenCameraTo(b.x, b.y, b.z, b.x + (dx / l) * back, b.y + b.radius * 2.4, b.z + (dz / l) * back);
+  }
+  export function constellationHighlight(group: number | null): void { sky?.highlight(group); }
+  /** A recalled lesson's star flares and drops a beam to the desk receiving it. */
+  export function constellationPing(ids: string[], agentId: string): void {
+    if (!sky) return;
+    const d = deskPos.get(agentId);
+    sky.ping(ids, d ? { x: d.x, y: 1.9, z: d.z + 0.55 } : null);
+  }
+  export function constellationClose(): void {
+    sky?.dispose();
+    sky = null;
+    skyData = null;
+    skyFrame = null;
+  }
+
+  // ── Engine room (EngineRoom.svelte): Relate at work, on its own lot. ──
+  let engine: EngineRoomHandle | null = null;
+  let engineLot: LotRect | null = null;
+  let engineState: { plan?: [string, PlanNodeView | null, string]; blueprint?: BlueprintView | null; path?: PathView | null; warning?: boolean; stats?: { reads: string; writes: string } } = {};
+  export function engineShow(): boolean {
+    if (!scene || !THREE) return false;
+    if (engine && engine.group.parent !== scene) { engine.dispose(); engine = null; }
+    engineLot ??= pickPavilionLot([libraryLot]);
+    if (!engineLot) return false;
+    if (!engine) {
+      engine = buildEngineRoom(scene, engineLot, cameraFace());
+      setLotSignHidden(engineLot, true);
+      const st = engineState;
+      if (st.plan) engine.showPlan(...st.plan);
+      if (st.blueprint !== undefined) engine.showBlueprint(st.blueprint);
+      if (st.path !== undefined) engine.showPath(st.path);
+      if (st.warning !== undefined) engine.setWarning(st.warning);
+      if (st.stats) engine.setStats(st.stats);
+    }
+    return true;
+  }
+  export function engineFocus(): void { if (engineLot) focusPavilion(engineLot, 3); }
+  export function enginePulse(items: EnginePulse[]): void { engine?.pulse(items); }
+  export function engineStats(text: { reads: string; writes: string }): void { engineState.stats = text; engine?.setStats(text); }
+  export function engineWarning(on: boolean): void { engineState.warning = on; engine?.setWarning(on); }
+  export function enginePlan(title: string, tree: PlanNodeView | null, footer: string): void { engineState.plan = [title, tree, footer]; engine?.showPlan(title, tree, footer); }
+  export function engineBlueprint(bp: BlueprintView | null): void { engineState.blueprint = bp; engine?.showBlueprint(bp); }
+  export function enginePath(p: PathView | null): void { engineState.path = p; engine?.showPath(p); }
+  export function engineClose(): void {
+    if (engineLot) setLotSignHidden(engineLot, false);
+    engine?.dispose();
+    engine = null;
+    engineLot = null;
+    engineState = {};
+  }
+  /** Build (or rebuild with new data) the library and set it to `at`. False when there is no scene yet. */
+  export function libraryShow(lib: Library, at: number): boolean {
+    if (!scene || !THREE) return false;
+    if (library && (libraryData !== lib || library.group.parent !== scene)) { library.dispose(); library = null; }
+    libraryLot ??= pickLibraryLot();
+    if (!libraryLot) return false;
+    libraryData = lib;
+    if (!library) {
+      // Turn the cases toward the camera's side, so the books are seen from the front.
+      library = buildLibrary(scene, libraryLot, lib, cameraFace());
+      setLotSignHidden(libraryLot, true);
+    }
+    libraryAtMs = at;
+    library.show(at);
+    return true;
+  }
+  export function libraryAt(at: number): void { libraryAtMs = at; library?.show(at); }
+  export function libraryHighlight(ids: Set<string> | null): void { library?.highlight(ids); }
+  /** Frame the pavilion left of centre: the library panel covers the right of the view. */
+  export function libraryFocus(): void { if (libraryLot) focusPavilion(libraryLot); }
+  /** The pavilion stands on the lot: its "Lot available" sign steps aside meanwhile. */
+  function setLotSignHidden(lot: { cx: number; cz: number }, hidden: boolean): void {
+    staticGroup?.traverse?.((o: any) => {
+      if (o.userData?.lotMarkers && o.isCSS2DObject && Math.abs(o.position.x - lot.cx) < 0.01 && Math.abs(o.position.z - lot.cz) < 0.01) o.visible = !hidden;
+    });
+  }
+  export function libraryClose(): void {
+    if (libraryLot) setLotSignHidden(libraryLot, false);
+    library?.dispose();
+    library = null;
+    libraryData = null;
+    libraryLot = null;
+    lineageClear();
+  }
+  /** Each frame: stand the library up again after a scene rebuild. */
+  function keepLibrary(): void {
+    if (!library || !libraryData) return;
+    if (library.group.parent !== scene) { const lib = libraryData; library.dispose(); library = null; libraryShow(lib, libraryAtMs); }
+  }
+  let lineageTimers: ReturnType<typeof setTimeout>[] = [];
+  /** A lesson's lineage in the office: a thread for each hop, root first, green or red by how the run went. */
+  export function lineageShow(hops: LineageHop[], originId: string): void {
+    lineageClear();
+    if (!scene) return;
+    if (originId) showAnimatedTag(originId, { icon: '⭐', anim: 'sparkle', color: '#a66bff', label: 'ORIGIN', durationFrames: 900 });
+    hops.slice(0, 24).forEach((h, i) => {
+      lineageTimers.push(setTimeout(() => {
+        const fp = deskPos.get(h.from), tp = deskPos.get(h.to);
+        if (!fp || !tp || !scene) return;
+        animRegistry.add(lessonThread(scene, {
+          from: { x: fp.x, y: 2.6, z: fp.z + 0.55 }, to: { x: tp.x, y: 1.85, z: tp.z + 0.55 },
+          color: h.ok ? 0x45e08a : 0xff5a5a, weight: Math.max(0.3, 0.8 - h.depth * 0.2),
+          travelSec: 1.0, holdSec: 12, fadeSec: 1.2, tag: 'lineage',
+        }));
+        showAnimatedTag(h.to, { icon: h.ok ? '✓' : '✗', anim: 'pop', color: h.ok ? '#45e08a' : '#ff5a5a', label: h.child ? 'USED · LEARNED' : 'USED', durationFrames: 800 });
+      }, h.depth * 1100 + i * 220));
+    });
+  }
+  export function lineageClear(): void {
+    for (const t of lineageTimers) clearTimeout(t);
+    lineageTimers = [];
+    animRegistry.cancelByTag('lineage');
+  }
+
   export function focusOfficeById(flowId: string): boolean {
     const room = roomMap.get(flowId);
     if (!room) return false;
@@ -3614,6 +3852,10 @@
     // Drive every registered Ticker — camera tweens, halo pulses, trade
     // particles, bubble fades. Finished tickers self-dispose and drop out.
     animRegistry.tick(deltaSec, sceneTimeSec);
+    if (hologram) { try { keepHologram(); hologram?.tick(deltaSec, sceneTimeSec); } catch (err) { console.error('[time machine] tick failed', err); } }
+    if (library) { try { keepLibrary(); library?.tick(deltaSec, sceneTimeSec); } catch (err) { console.error('[library] tick failed', err); } }
+    if (sky) { try { if (sky.group.parent !== scene && skyData) { const c = skyData; sky.dispose(); sky = null; skyData = null; constellationShow(c); } sky?.tick(deltaSec, sceneTimeSec); } catch (err) { console.error('[constellation] tick failed', err); } }
+    if (engine) { try { if (engine.group.parent !== scene) engineShow(); engine?.tick(deltaSec, sceneTimeSec); } catch (err) { console.error('[engine room] tick failed', err); } }
     for (const [kind, inst] of worldInstances) {
       try { inst.tick(deltaSec); } catch (err) { console.error(`[world] ${kind}: tick failed`, err); }
     }
@@ -4393,6 +4635,7 @@
     resizeObserver?.disconnect();
     resizeObserver = null;
     if (animId) cancelAnimationFrame(animId);
+    hologram?.dispose();
     if (reposRefreshTimer) { clearInterval(reposRefreshTimer); reposRefreshTimer = null; }
     unmountWorldPlugins();
     unsubExtWorlds();
@@ -5013,6 +5256,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     {showBubble}
     on:refresh
     on:moveagent
+    on:timemachine
   />
 
   {#if runningAgentIds.size > 0}
