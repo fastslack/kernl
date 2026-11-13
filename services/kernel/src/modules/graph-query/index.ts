@@ -15,6 +15,7 @@ import { z } from "zod";
 import type { DashboardDescriptor, ExtensibleModule, ModuleContext, ToolDefinition, ToolResult } from "../../core/types.js";
 import { HttpError } from "../../core/http-server.js";
 import { GraphExplorer } from "./explorer.js";
+import { EngineRoom } from "./engine.js";
 import { errorResult, structuredResult } from "../../core/helpers.js";
 import { defineTool } from "../../core/tool-builder.js";
 import { llm } from "../../core/llm/client.js";
@@ -47,6 +48,7 @@ function scratchOwner(args: Record<string, unknown>): string {
 export function createGraphQueryModule(): ExtensibleModule {
   let service: GraphQueryService | null = null;
   let explorerSvc: GraphExplorer | null = null;
+  let engineRoom: EngineRoom | null = null;
   const off = () => errorResult("The graph is off.");
   const scratch = relateClientInstalled()
     ? new ScratchGraphs(async () => {
@@ -218,6 +220,7 @@ export function createGraphQueryModule(): ExtensibleModule {
     async initialize(ctx: ModuleContext) {
       service = new GraphQueryService(() => ctx.graph);
       explorerSvc = new GraphExplorer(() => ctx.graph);
+      engineRoom = new EngineRoom(() => ctx.graph);
       if (scratch) {
         scratch.startSweeper();
         const done = (p: unknown) => {
@@ -257,6 +260,31 @@ export function createGraphQueryModule(): ExtensibleModule {
             guard(() => explorer().sample(query.get("label") ?? "", num(query.get("limit"), 150, 500))));
           server.route("GET", "/api/graph/search", ({ query }) =>
             guard(async () => ({ nodes: await explorer().search(query.get("q") ?? "", query.get("label") ?? "", num(query.get("limit"), 30, 100)) })));
+          // The engine room (A4), the blueprint (C4) and question-and-path (C5).
+          const engine = {
+            get room(): EngineRoom {
+              if (!engineRoom) throw new HttpError(503, "The graph is off.");
+              return engineRoom;
+            },
+          };
+          server.route("GET", "/api/graph/engine", ({ query }) =>
+            guard(() => engine.room.snapshot(Math.max(0, Number(query.get("since")) || 0))));
+          server.route("GET", "/api/graph/engine/profile", ({ query }) => guard(() => {
+            const key = query.get("key");
+            if (!key) throw new HttpError(400, "key required");
+            return engine.room.profile(key);
+          }));
+          server.route("POST", "/api/graph/engine/index", ({ body }) => guard(() => {
+            const remedy = typeof (body as { remedy?: unknown } | null)?.remedy === "string" ? (body as { remedy: string }).remedy : "";
+            if (!remedy) throw new HttpError(400, "remedy required");
+            return engine.room.applyIndex(remedy);
+          }));
+          server.route("GET", "/api/graph/blueprint", () => guard(() => engine.room.blueprint()));
+          server.route("GET", "/api/graph/path", ({ query }) => guard(() => {
+            const from = query.get("from") ?? "", to = query.get("to") ?? "";
+            if (!from.trim() || !to.trim()) throw new HttpError(400, "from and to required");
+            return engine.room.path(from, to);
+          }));
           server.route("GET", "/api/graph/neighborhood", ({ query }) => guard(() => {
             const id = query.get("id");
             if (!id) throw new HttpError(400, "id required");

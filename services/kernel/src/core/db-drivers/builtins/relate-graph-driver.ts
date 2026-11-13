@@ -45,6 +45,7 @@
  */
 
 import { existsSync, renameSync, rmSync } from "node:fs";
+import { engineTap } from "../../graph-engine-tap.js";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
@@ -384,6 +385,24 @@ function toCounters(stats: RelateStats | undefined): GraphCounters | undefined {
     labelsAdded: stats.labels_added,
     labelsRemoved: stats.labels_removed,
   };
+}
+
+/**
+ * The engine room's tap: run `exec`, adapt its result and record the
+ * statement with the engine's own time (graph-engine-tap.ts).
+ */
+async function tapped(cypher: string, params: Record<string, unknown> | undefined, write: boolean,
+  exec: () => Promise<RelateResult>): Promise<GraphResult> {
+  let out: GraphResult;
+  try {
+    out = adaptResult(await exec());
+  } catch (err) {
+    engineTap.record(cypher, params, write, { ms: null, rows: 0, failed: true });
+    throw err;
+  }
+  const sum = out.summary as { resultAvailableAfterMs?: number; phasesMs?: { parse: number; plan: number; execute: number } | null } | undefined;
+  engineTap.record(cypher, params, write, { ms: sum?.resultAvailableAfterMs ?? null, phases: sum?.phasesMs ?? null, rows: out.records.length });
+  return out;
 }
 
 export function adaptResult(r: RelateResult): GraphResult {
@@ -732,7 +751,7 @@ export class RelateGraphDriver implements GraphDriver {
     const p = withRetry(() => writer.queryAsync(cypher, params ?? {}));
     this.afterWrite(p);
     try {
-      return adaptResult(await p);
+      return await tapped(cypher, params, !isReadStatement(cypher), () => p);
     } catch (err) {
       this.noteCapacity(err);
       throw err;
@@ -752,7 +771,7 @@ export class RelateGraphDriver implements GraphDriver {
     for (const c of this.readers) if (this.readerLoad.get(c)! < this.readerLoad.get(conn)!) conn = c;
     this.readerLoad.set(conn, this.readerLoad.get(conn)! + 1);
     try {
-      return adaptResult(await withRetry(() => conn.queryAsync(cypher, params ?? {})));
+      return await tapped(cypher, params, false, () => withRetry(() => conn.queryAsync(cypher, params ?? {})));
     } catch (err) {
       this.noteCapacity(err);
       throw err;
@@ -781,7 +800,7 @@ export class RelateGraphDriver implements GraphDriver {
       try {
         const out = await fn({
           async run(cypher: string, params?: Record<string, unknown>) {
-            return adaptResult(await conn.queryAsync(cypher, params ?? {}));
+            return tapped(cypher, params, !isReadStatement(cypher), () => conn.queryAsync(cypher, params ?? {}));
           },
           async close() {},
         });
@@ -827,7 +846,7 @@ export class RelateGraphDriver implements GraphDriver {
     const conn = this.db.connect();
     return fn({
       async run(cypher: string, params?: Record<string, unknown>) {
-        return adaptResult(await conn.queryAsync(cypher, params ?? {}));
+        return tapped(cypher, params, !isReadStatement(cypher), () => conn.queryAsync(cypher, params ?? {}));
       },
       async close() {
         // Connections hold no resources the client lets us release.
