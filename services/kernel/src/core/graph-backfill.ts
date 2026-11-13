@@ -102,6 +102,27 @@ export function requestGraphBackfillPass(): void {
   passNow?.();
 }
 
+const replacedHooks = new Set<() => void>();
+
+/**
+ * Be told when the active graph was replaced by another store while the
+ * kernel runs (the 0.5.0 upgrade's live switch to Relate): what a module
+ * projects with its own watermark has to be projected again. Returns the
+ * unsubscribe.
+ */
+export function onGraphReplaced(fn: () => void): () => void {
+  replacedHooks.add(fn);
+  return () => { replacedHooks.delete(fn); };
+}
+
+/** The active graph is a new store: the backfills run again and every subscriber re-projects. */
+export function graphReplaced(): void {
+  requestGraphBackfillPass();
+  for (const fn of replacedHooks) {
+    try { fn(); } catch (err) { log.warn(`graph replaced: a subscriber failed — ${err instanceof Error ? err.message : String(err)}`); }
+  }
+}
+
 export function scheduleGraphBackfills(
   listModules: () => KernelModule[],
   getGraph: () => GraphDriver | null,
@@ -109,18 +130,33 @@ export function scheduleGraphBackfills(
 ): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
-  let running = false;
+  // The pass in flight and the store it runs on. A pass asked for on the same
+  // store while one runs runs right after it; on another store (the upgrade
+  // switched stores under it, and the stopped driver may never answer it) it
+  // starts now and the old one is left to itself.
+  let current: { g: GraphDriver | null; superseded: boolean } | null = null;
+  let again = false;
   const tick = async () => {
-    if (running) return;
-    running = true;
+    const g = getGraph();
+    if (current && current.g === g) { again = true; return; }
+    if (current) current.superseded = true;
+    const mine = { g, superseded: false };
+    current = mine;
     try {
-      await runGraphBackfills(collectGraphBackfills(listModules()), getGraph());
+      await runGraphBackfills(collectGraphBackfills(listModules()), g);
     } catch (err) {
       log.warn(`graph backfill pass failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
-      running = false;
+      if (current === mine) current = null;
     }
+    // A newer pass took over: the scheduling is its.
+    if (mine.superseded || current) return;
     if (stopped) return;
+    if (again) {
+      again = false;
+      void tick();
+      return;
+    }
     timer = setTimeout(() => void tick(), opts.everyMs ?? 30 * 60_000);
     timer.unref?.();
   };

@@ -160,3 +160,68 @@ describe.skipIf(!relateClientInstalled())("graph backfill on Relate", () => {
     expect(await count(g, "MATCH (:Person {name: 'Ada'})-[:ORGANIZED]->(:CalendarEvent {title: 'Coffee'}) RETURN count(*) AS n")).toBe(1);
   });
 });
+
+describe("backfill passes asked for while one runs", () => {
+  it("a pass requested during a running one runs right after it, and graphReplaced() reaches every subscriber", async () => {
+    const { scheduleGraphBackfills, graphReplaced, onGraphReplaced } = await import("../src/core/graph-backfill.js");
+    let passes = 0;
+    let release: (() => void) | null = null;
+    // A graph whose first pass hangs until released: the boot pass on the old store.
+    const graph = {
+      capabilities: { cypher: true },
+      run: async (q: string) => {
+        if (q.startsWith("MATCH (m:KernlGraphBackfill")) {
+          passes++;
+          if (passes === 1) await new Promise<void>((r) => { release = r; });
+        }
+        return { records: [] };
+      },
+    } as unknown as GraphDriver;
+    const mod = { name: "m", getGraphBackfill: () => ({ name: "m", version: 1, run: async () => ({ nodes: 0, relationships: 0 }) }) } as unknown as KernelModule;
+    const stop = scheduleGraphBackfills(() => [mod], () => graph, { firstDelayMs: 0, everyMs: 60_000 });
+    const heard: string[] = [];
+    const off = onGraphReplaced(() => heard.push("replaced"));
+    try {
+      await new Promise((r) => setTimeout(r, 20));
+      expect(passes).toBe(1);
+      graphReplaced(); // asked while the first pass is still running
+      expect(heard).toEqual(["replaced"]);
+      release!();
+      await new Promise((r) => setTimeout(r, 30));
+      expect(passes).toBe(2);
+    } finally {
+      off();
+      stop();
+    }
+    graphReplaced();
+    expect(heard).toEqual(["replaced"]);
+  });
+});
+
+describe("a backfill pass on a store that was switched out", () => {
+  it("does not hold up the pass on the new store, even if it never finishes", async () => {
+    const { scheduleGraphBackfills, requestGraphBackfillPass } = await import("../src/core/graph-backfill.js");
+    const seen: string[] = [];
+    const hangs = {
+      capabilities: { cypher: true },
+      run: async (q: string) => { if (q.startsWith("MATCH (m:KernlGraphBackfill")) { seen.push("old"); await new Promise(() => {}); } return { records: [] }; },
+    } as unknown as GraphDriver;
+    const fresh = {
+      capabilities: { cypher: true },
+      run: async (q: string) => { if (q.startsWith("MATCH (m:KernlGraphBackfill")) seen.push("new"); return { records: [] }; },
+    } as unknown as GraphDriver;
+    let active: GraphDriver = hangs;
+    const mod = { name: "m", getGraphBackfill: () => ({ name: "m", version: 1, run: async () => ({ nodes: 0, relationships: 0 }) }) } as unknown as KernelModule;
+    const stop = scheduleGraphBackfills(() => [mod], () => active, { firstDelayMs: 0, everyMs: 60_000 });
+    try {
+      await new Promise((r) => setTimeout(r, 20));
+      expect(seen).toEqual(["old"]);
+      active = fresh; // the live switch: the old driver is stopped and never answers
+      requestGraphBackfillPass();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(seen).toEqual(["old", "new"]);
+    } finally {
+      stop();
+    }
+  });
+});
