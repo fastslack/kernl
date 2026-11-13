@@ -28,8 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     30 minutes.
   - **If the copy fails**, Kernl stays on Neo4j with all its data and tries
     again on the next start.
-  - **Large graphs**: Relate keeps the graph in memory under a cap (2 GiB by
-    default). Before copying, Kernl estimates how much your graph will take and
+  - **Large graphs**: Relate keeps the graph in memory, with no cap unless one
+    is chosen. Before copying, Kernl estimates how much your graph will take and
     copies it under 1.5× that, up to what the machine can hold (the container's
     memory limit, or 80% of RAM), then keeps that cap as Relate's memory limit.
     A graph larger than the machine can hold stays on Neo4j, and the copy is

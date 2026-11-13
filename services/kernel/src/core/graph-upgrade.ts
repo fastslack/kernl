@@ -44,7 +44,7 @@ import { totalmem } from "node:os";
 import { log } from "./logger.js";
 import type { SqliteDb } from "./db/sqlite.js";
 import type { GraphDriverRegistry } from "./db-drivers/graph-driver-registry.js";
-import { DEFAULT_GRAPH_SIZE_LIMIT, defaultRelatePath, relateClientInstalled } from "./db-drivers/builtins/relate-graph-driver.js";
+import { DEFAULT_GRAPH_SIZE_LIMIT, defaultRelatePath, operatorGraphCap, relateClientInstalled } from "./db-drivers/builtins/relate-graph-driver.js";
 import {
   connectNeo4j, estimateRelateBytes, mergeGraphOnlyFromNeo4j, runNeo4jImportChild, type Neo4jSource,
 } from "./db-drivers/builtins/neo4j-to-relate.js";
@@ -221,7 +221,7 @@ export async function upgradeGraphOnBoot(reg: GraphDriverRegistry, db: SqliteDb,
     // only once the room it had (its ceiling) grows.
     const blocked = prev?.state === "failed" ? CAPACITY_TAG.exec(prev.detail) : null;
     if (blocked) {
-      const room = parseSize(process.env.RELATE_LOGICAL_GRAPH_SIZE_LIMIT) ?? (opts.memoryCeiling ?? memoryCeilingBytes)();
+      const room = parseSize(operatorGraphCap()) ?? (opts.memoryCeiling ?? memoryCeilingBytes)();
       if (room <= Number(blocked[2])) {
         log.info(`Graph upgrade: waiting for more room — the graph needs about ${formatGib(Number(blocked[1]))}, this machine gives ${formatGib(room)} (staying on ${active ?? "the current graph"})`);
         return prev;
@@ -239,11 +239,9 @@ export async function upgradeGraphOnBoot(reg: GraphDriverRegistry, db: SqliteDb,
       rmSync(staging, { recursive: true, force: true });
 
       // Size the cap before copying. An explicit RELATE_LOGICAL_GRAPH_SIZE_LIMIT
-      // in the environment is a ceiling the kernel must live under afterwards
-      // too. This runs before any graph driver starts (bootstrap/drivers.ts),
-      // so the variable is the operator's, not the default the Relate driver
-      // writes into process.env when it starts.
-      const explicit = parseSize(process.env.RELATE_LOGICAL_GRAPH_SIZE_LIMIT);
+      // (the operator's, not the one the Relate driver leaves in the
+      // environment) is a ceiling the kernel must live under afterwards too.
+      const explicit = parseSize(operatorGraphCap());
       const saved = reg.loadConfig("relate").memoryLimit;
       const configured = explicit ?? parseSize(typeof saved === "string" ? saved : null) ?? parseSize(DEFAULT_GRAPH_SIZE_LIMIT)!;
       const ceiling = explicit ?? (opts.memoryCeiling ?? memoryCeilingBytes)();

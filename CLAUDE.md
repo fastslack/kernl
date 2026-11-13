@@ -100,7 +100,10 @@ config is stored, the Neo4j driver falls back to `NEO4J_URI`/`NEO4J_USER`/
 `core/db-drivers/builtins/relate-graph-driver.ts` runs the same Cypher in-process
 against a directory store (`data/graph` by default, `RELATE_DATABASE` to override;
 an older default `graph.rl` file is moved there once, in a child process). The
-graph lives in memory, capped by `RELATE_LOGICAL_GRAPH_SIZE_LIMIT` (2gib default).
+graph lives in memory, uncapped unless a limit is chosen: `RELATE_LOGICAL_GRAPH_SIZE_LIMIT`
+(the operator's, wins) or the driver's `memoryLimit` setting. The engine reads the
+real environment, which a Bun `process.env` assignment does not reach — the driver
+sets it through libc (`setProcessEnv`).
 It has no GDS, so `gds`
 and `mlPipelines` stay false — gate GDS work on those, never on `cypher`. The
 client `@relate/relate` is a kernel dependency (pinned in package.json and both

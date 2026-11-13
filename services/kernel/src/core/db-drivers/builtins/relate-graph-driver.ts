@@ -155,10 +155,55 @@ export function legacyRelatePath(): string {
 /**
  * Cap on the graph's logical size (RELATE_LOGICAL_GRAPH_SIZE_LIMIT, e.g.
  * "2gib"; "none" lifts it). The engine keeps the whole graph in memory and is
- * uncapped by default, so without one a runaway writer grows the kernel until
- * the OS kills it. Over the cap, writes that grow the graph are refused.
+ * uncapped by default; over a cap, writes that grow the graph are refused
+ * (a store already past it still opens and reads).
+ *
+ * The kernel applies the cap someone chose — the environment, the driver's
+ * memoryLimit in /extensions, or the one the 0.5.0 upgrade sized for the
+ * graph it copied — and none otherwise: a cap that started applying by
+ * default would refuse every write of an install whose graph had already
+ * grown past it. This value is the floor the upgrade copies under and the
+ * size /extensions suggests.
  */
 export const DEFAULT_GRAPH_SIZE_LIMIT = "2gib";
+
+/** The cap this driver last put in the environment; a value set there by anyone else is the operator's. */
+let appliedCap: string | null = null;
+
+/** RELATE_LOGICAL_GRAPH_SIZE_LIMIT as the operator set it, not as this driver left it; "" when unset. */
+export function operatorGraphCap(): string {
+  const env = process.env.RELATE_LOGICAL_GRAPH_SIZE_LIMIT?.trim() ?? "";
+  return env && env !== appliedCap ? env : "";
+}
+
+/**
+ * Put a variable in this process's real environment. The engine reads its
+ * size cap there each time a store opens; under Bun an assignment to
+ * process.env does not reach native code (under Node it does), so Bun goes
+ * through libc's setenv (Windows: _putenv_s). Children inherit it either way.
+ */
+export async function setProcessEnv(name: string, value: string | null): Promise<boolean> {
+  if (value === null) delete process.env[name];
+  else process.env[name] = value;
+  if (typeof (globalThis as { Bun?: unknown }).Bun === "undefined") return true;
+  try {
+    const { dlopen, FFIType, ptr } = await import("bun:ffi");
+    const cs = (t: string) => ptr(Buffer.from(`${t}\0`, "utf8"));
+    if (process.platform === "win32") {
+      // _putenv_s with an empty value removes the variable.
+      const lib = dlopen("ucrtbase.dll", { _putenv_s: { args: [FFIType.cstring, FFIType.cstring], returns: FFIType.i32 } });
+      return lib.symbols._putenv_s(cs(name), cs(value ?? "")) === 0;
+    }
+    const libc = dlopen(process.platform === "darwin" ? "/usr/lib/libSystem.B.dylib" : "libc.so.6", {
+      setenv: { args: [FFIType.cstring, FFIType.cstring, FFIType.i32], returns: FFIType.i32 },
+      unsetenv: { args: [FFIType.cstring], returns: FFIType.i32 },
+    });
+    return (value === null ? libc.symbols.unsetenv(cs(name)) : libc.symbols.setenv(cs(name), cs(value), 1)) === 0;
+  } catch (err) {
+    log.warn(`RelateGraphDriver: could not set ${name} in the process environment — the cap may not apply (${err instanceof Error ? err.message : String(err)})`);
+    return false;
+  }
+}
 const SIZE_RE = /^(none|0|\d+(\.\d+)?\s*(b|kb|kib|mb|mib|gb|gib|tb|tib)?)$/i;
 
 // ── Routing: which statements may run on a reader ─────────────────────
@@ -454,9 +499,9 @@ export class RelateGraphDriver implements GraphDriver {
         type: "text",
         required: false,
         placeholder: DEFAULT_GRAPH_SIZE_LIMIT,
-        default: DEFAULT_GRAPH_SIZE_LIMIT,
+        default: "",
         description:
-          "Largest logical size the graph may grow to (e.g. 512mib, 2gib; none = no limit). The graph lives in memory; past the limit, writes that grow it are refused instead of the kernel running out of memory.",
+          "Largest logical size the graph may grow to (e.g. 512mib, 2gib). Empty or none = no limit. The graph lives in memory; past the limit, writes that grow it are refused instead of the kernel running out of memory. Set it above the graph's current size: a graph already past it still reads, but cannot grow.",
       },
     ];
   }
@@ -510,10 +555,18 @@ export class RelateGraphDriver implements GraphDriver {
     this.lastError = null;
     let path = this.resolvedPath();
     try {
-      // The engine reads its size cap from the environment when a store opens.
-      if (!process.env.RELATE_LOGICAL_GRAPH_SIZE_LIMIT) {
-        const limit = this.memoryLimit ?? DEFAULT_GRAPH_SIZE_LIMIT;
-        if (!/^(none|0)$/i.test(limit)) process.env.RELATE_LOGICAL_GRAPH_SIZE_LIMIT = limit;
+      // The engine reads its size cap from the environment when a store opens:
+      // one set there wins; else the memoryLimit chosen for this driver.
+      const fromEnv = operatorGraphCap();
+      const chosen = fromEnv || this.memoryLimit || "";
+      // The engine refuses "none": no cap means no variable at all. Either way
+      // it goes into the real environment, since the operator's value may only
+      // have been assigned to process.env (under Bun that does not reach it).
+      const cap = /^(none|0)?$/i.test(chosen) ? null : chosen;
+      await setProcessEnv("RELATE_LOGICAL_GRAPH_SIZE_LIMIT", cap);
+      appliedCap = fromEnv ? null : cap;
+      if (cap === null) {
+        log.info("RelateGraphDriver: no memory limit set — the graph may use as much memory as it grows to (Memory limit in /extensions, or RELATE_LOGICAL_GRAPH_SIZE_LIMIT)");
       }
       path = await this.migrateLegacyStore(path);
       let mod: RelateModule;
