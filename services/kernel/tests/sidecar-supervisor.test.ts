@@ -206,7 +206,13 @@ describe("sidecar hardening", () => {
     expect(existsSync(pidOf("mtw-server"))).toBe(false);
   });
 
-  it("stops an orphan left by a SIGKILLed kernel before starting a new one", async () => {
+  // The test seam (matchScriptArgv) recognises a script orphan by its argv in
+  // /proc/<pid>/cmdline, which only Linux has; elsewhere `ps -o comm=` names
+  // the interpreter, so a stub script never matches. Production matches by
+  // executable, which works everywhere.
+  const linuxOnly = process.platform !== "linux";
+
+  it.skipIf(linuxOnly)("stops an orphan left by a SIGKILLed kernel before starting a new one", async () => {
     const { appDir, dataDir } = fakeApp();
     const bridgeBin = path.join(appDir, "bin/whatsapp-bridge/whatsapp-bridge");
     const orphan = Bun.spawn([bridgeBin], { stdout: "ignore", stderr: "ignore" });
@@ -266,7 +272,7 @@ describe("sidecar hardening", () => {
     expect(existsSync(pidFile)).toBe(false);
   });
 
-  it("escalates to SIGKILL when the orphan ignores SIGTERM", async () => {
+  it.skipIf(linuxOnly)("escalates to SIGKILL when the orphan ignores SIGTERM", async () => {
     const dir = tmp();
     const bin = script(path.join(dir, "stubborn"), `trap '' TERM\nwhile true; do sleep 0.1; done`);
     const orphan = Bun.spawn([bin], { stdout: "ignore", stderr: "ignore" });
