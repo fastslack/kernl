@@ -43,6 +43,8 @@ export interface SubjectHistoryEntry {
 export class DecisionGraph {
   private schemaReady = new WeakSet<object>();
   private watermark = "";
+  /** The store the watermark belongs to: a new one is projected from the start. */
+  private watermarkGraph: GraphDriver | null = null;
 
   constructor(private readonly db: SqliteDb, private readonly getGraph: () => GraphDriver | null | undefined) {}
 
@@ -63,6 +65,10 @@ export class DecisionGraph {
   async sync(): Promise<number> {
     const g = this.graph();
     if (!g) return 0;
+    if (g !== this.watermarkGraph) {
+      this.watermark = "";
+      this.watermarkGraph = g;
+    }
     const rows = this.db
       .prepare(
         `SELECT * FROM agent_questions

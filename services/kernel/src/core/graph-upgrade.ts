@@ -47,7 +47,7 @@
 import { existsSync, readFileSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { totalmem } from "node:os";
 import { log } from "./logger.js";
-import { requestGraphBackfillPass } from "./graph-backfill.js";
+import { graphReplaced } from "./graph-backfill.js";
 import type { SqliteDb } from "./db/sqlite.js";
 import type { GraphDriverRegistry } from "./db-drivers/graph-driver-registry.js";
 import { DEFAULT_GRAPH_SIZE_LIMIT, defaultRelatePath, operatorGraphCap, relateClientInstalled } from "./db-drivers/builtins/relate-graph-driver.js";
@@ -462,9 +462,12 @@ async function catchUpAfterSwitch(reg: GraphDriverRegistry, src: Neo4jSource, op
     log.warn(`Graph upgrade: catching up from Neo4j after the switch failed: ${err instanceof Error ? err.message : String(err)}`);
   }
   try {
-    // The copy carried the backfill markers; dropped, the next pass projects SQLite again.
-    await g.run("MATCH (m:KernlGraphBackfill) DETACH DELETE m");
-    requestGraphBackfillPass();
+    // The copy carried the markers of what was projected into Neo4j — the
+    // backfills' and the experience graph's watermark — while the kernel kept
+    // projecting there during the copy. Dropped, everything projected from
+    // SQLite is projected again into this store.
+    await g.run("MATCH (m) WHERE m:KernlGraphBackfill OR m:AgentXpSync DETACH DELETE m");
+    graphReplaced();
   } catch (err) {
     log.warn(`Graph upgrade: could not queue the backfills after the switch: ${err instanceof Error ? err.message : String(err)}`);
   }

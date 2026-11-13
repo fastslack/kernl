@@ -15,9 +15,20 @@
 
 import { describe, it, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
+import { createRequire } from "node:module";
+
+/** The graph client the kernel ships (`@relate/relate`). */
+const Relate = (createRequire(import.meta.url)("@relate/relate") as {
+  Database: {
+    open(path: string, options?: { readOnly?: boolean }): {
+      connect(): { query(cypher: string): { rows: Record<string, unknown>[] } };
+      checkpoint(): void;
+    };
+  };
+}).Database;
 
 const BACKUP_SCRIPT = resolve(import.meta.dir, "../scripts/backup.sh");
 const RESTORE_SCRIPT = resolve(import.meta.dir, "../scripts/restore.sh");
@@ -36,8 +47,7 @@ function newScratch(): string {
   return dir;
 }
 
-function makeBackup(work: string, rows: number): { zip: string; dataDir: string } {
-  const dataDir = join(work, "source-data");
+function makeBackup(work: string, rows: number, dataDir = join(work, "source-data")): { zip: string; dataDir: string } {
   mkdirSync(dataDir, { recursive: true });
 
   const db = new Database(join(dataDir, "kernel.db"));
@@ -119,6 +129,46 @@ describe("restore.sh", () => {
     stale.close();
     expect(proc.exitCode).toBe(0);
     expect(existsSync(join(target, "kernel.db-wal"))).toBe(false);
+  }, 60_000);
+
+  it("restores the graph store and keeps the one it replaces", () => {
+    const work = newScratch();
+    const dataDir = join(work, "source-data");
+    mkdirSync(dataDir, { recursive: true });
+    const graph = Relate.open(join(dataDir, "graph"));
+    graph.connect().query("UNWIND range(1, 40) AS i CREATE (:Memory {i: i})-[:KNOWS]->(:Contact {i: i})");
+    graph.checkpoint();
+    const { zip } = makeBackup(work, 5, dataDir);
+
+    // The target already has a graph of its own, which must not be lost.
+    const target = join(work, "target-data");
+    mkdirSync(join(target, "graph"), { recursive: true });
+    writeFileSync(join(target, "graph", "marker"), "previous store");
+
+    const proc = runRestore([zip, "--native", target, "--yes"]);
+    expect(proc.exitCode, proc.stdout.toString() + proc.stderr.toString()).toBe(0);
+
+    // The restored store opens as a writer, as the kernel will open it.
+    const restored = Relate.open(join(target, "graph")).connect();
+    expect(Number(restored.query("MATCH (n) RETURN count(n) AS n").rows[0].n)).toBe(80);
+    expect(Number(restored.query("MATCH ()-[r:KNOWS]->() RETURN count(r) AS n").rows[0].n)).toBe(40);
+
+    const kept = readdirSync(target).filter((f) => f.startsWith("graph.before-restore-"));
+    expect(kept.length).toBe(1);
+    expect(readFileSync(join(target, kept[0]!, "marker"), "utf-8")).toBe("previous store");
+  }, 120_000);
+
+  it("leaves the target's graph alone when the archive has none", () => {
+    const work = newScratch();
+    const { zip } = makeBackup(work, 5);
+    const target = join(work, "target-data");
+    mkdirSync(join(target, "graph"), { recursive: true });
+    writeFileSync(join(target, "graph", "marker"), "untouched");
+
+    const proc = runRestore([zip, "--native", target, "--yes"]);
+    expect(proc.exitCode).toBe(0);
+    expect(readFileSync(join(target, "graph", "marker"), "utf-8")).toBe("untouched");
+    expect(readdirSync(target).some((f) => f.startsWith("graph.before-restore-"))).toBe(false);
   }, 60_000);
 
   it("refuses an archive with no database instead of reporting a fresh start", () => {

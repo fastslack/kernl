@@ -2,7 +2,19 @@
 FROM oven/bun:1.2 AS build
 
 # better-sqlite3 needs native build tools
-RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y python3 make g++ curl ca-certificates && rm -rf /var/lib/apt/lists/*
+
+# The Node headers node-gyp compiles against, fetched here once. Left to
+# node-gyp, the download runs on bun and, on arm64, hangs after the response
+# arrives (bun 1.2.23, node-gyp 13): bun install sat silent until the build
+# was killed. Native modules without prebuilt binaries for arm64
+# (better-sqlite3, cpu-features) compile on every ARM build, so every ARM
+# build hung. With npm_config_nodedir set, node-gyp downloads nothing.
+RUN V="$(bun -e 'console.log(process.version)')" \
+    && mkdir -p /opt/node-headers \
+    && curl -fsSL "https://nodejs.org/download/release/${V}/node-${V}-headers.tar.gz" \
+       | tar -xz -C /opt/node-headers --strip-components=1
+ENV npm_config_nodedir=/opt/node-headers
 
 WORKDIR /build
 COPY package.json bun.lock* ./

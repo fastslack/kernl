@@ -20,11 +20,22 @@
 
 import { describe, it, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, mkdirSync, existsSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
+import { createRequire } from "node:module";
 
 const SCRIPT = resolve(import.meta.dir, "../scripts/backup.sh");
+
+/** The graph client the kernel ships (`@relate/relate`). */
+const Relate = (createRequire(import.meta.url)("@relate/relate") as {
+  Database: {
+    open(path: string, options?: { readOnly?: boolean }): {
+      connect(): { query(cypher: string): { rows: Record<string, unknown>[] } };
+      checkpoint(): void;
+    };
+  };
+}).Database;
 
 const scratch: string[] = [];
 
@@ -116,6 +127,77 @@ describe("backup.sh", () => {
       const count = restored.query("SELECT count(*) AS c FROM notes").get() as { c: number };
       expect(count.c).toBe(500);
       restored.close();
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
+  it("captures the graph store, including writes still in its WAL, while a writer holds it open", () => {
+    const work = newScratch();
+    const dataDir = join(work, "data");
+    const db = seedWalDatabase(dataDir, 5);
+
+    // The running kernel's side: the store's single writer, never closed (the
+    // client cannot close one), with part of the graph only in the WAL.
+    const store = Relate.open(join(dataDir, "graph"));
+    const conn = store.connect();
+    conn.query("UNWIND range(1, 120) AS i CREATE (:Memory {i: i})-[:ABOUT]->(:Concept {i: i})");
+    store.checkpoint();
+    conn.query("UNWIND range(1, 30) AS i CREATE (:Episode {i: i})");
+
+    const out = join(work, "backup.zip");
+    try {
+      const proc = runBackup(dataDir, out);
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      expect(proc.exitCode, output).toBe(0);
+      expect(output).toContain("270 nodes, 120 relationships");
+
+      const extracted = join(work, "extracted");
+      mkdirSync(extracted);
+      unzipTo(out, extracted);
+      const copy = join(extracted, "kernl-backup", "data", "graph");
+      expect(existsSync(join(copy, "manifest.json"))).toBe(true);
+
+      const c = Relate.open(copy, { readOnly: true }).connect();
+      expect(Number(c.query("MATCH (n) RETURN count(n) AS n").rows[0].n)).toBe(270);
+      expect(Number(c.query("MATCH ()-[r:ABOUT]->() RETURN count(r) AS n").rows[0].n)).toBe(120);
+      expect(Number(c.query("MATCH (e:Episode) RETURN count(e) AS n").rows[0].n)).toBe(30);
+    } finally {
+      db.close();
+    }
+  }, 120_000);
+
+  it("fails loudly when the graph store cannot be copied", () => {
+    const work = newScratch();
+    const dataDir = join(work, "data");
+    const db = seedWalDatabase(dataDir, 5);
+    // A directory where the store should be, holding no readable store.
+    mkdirSync(join(dataDir, "graph"));
+    writeFileSync(join(dataDir, "graph", "manifest.json"), "not a manifest");
+
+    const out = join(work, "backup.zip");
+    try {
+      const proc = runBackup(dataDir, out);
+      expect(proc.exitCode).not.toBe(0);
+      expect(existsSync(out)).toBe(false);
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      expect(output).toContain("graph copy failed");
+      expect(output).toContain("KERNEL_BACKUP_SKIP_GRAPH=1");
+    } finally {
+      db.close();
+    }
+  }, 120_000);
+
+  it("refuses to skip a single-file graph store silently", () => {
+    const work = newScratch();
+    const dataDir = join(work, "data");
+    const db = seedWalDatabase(dataDir, 5);
+    writeFileSync(join(dataDir, "graph.rl"), "");
+
+    try {
+      const proc = runBackup(dataDir, join(work, "backup.zip"));
+      expect(proc.exitCode).not.toBe(0);
+      expect(proc.stderr.toString()).toContain("graph.rl");
     } finally {
       db.close();
     }

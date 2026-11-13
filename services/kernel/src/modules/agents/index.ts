@@ -30,6 +30,7 @@ import type { GraphDriver } from "../../core/db-drivers/graph-driver.js";
 import { auditTools } from "./audit-tools.js";
 import { createAnalysisResourceProvider, createSkillResourceProvider } from "./resources.js";
 import { log } from "../../core/logger.js";
+import { onGraphReplaced } from "../../core/graph-backfill.js";
 import { createChatProviders, initProviderStatus } from "../../core/llm/chat-adapters.js";
 import { queryAgents, queryAgentsList } from "./dashboard-queries.js";
 import type {
@@ -116,6 +117,8 @@ export function createAgentsModule(): AgentsModule {
   let decisionGraph: DecisionGraph | null = null;
   let decisionSyncTimer: ReturnType<typeof setTimeout> | null = null;
   const decisionSyncHandlers: Array<[string, (p: unknown) => void]> = [];
+  /** Unsubscribes from graphReplaced(): both projections start over on a new store. */
+  const graphReplacedUnsubs: Array<() => void> = [];
 
   // Advanced-capability slots — populated when `ext:agent-advanced` registers.
   const altExecutors = new Map<string, AltExecutorLike>();
@@ -177,6 +180,7 @@ export function createAgentsModule(): AgentsModule {
         experienceSyncHandler = () => scheduleSync(5_000);
         eventsRef = ctx.events;
         ctx.events.on("agent:flow:run_completed", experienceSyncHandler);
+        graphReplacedUnsubs.push(onGraphReplaced(() => scheduleSync(1_000)));
         scheduleSync(15_000);
       }
 
@@ -276,6 +280,7 @@ export function createAgentsModule(): AgentsModule {
           ctx.events.on(name as never, fn as never);
         }
         eventsRef = ctx.events;
+        graphReplacedUnsubs.push(onGraphReplaced(() => schedule(1_000)));
         schedule(20_000);
       }
 
@@ -285,11 +290,16 @@ export function createAgentsModule(): AgentsModule {
       answerQueue = new AnswerQueue(agentService, agentExecutor, ctx.events);
       answerQueue.start();
       const queue = answerQueue;
-      answerSweepTimer = setTimeout(() => {
-        answerSweepTimer = null;
-        const n = queue.sweep();
-        if (n > 0) log.info(`answers: ${n} agent(s) have answers waiting — relaunching them`);
-      }, 60_000);
+      // The boot sweep is scheduled work: a kernel told to run nothing on its own
+      // (AGENTS_SCHEDULER=off — a demo, a rehearsal on a copy of real data)
+      // relaunches no one for answers already waiting. An answer filed now still does.
+      if (process.env.AGENTS_SCHEDULER?.trim().toLowerCase() !== "off") {
+        answerSweepTimer = setTimeout(() => {
+          answerSweepTimer = null;
+          const n = queue.sweep();
+          if (n > 0) log.info(`answers: ${n} agent(s) have answers waiting — relaunching them`);
+        }, 60_000);
+      }
 
       // An unattended run that left something for the operator without asking: file the question for it.
       new UnattendedAskWatcher(agentService, ctx.events, (o) => llm().chatJson(o)).start();
@@ -470,6 +480,7 @@ export function createAgentsModule(): AgentsModule {
     },
 
     async shutdown() {
+      for (const off of graphReplacedUnsubs.splice(0)) off();
       if (decisionSyncTimer) clearTimeout(decisionSyncTimer);
       for (const [name, fn] of decisionSyncHandlers) eventsRef?.off(name as never, fn as never);
       if (hostPathAuditTimer) clearTimeout(hostPathAuditTimer);

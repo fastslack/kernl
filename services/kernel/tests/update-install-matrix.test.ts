@@ -18,6 +18,8 @@ import {
   parentFromProcStat,
   relaunchCommandFor,
   restartMethodFor,
+  SYSTEM_UPDATER,
+  systemUpdaterArgv,
 } from "../src/core/update/platform.js";
 import { helperFor } from "../src/core/update/helper.js";
 import { versionCandidates } from "../src/core/update/version.js";
@@ -98,6 +100,24 @@ describe("package installs", () => {
   it("needs no prompt as root", () => {
     expect(packageInstallPlan("rpm", "/d/k.rpm", { isRoot: true, find: tools(["dnf"]) }).argv)
       .toEqual(["/usr/bin/dnf", "install", "-y", "/d/k.rpm"]);
+  });
+
+  it("tries the passwordless system updater first, without a password prompt", () => {
+    // A server has no desktop for pkexec to ask on, so the button could only
+    // print a sudo command. The package ships a root-owned updater and one
+    // sudoers line; `-n` makes sudo fail instead of waiting for a password.
+    const there = (p: string) => p === SYSTEM_UPDATER;
+    expect(systemUpdaterArgv("0.6.0", "/d/kernl_0.6.0-1_amd64.deb", { isRoot: false, find: tools(["sudo"]), exists: there }))
+      .toEqual(["/usr/bin/sudo", "-n", SYSTEM_UPDATER, "0.6.0", "/d/kernl_0.6.0-1_amd64.deb"]);
+  });
+
+  it("skips the system updater when it cannot or need not be used", () => {
+    const there = (p: string) => p === SYSTEM_UPDATER;
+    // A package from before the updater shipped.
+    expect(systemUpdaterArgv("0.6.0", "/d/k.deb", { isRoot: false, find: tools(["sudo"]), exists: () => false })).toBeNull();
+    expect(systemUpdaterArgv("0.6.0", "/d/k.deb", { isRoot: false, find: tools([]), exists: there })).toBeNull();
+    // Root runs the package manager directly.
+    expect(systemUpdaterArgv("0.6.0", "/d/k.deb", { isRoot: true, find: tools(["sudo"]), exists: there })).toBeNull();
   });
 
   it("restarts through systemd when systemd runs the kernel", () => {

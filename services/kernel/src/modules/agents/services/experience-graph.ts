@@ -230,6 +230,7 @@ export function scoreSharedLearning(c: {
 export class AgentExperienceGraph {
   private schemaFor: GraphDriver | null = null;
   private syncing: Promise<SyncResult> | null = null;
+  private syncingOn: GraphDriver | null = null;
 
   constructor(
     private readonly db: SqliteDb,
@@ -284,16 +285,23 @@ export class AgentExperienceGraph {
    * The first pass on an empty store is the backfill.
    */
   sync(): Promise<SyncResult> {
-    if (!this.syncing) {
-      this.syncing = this.doSync().finally(() => {
-        this.syncing = null;
+    const g = this.ready();
+    // A pass still running on another store (the driver was switched under it,
+    // and a stopped driver may never answer it) is not shared: this store gets its own.
+    if (!this.syncing || g !== this.syncingOn) {
+      const pass: Promise<SyncResult> = this.doSync(g).finally(() => {
+        if (this.syncing === pass) {
+          this.syncing = null;
+          this.syncingOn = null;
+        }
       });
+      this.syncing = pass;
+      this.syncingOn = g;
     }
     return this.syncing;
   }
 
-  private async doSync(): Promise<SyncResult> {
-    const g = this.ready();
+  private async doSync(g: GraphDriver | null): Promise<SyncResult> {
     if (!g) return { agents: 0, runs: 0, learnings: 0 };
     const t0 = Date.now();
     await this.ensureSchema(g);

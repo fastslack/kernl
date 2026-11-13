@@ -282,22 +282,30 @@ export async function importNeo4jIntoRelate(
     }
     await flushNodes();
 
-    // Relationships, streamed and wired through the temporary key.
+    // Relationships, streamed and wired through the temporary key. The copy
+    // runs while the kernel keeps writing to Neo4j (graph-upgrade.ts), so the
+    // graph moves underneath it: a relationship to a node created after the
+    // node pass finds no endpoint here and is skipped. What reached Neo4j
+    // during the copy is caught up after the switch.
     let wired = 0;
+    let skippedRels = 0;
     let rbatch: Array<{ a: string; b: string; t: string } & Converted> = [];
     const flushRels = async () => {
       if (!rbatch.length) return;
       const rows = rbatch.map((r) => ({ a: r.a, b: r.b, type: r.t, p: r.props, t: r.temporal, pt: r.points }));
-      await dst.queryAsync(
+      const res = await dst.queryAsync(
         `UNWIND $rows AS r
          MATCH (a:${TEMP_LABEL} {${TEMP_KEY}: r.a})
          MATCH (b:${TEMP_LABEL} {${TEMP_KEY}: r.b})
          CREATE (a)-[x:$(r.type)]->(b)
          SET x = r.p
-         ${retype("x", rbatch)}`,
+         ${retype("x", rbatch)}
+         RETURN count(x) AS n`,
         { rows },
       );
-      wired += rbatch.length;
+      const made = Number(res.rows?.[0]?.n ?? 0);
+      wired += made;
+      skippedRels += rbatch.length - made;
       rbatch = [];
     };
     const relResult = session.run(
@@ -346,8 +354,14 @@ export async function importNeo4jIntoRelate(
 
     const gotNodes = await countOn(dst, "MATCH (n) RETURN count(n) AS n");
     const gotRels = await countOn(dst, "MATCH ()-[r]->() RETURN count(r) AS n");
-    if (gotNodes !== totalNodes || gotRels !== totalRels || copied !== totalNodes || wired !== totalRels) {
-      throw new Error(`Neo4j import incomplete: nodes ${gotNodes}/${totalNodes}, relationships ${gotRels}/${totalRels}`);
+    // The store must hold exactly what was streamed into it. Against the counts
+    // taken at the start it may differ: the kernel writes to Neo4j meanwhile.
+    if (gotNodes !== copied || gotRels !== wired) {
+      throw new Error(`Neo4j import incomplete: nodes ${gotNodes}/${copied}, relationships ${gotRels}/${wired}`);
+    }
+    if (copied !== totalNodes || wired !== totalRels || skippedRels) {
+      log(`the graph moved during the copy: ${copied} nodes and ${wired} relationships copied (${totalNodes} and ${totalRels} at the start` +
+        `${skippedRels ? `; ${skippedRels} relationship(s) to nodes created meanwhile skipped` : ""}) — caught up after the switch`);
     }
     dstDb.checkpoint();
     return { nodes: gotNodes, relationships: gotRels, schema, schemaSkipped, ms: Date.now() - t0 };
@@ -455,6 +469,14 @@ export async function mergeGraphOnlyFromNeo4j(
 // ── One-off import in a child process ────────────────────────────────
 
 export const NEO4J_IMPORT_TASK = "neo4j-import";
+const IMPORT_ERROR_PREFIX = "neo4j-import failed: ";
+
+/** Why the import child failed: the message it reports, else the last lines of what it wrote. */
+export function importFailure(stderr: string): string {
+  const lines = stderr.trim().split("\n");
+  const reported = [...lines].reverse().find((l) => l.startsWith(IMPORT_ERROR_PREFIX));
+  return reported ? reported.slice(IMPORT_ERROR_PREFIX.length) : lines.slice(-3).join(" ");
+}
 
 /**
  * Runs the kernel entry point again as a child that only imports the graph,
@@ -503,7 +525,7 @@ export function runNeo4jImportChild(
       clearTimeout(timer);
       process.off("exit", stopWithKernel);
       if (code === 0) resolve(out.trim().split("\n").at(-1) ?? "");
-      else reject(new Error(`import exited with ${code}: ${err.trim().split("\n").slice(-3).join(" ")}`));
+      else reject(new Error(`import exited with ${code}: ${importFailure(err)}`));
     });
   }));
 }
@@ -527,7 +549,11 @@ export async function runNeo4jImportTask(): Promise<void> {
     process.stdout.write(`${r.nodes} nodes, ${r.relationships} relationships, ${r.schema} schema statements in ${r.ms} ms\n`);
     process.exit(0);
   } catch (err) {
+    // The stack for whoever reads the child's output, then the message on a
+    // line of its own: the parent keeps that line as the reason (the last
+    // lines alone were stack frames, and kernl_upgrades lost what failed).
     process.stderr.write(`${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+    process.stderr.write(`${IMPORT_ERROR_PREFIX}${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(1);
   }
 }

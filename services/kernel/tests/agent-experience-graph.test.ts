@@ -26,6 +26,20 @@ describe("shared-learning scoring", () => {
     expect(luceneTerms("a an to")).toBe("");
   });
 
+  it("a sync still running on a store that was switched out does not hold up the new store's", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db as never, "agents", agentsMigrations);
+    // The old store never answers: its driver was stopped mid-pass.
+    const old = { capabilities: { cypher: true }, run: () => new Promise(() => {}) } as unknown as GraphDriver;
+    const fresh = { capabilities: { cypher: true }, run: async () => ({ records: [] }) } as unknown as GraphDriver;
+    let active: GraphDriver = old;
+    const xp = new AgentExperienceGraph(db as never, () => active);
+    void xp.sync();
+    active = fresh;
+    const done = await Promise.race([xp.sync(), new Promise((r) => setTimeout(() => r("held up"), 500))]);
+    expect(done).toEqual({ agents: 0, runs: 0, learnings: 0 });
+  });
+
   it("does nothing without a graph", async () => {
     const db = new Database(":memory:");
     const xp = new AgentExperienceGraph(db as never, () => null);

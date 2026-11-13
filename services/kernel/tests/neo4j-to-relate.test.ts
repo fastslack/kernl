@@ -141,3 +141,18 @@ describe.skipIf(!URI || !relateClientInstalled())("Neo4j to Relate", () => {
 
 // Keep the import of the driver namespace used even when the suite is skipped.
 void neo4j;
+
+describe("why the import child failed", () => {
+  it("keeps the message the child reports, not the stack frames under it", async () => {
+    const { importFailure } = await import("../src/core/db-drivers/builtins/neo4j-to-relate.js");
+    const stderr = [
+      "Error: Neo4j import incomplete: nodes 10/12, relationships 3/3",
+      "    at importNeo4jIntoRelate (/app/dist/mcp-server.js:161969:22)",
+      "    at async runNeo4jImportTask (unknown)",
+      "neo4j-import failed: Neo4j import incomplete: nodes 10/12, relationships 3/3",
+    ].join("\n");
+    expect(importFailure(stderr)).toBe("Neo4j import incomplete: nodes 10/12, relationships 3/3");
+    // A child that died before reporting (killed, out of memory): its last lines.
+    expect(importFailure("a\nb\nc\nd")).toBe("b c d");
+  });
+});

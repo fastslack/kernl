@@ -412,6 +412,39 @@ export function packageInstallPlan(
   return { argv: pkexec ? [pkexec, ...argv] : null, manual };
 }
 
+/** Root-owned upgrader the deb and rpm ship, reachable through one sudoers line. */
+export const SYSTEM_UPDATER = "/opt/kernl/bin/kernl-system-update";
+
+/**
+ * Exit codes at or above this come from the system updater itself (a refusal,
+ * a checksum mismatch, a failed package manager). Below it — sudo's own 1 when
+ * no rule lets it run without a password — the route is simply not there, and
+ * the caller falls back to pkexec or the printed command.
+ */
+export const SYSTEM_UPDATER_OWN_CODES = 10;
+
+/**
+ * The passwordless upgrade: `sudo -n` the system updater with the version and
+ * the downloaded file.
+ *
+ * This is what lets a server, with no desktop to show a password prompt on,
+ * update from the button. Safe to hand an unprivileged caller's file to,
+ * because the updater copies it somewhere root owns, checks it against the
+ * release's checksums fetched by root, and refuses anything not newer — see
+ * packaging/rpm/files/kernl-system-update. Null when there is nothing to try:
+ * already root (the plain plan runs as is), no updater installed (a package
+ * from before it shipped), or no sudo.
+ */
+export function systemUpdaterArgv(
+  version: string,
+  file: string,
+  opts: { isRoot: boolean; find: (tool: string) => string | null; exists: (path: string) => boolean },
+): string[] | null {
+  if (opts.isRoot || !opts.exists(SYSTEM_UPDATER)) return null;
+  const sudo = opts.find("sudo");
+  return sudo ? [sudo, "-n", SYSTEM_UPDATER, version, file] : null;
+}
+
 export type RestartMethod =
   | { kind: "systemd-user"; unit: string }
   | { kind: "systemd-system"; unit: string }

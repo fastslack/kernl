@@ -1,0 +1,129 @@
+#!/bin/bash
+# kernl-system-update <version> <package-file>
+#
+# Upgrades the Kernl package (deb or rpm) to an official, newer release, as
+# root, without a password. The kernel runs as an ordinary account, and on a
+# server there is no desktop password prompt (pkexec) — so without this the
+# update button can only hand the user a `sudo` command.
+#
+# Reached through /etc/sudoers.d/kernl-update, which lets any account run THIS
+# script, and nothing else, as root. That is only safe because the script does
+# not trust its caller with anything that matters:
+#
+#   - the file is copied into a root-only directory before it is looked at, so
+#     it cannot be swapped between the check and the install;
+#   - its checksum is fetched by root, from the fixed repository below, for the
+#     release named on the command line — so the file must be an artefact that
+#     release published, not a package the caller built;
+#   - the package must be called kernl and be newer than the one installed, so
+#     an old release with a known hole cannot be put back.
+#
+# The worst a caller can do is upgrade Kernl to a newer official release, which
+# is what the admin who installed it would do anyway. To take that away, create
+# /etc/kernl/system-update.disabled (it survives upgrades on both dpkg and rpm,
+# which a deleted sudoers drop-in does not: rpm puts a missing config file back).
+#
+# Exit codes (the kernel tells them apart from sudo's own, which are 1):
+#   0  installed
+#   10 refused: bad arguments, wrong file, not a package install
+#   11 the file is not the one the release published
+#   12 the package manager failed
+#   13 not newer than what is installed
+
+set -euo pipefail
+umask 077
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH LC_ALL=C
+
+REPO="fastslack/kernl"
+
+die() {
+  echo "kernl-system-update: $2" >&2
+  exit "$1"
+}
+trap 'die 12 "unexpected failure at line $LINENO"' ERR
+
+[ "$(id -u)" = 0 ] || die 10 "must run as root (through sudo)"
+[ ! -e /etc/kernl/system-update.disabled ] || die 10 "turned off by /etc/kernl/system-update.disabled"
+[ $# -eq 2 ] || die 10 "usage: kernl-system-update <version> <package-file>"
+
+VER="$1"
+SRC="$2"
+[[ $VER =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || die 10 "not a version: $VER"
+
+NAME="$(basename -- "$SRC")"
+[[ $NAME =~ ^[A-Za-z0-9._~+-]+$ ]] || die 10 "unexpected file name: $NAME"
+case "$NAME" in
+  kernl_*.deb) FMT=deb ;;
+  kernl-*.rpm) FMT=rpm ;;
+  *) die 10 "not a Kernl package: $NAME" ;;
+esac
+
+# The package manager that owns the install is the one that upgrades it.
+if [ "$FMT" = deb ]; then
+  OLD="$(dpkg-query -W -f='${Version}' kernl 2>/dev/null)" || die 10 "kernl is not installed by dpkg"
+else
+  OLD="$(rpm -q --qf '%{VERSION}-%{RELEASE}' kernl 2>/dev/null)" || die 10 "kernl is not installed by rpm"
+fi
+
+[ -f "$SRC" ] && [ ! -L "$SRC" ] || die 10 "not a regular file: $SRC"
+
+WORK="$(mktemp -d /var/tmp/kernl-system-update.XXXXXX)"
+trap 'rm -rf "$WORK"' EXIT
+FILE="$WORK/$NAME"
+# -P: a symlink swapped in after the check is copied as a link, and refused below.
+timeout 300 cp -P -- "$SRC" "$FILE" || die 10 "could not read $SRC"
+[ -f "$FILE" ] && [ ! -L "$FILE" ] || die 10 "not a regular file: $SRC"
+
+# ── Is it the file the release published? ─────────────────────────────────────
+SUMS_URL="https://github.com/$REPO/releases/download/v$VER/SHA256SUMS"
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL --proto '=https' --max-time 60 -o "$WORK/SHA256SUMS" "$SUMS_URL" \
+    || die 11 "could not fetch the checksums of v$VER"
+elif command -v wget >/dev/null 2>&1; then
+  wget -q --https-only --timeout=60 -O "$WORK/SHA256SUMS" "$SUMS_URL" \
+    || die 11 "could not fetch the checksums of v$VER"
+else
+  die 11 "neither curl nor wget is installed"
+fi
+
+WANT="$(awk -v n="$NAME" '{ f = $2; sub(/^\*/, "", f); if (tolower(f) == tolower(n)) { print tolower($1); exit } }' "$WORK/SHA256SUMS")"
+[ -n "$WANT" ] || die 11 "release v$VER publishes no $NAME"
+GOT="$(sha256sum -- "$FILE" | cut -d' ' -f1)"
+[ "$GOT" = "$WANT" ] || die 11 "$NAME does not match the checksum release v$VER published"
+
+# ── Is it Kernl, and newer? ───────────────────────────────────────────────────
+if [ "$FMT" = deb ]; then
+  [ "$(dpkg-deb -f "$FILE" Package)" = kernl ] || die 10 "$NAME is not the kernl package"
+  NEW="$(dpkg-deb -f "$FILE" Version)"
+  dpkg --compare-versions "$NEW" gt "$OLD" || die 13 "installed $OLD is not older than $NEW"
+else
+  [ "$(rpm -qp --qf '%{NAME}' "$FILE" 2>/dev/null)" = kernl ] || die 10 "$NAME is not the kernl package"
+  NEW="$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$FILE" 2>/dev/null)"
+  CMP="$(rpm --eval "%{lua: print(rpm.vercmp('$NEW', '$OLD'))}")"
+  [ "$CMP" = 1 ] || die 13 "installed $OLD is not older than $NEW"
+fi
+
+# ── Install ───────────────────────────────────────────────────────────────────
+trap - ERR
+echo "kernl-system-update: upgrading kernl $OLD -> $NEW" >&2
+if [ "$FMT" = deb ]; then
+  export DEBIAN_FRONTEND=noninteractive
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get install -y "$FILE" >&2 || die 12 "apt-get failed"
+  else
+    dpkg -i "$FILE" >&2 || die 12 "dpkg failed"
+  fi
+else
+  if command -v dnf >/dev/null 2>&1; then
+    dnf install -y "$FILE" >&2 || die 12 "dnf failed"
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y "$FILE" >&2 || die 12 "yum failed"
+  elif command -v zypper >/dev/null 2>&1; then
+    zypper --non-interactive install --allow-unsigned-rpm "$FILE" >&2 || die 12 "zypper failed"
+  else
+    rpm -Uvh "$FILE" >&2 || die 12 "rpm failed"
+  fi
+fi
+echo "kernl-system-update: kernl $NEW installed" >&2
+exit 0
