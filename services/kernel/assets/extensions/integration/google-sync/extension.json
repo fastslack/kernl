@@ -3,7 +3,7 @@
   "id": "com.kernl.google-sync",
   "slug": "google-sync",
   "name": "Google Sync",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "Gmail, Contacts, and Calendar sync via Google OAuth.",
   "long_description": "Bidirectional Google integration. Inbound: syncs Gmail → google_emails, Contacts → contacts, Calendar → events, plus Neo4j graph enrichment. Outbound: send email drafts from the kernel.\n\nConfigure via OAuth (Client ID + Secret from Google Cloud Console). Requires the Gmail, People, and Calendar APIs enabled on your GCP project.",

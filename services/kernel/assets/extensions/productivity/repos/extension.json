@@ -3,7 +3,7 @@
   "id": "com.kernl.repos",
   "slug": "repos",
   "name": "Repos",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "Registry of local git repositories, each tracked at its own absolute path. Exposes kernel_repos_* tools so any agent in the kernel can list, read, edit, search, run shell commands, and inspect git state inside registered repos.",
   "author": "Kernl",
