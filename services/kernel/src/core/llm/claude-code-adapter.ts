@@ -48,7 +48,7 @@ import {
   type ClaudeRoute,
 } from "../../sdk/claude-limits.js";
 import { primaryClaudeAccountId } from "../../sdk/claude-accounts.js";
-import { ensureSessionOnAccount } from "./claude-session-handover.js";
+import { ensureSessionOnAccount } from "../../sdk/claude-session-handover.js";
 import type {
   ChatMessage,
   ChatCompletionResult,

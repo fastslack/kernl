@@ -8,12 +8,16 @@
  * another (the first hit its usage limit) would resume nothing and lose the
  * conversation, so before each turn the newest copy of the transcript, from
  * whichever account wrote it last, is put under the account about to run.
+ *
+ * In the SDK, beside claude-accounts: extensions that run Claude Code (the
+ * agent executor in agent-advanced) bundle the adapter, and a kernel file
+ * outside src/sdk/ in their bundle fails the extension boundary gate.
  */
 
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { claudeAccountDir, listClaudeAccounts } from "../../sdk/claude-accounts.js";
-import { log } from "../logger.js";
+import { claudeAccountDir, listClaudeAccounts } from "./claude-accounts.js";
+import { log } from "./log.js";
 
 /** Session ids are UUIDs; anything else must not become a path. */
 function safeSessionId(sessionId: string): boolean {
