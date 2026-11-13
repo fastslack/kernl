@@ -18,13 +18,15 @@ import { workspaceSpecTools } from "./workspace-spec-tools.js";
 import { QuestionTriager } from "./question-triager.js";
 import { UnattendedAskWatcher } from "./unattended-asks.js";
 import { llm } from "../../core/llm/client.js";
-import { AnswerQueue } from "./question-delivery.js";
+import { AnswerQueue, answerByPrecedent } from "./question-delivery.js";
 import { KernlBugService } from "./kernl-bugs-service.js";
 import { kernlBugTools } from "./kernl-bugs-tools.js";
 import { commentOnRepeat } from "./kernl-bugs-github.js";
 import { auditHostPaths } from "./host-path-audit.js";
 import { agentsTools } from "./tools.js";
 import { AgentExperienceGraph } from "./services/experience-graph.js";
+import { DecisionGraph } from "./services/decision-graph.js";
+import type { GraphDriver } from "../../core/db-drivers/graph-driver.js";
 import { auditTools } from "./audit-tools.js";
 import { createAnalysisResourceProvider, createSkillResourceProvider } from "./resources.js";
 import { log } from "../../core/logger.js";
@@ -111,6 +113,9 @@ export function createAgentsModule(): AgentsModule {
   let experienceSyncHandler: ((payload: unknown) => void) | null = null;
   let evalFailingHandler: ((payload: unknown) => void) | null = null;
   let eventsRef: ModuleContext["events"] | null = null;
+  let decisionGraph: DecisionGraph | null = null;
+  let decisionSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  const decisionSyncHandlers: Array<[string, (p: unknown) => void]> = [];
 
   // Advanced-capability slots — populated when `ext:agent-advanced` registers.
   const altExecutors = new Map<string, AltExecutorLike>();
@@ -240,6 +245,39 @@ export function createAgentsModule(): AgentsModule {
       // Office agents' questions reach the chief in batches; see question-triager.ts.
       questionTriager = new QuestionTriager(agentService, agentExecutor, ctx.events);
       questionTriager.start();
+
+      // A category the office put on `auto` is answered by its precedent while
+      // the precedent's measured precision holds (decisions-service.ts).
+      {
+        const service = agentService;
+        const executor = agentExecutor;
+        service.setAutoAnswer((q, s) => answerByPrecedent(service, executor, ctx.events, q, s));
+      }
+
+      // Questions, decisions, subjects and environment facts in the graph
+      // (decision-graph.ts): brought up to date a few seconds after each change.
+      {
+        const dg = new DecisionGraph(ctx.sqlite, () => ctx.graph);
+        decisionGraph = dg;
+        agentService.setDecisionGraph(dg);
+        const schedule = (delayMs: number) => {
+          if (decisionSyncTimer) return;
+          decisionSyncTimer = setTimeout(() => {
+            decisionSyncTimer = null;
+            dg.sync()
+              .then((n) => { if (n >= 2000) schedule(1_000); })
+              .catch((err) => log.debug(`decision graph: sync failed — ${err instanceof Error ? err.message : String(err)}`));
+          }, delayMs);
+          decisionSyncTimer.unref?.();
+        };
+        for (const name of ["agent:question_asked", "agent:question_triage", "agent:question_resolved", "agent:question_owed", "agent:env_fact_closed"]) {
+          const fn = () => schedule(3_000);
+          decisionSyncHandlers.push([name, fn]);
+          ctx.events.on(name as never, fn as never);
+        }
+        eventsRef = ctx.events;
+        schedule(20_000);
+      }
 
       // Answers filed while the asker was busy: relaunch it once its run ends,
       // with all of them. The sweep picks up the ones already waiting, after
@@ -426,7 +464,14 @@ export function createAgentsModule(): AgentsModule {
       };
     },
 
+    getGraphBackfill() {
+      const dg = decisionGraph;
+      return dg ? { name: "decisions", version: 1, order: 60, run: (g: GraphDriver) => dg.backfill(g) } : undefined;
+    },
+
     async shutdown() {
+      if (decisionSyncTimer) clearTimeout(decisionSyncTimer);
+      for (const [name, fn] of decisionSyncHandlers) eventsRef?.off(name as never, fn as never);
       if (hostPathAuditTimer) clearTimeout(hostPathAuditTimer);
       if (experienceSyncTimer) clearTimeout(experienceSyncTimer);
       if (experienceSyncHandler) eventsRef?.off("agent:flow:run_completed", experienceSyncHandler);

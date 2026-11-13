@@ -4,7 +4,7 @@ import { agentAllowedTools, agentSkills } from "./agent-fields.js";
 import { log } from "../../core/logger.js";
 import { setOfficeRepo, OfficeRepoError, type SetOfficeRepoResult } from "./office-repo.js";
 import type { ToolDefinition } from "../../core/types.js";
-import type { AgentService } from "./service.js";
+import { normalizeCategory, type AgentService } from "./service.js";
 import type { AgentExecutor } from "./executor.js";
 import type { MeetingExecutorLike } from "./advanced-types.js";
 import type { EventBus } from "../../core/event-bus.js";
@@ -1224,6 +1224,9 @@ export function agentsTools(
         })).min(2).max(4).describe("2 to 4 options, your preferred one first."),
         meeting_id: z.string().optional().describe("If the question came out of a meeting, reference its id."),
         for_operator: z.boolean().optional().describe("Only the operator can decide or do this (approve a risky MR, set something in an environment, a product decision): skip the chief."),
+        subject: z.string().optional().describe("What the question is about, as a key: an issue and its part (`web#2653:a-b`), an MR, a ticket. Taken from the question text when omitted."),
+        category: z.string().optional().describe("The kind of question, the same slug every time for the same kind (`approve-mr`, `closer-blocked`, `env-down`). Past decisions are matched within a category."),
+        env: z.string().optional().describe("When the question is about the environment being broken (DEV down, a missing credential): its key, e.g. `dev-e2e`. If that problem is already open you join it and nobody is asked again."),
         ...CALLER_AGENT_ID_FIELD,
       });
       const askSupervisorHandler = async (input: z.infer<typeof askSupervisorSchema>) => {
@@ -1250,6 +1253,20 @@ export function agentsTools(
           .filter((x): x is { label: string; value: string; url?: string; task?: boolean } => x !== null);
         if (options.length < 2 || options.length > 4) return errorResult("Provide 2 to 4 non-empty options, your preferred one first.");
 
+        // An environment problem already open in the office: join it, ask nobody.
+        if (input.env?.trim()) {
+          const r = service.envFacts.report({
+            flow_id: caller.flow_id ?? "", key: input.env, description: question, by: `agent:${caller.id}`,
+            blocked: { agent_id: caller.id, subject_key: input.subject, run_id: getRequestContext().callerRunId || "", note: question },
+          });
+          if (!r.opened) {
+            return textResult(
+              `«${r.fact.key}» is already open since ${r.fact.valid_from} (${r.blocked} waiting on it) — not asked again. ` +
+              `Park this work; you will get a letter when it is fixed.`,
+            );
+          }
+        }
+
         const dup = await service.findDuplicateQuestion({ from_agent_id: caller.id, flow_id: caller.flow_id ?? "", question, context: input.context });
         if (dup) {
           log.info(`ask_supervisor: ${caller.name} repeated question ${dup.id} (${dup.status}) — not filed`);
@@ -1267,6 +1284,8 @@ export function agentsTools(
           context: input.context ?? "",
           options,
           for_operator: input.for_operator === true,
+          subject_key: input.subject,
+          category: input.category,
         });
         return textResult(
           res.status === "triage"
@@ -1361,6 +1380,7 @@ export function agentsTools(
             }
             const res = answerAndDeliver(service, executor, events, q.id, {
               selected_index, selected_option, note: text || undefined, answered_by: "chief",
+              source: { via: "mcp", actor: `agent:${resolveCallerAgentId(input)}` },
             });
             if (!res) return errorResult(`Could not answer ${q.id}.`);
             return textResult(`Answered ${q.id}: ${selected_option}`);
@@ -1382,6 +1402,129 @@ export function agentsTools(
               return errorResult(`Question ${input.question_id} is not waiting for triage.`);
             }
             return textResult(`Escalated ${input.question_id} to the human.`);
+          },
+        }),
+      ];
+    })(),
+
+    // ── Environment facts and decision policies ─────────────────
+    // An environment problem (DEV down, a missing credential) is reported once
+    // per office; the agents it stops join it and are woken when it closes.
+    // Decision policies say which kinds of question a precedent may answer.
+    ...(() => {
+      const callerAgent = (input: { __caller_agent_id?: string }) => {
+        const id = resolveCallerAgentId(input);
+        return id ? service.getAgent(id) : undefined;
+      };
+      const pct = (x: number | null) => (x === null ? "—" : `${Math.round(x * 100)}%`);
+      return [
+        defineTool({
+          name: "kernel_agents_env_report",
+          description:
+            "Report that something in your office's environment blocks your work (DEV down, a missing credential, a broken deploy). " +
+            "Use the same short key every time for the same problem (`dev-e2e`, `credential-dev-patient-jwt`). " +
+            "If it is already open you just join it — nobody is asked again. You get a letter when it is fixed: park the work until then.",
+          schema: z.object({
+            key: z.string().describe("Short stable key of the problem, e.g. `dev-e2e`."),
+            description: z.string().optional().describe("What is broken, as you saw it (first reporter's text is kept)."),
+            subject: z.string().optional().describe("What you parked because of it, e.g. `web#2653:a-b`."),
+            ...CALLER_AGENT_ID_FIELD,
+          }),
+          handler: async (input) => {
+            const agent = callerAgent(input);
+            if (!agent) return errorResult("Caller agent context missing — only usable from an agent run.");
+            const r = service.envFacts.report({
+              flow_id: agent.flow_id ?? "", key: input.key, description: input.description, by: `agent:${agent.id}`,
+              blocked: { agent_id: agent.id, subject_key: input.subject, run_id: getRequestContext().callerRunId || "", note: input.description },
+            });
+            return textResult(r.opened
+              ? `Opened «${r.fact.key}». You are recorded as blocked by it; you will get a letter when it is closed.`
+              : `«${r.fact.key}» is already open since ${r.fact.valid_from} (${r.blocked} waiting on it). You joined it; do not ask the operator about it again — you will get a letter when it is closed.`);
+          },
+        }),
+        defineTool({
+          name: "kernel_agents_env_resolve",
+          description: "Close an environment problem of your office that is fixed. Everyone who joined it gets a letter to resume.",
+          schema: z.object({
+            key: z.string(),
+            note: z.string().optional().describe("What fixed it, or what changed."),
+            ...CALLER_AGENT_ID_FIELD,
+          }),
+          handler: async (input) => {
+            const agent = callerAgent(input);
+            if (!agent) return errorResult("Caller agent context missing — only usable from an agent run.");
+            const r = service.closeEnvFact({ flow_id: agent.flow_id ?? "", key: input.key, by: `agent:${agent.id}`, note: input.note });
+            return r.closed ? textResult(`Closed «${r.fact?.key}»; ${r.woken} agent(s) woken.`) : errorResult(`Nothing open under «${input.key}».`);
+          },
+        }),
+        defineTool({
+          name: "kernel_agents_env_list",
+          description: "Read-only. The environment problems open in your office, since when, and who is waiting on each.",
+          schema: z.object({ ...CALLER_AGENT_ID_FIELD }),
+          handler: async (input) => {
+            const agent = callerAgent(input);
+            const open = service.envFacts.listOpen(agent?.flow_id || undefined);
+            if (open.length === 0) return textResult("Nothing open: the environment has no known problem.");
+            return textResult(open.map((f) => `- «${f.key}» since ${f.valid_from}: ${f.description || "(no description)"} — ${service.envFacts.blocks(f.id).length} waiting`).join("\n"));
+          },
+        }),
+        defineTool({
+          name: "kernel_agents_decision_stats",
+          description:
+            "Read-only. Per kind of question (category) in an office: the policy (off / suggest / auto), and how often the operator chose " +
+            "what past decisions suggested — the measured precision a category needs before a precedent may answer it alone.",
+          schema: z.object({ flow_id: z.string().optional().describe("Office id; defaults to yours."), ...CALLER_AGENT_ID_FIELD }),
+          handler: async (input) => {
+            const flow = input.flow_id ?? callerAgent(input)?.flow_id ?? "";
+            const cats = service.decisions.categories(flow);
+            if (cats.length === 0) return textResult("No categorized questions in this office yet.");
+            return textResult(cats.map((c) => {
+              const p = service.decisions.policy(flow, c.category);
+              const m = service.decisions.precision(flow, c.category);
+              return `- ${c.category}: ${c.questions} questions, policy ${p.mode}, suggestions right ${pct(m.precision)} of ${m.measured} (auto needs ≥ ${pct(p.min_precision)} over ≥ ${p.min_samples})`;
+            }).join("\n"));
+          },
+        }),
+        defineTool({
+          name: "kernel_agents_subject_history",
+          description:
+            "Read-only. Everything asked and decided about an issue and all its parts (`web#2653` covers `web#2653:a-b`…), oldest first: " +
+            "who asked, the answer, who decided it and through what channel, and which environment problems were open at the time. " +
+            "Read it before asking about a subject again.",
+          schema: z.object({ subject: z.string().describe("An issue or one of its parts, e.g. `web#2653` or `web#2653:a-b`."), limit: z.number().int().optional() }),
+          handler: async ({ subject, limit }) => {
+            if (!service.decisionGraph) return errorResult("The decision graph is not available.");
+            const rows = await service.decisionGraph.subjectHistory(subject, Math.min(Math.max(limit ?? 100, 1), 500));
+            if (rows === null) return errorResult("No graph is active, so the subject's history cannot be read.");
+            if (rows.length === 0) return textResult(`Nothing asked about ${subject} yet.`);
+            const name = (id: string | null) => (id ? service.getAgent(id)?.name ?? id : "?");
+            return textResult(rows.map((r) => {
+              const who = r.answer === null ? `(${r.status})` : `→ «${r.answer}» by ${r.answered_by}${r.via ? ` via ${r.via}` : ""}${r.actor ? ` (${r.actor})` : ""}`;
+              const env = r.env_open.length ? ` [env: ${r.env_open.join(", ")}]` : "";
+              return `- ${r.asked_at.slice(0, 16)} ${r.subject_key}${r.category ? ` [${r.category}]` : ""} ${name(r.asked_by)}: ${r.question.slice(0, 160)} ${who}${env}`;
+            }).join("\n"));
+          },
+        }),
+        defineTool({
+          name: "kernel_agents_decision_policy_set",
+          description:
+            "Chief only. Set how a kind of question (category) is handled in an office: off, suggest (show what past decisions suggest), " +
+            "or auto (a precedent answers it alone while its measured precision holds). Only turn on auto when the operator asked for it.",
+          schema: z.object({
+            flow_id: z.string(),
+            category: z.string(),
+            mode: z.enum(["off", "suggest", "auto"]),
+            min_precision: z.number().optional(),
+            min_samples: z.number().int().optional(),
+            ...CALLER_AGENT_ID_FIELD,
+          }),
+          handler: async (input) => {
+            const chief = service.getTopAgent();
+            if (!chief || resolveCallerAgentId(input) !== chief.id) return errorResult("Only the chief can change a decision policy.");
+            const p = service.decisions.setPolicy(input.flow_id, normalizeCategory(input.category), {
+              mode: input.mode, min_precision: input.min_precision, min_samples: input.min_samples,
+            });
+            return textResult(`${p.category}: ${p.mode} (auto needs ≥ ${pct(p.min_precision)} over ≥ ${p.min_samples}).`);
           },
         }),
       ];

@@ -77,15 +77,17 @@ export function buttonsFor(q: AgentQuestion, lang: KernelLanguage = "es"): Opera
   return rows;
 }
 
-export function headline(q: AgentQuestion, who: string, kind: Kind, lang: KernelLanguage = "es"): string {
+/** `hint`: what past decisions suggest and the last one on the same subject (decisions-service.ts), when any. */
+export function headline(q: AgentQuestion, who: string, kind: Kind, lang: KernelLanguage = "es", hint: string | null = null): string {
   const s = strings(lang);
   const tag = kind === "owed" ? s.owedTag(chosen(q, lang)) : kind === "remind" ? s.remind : s.asks;
-  return `${tag} — ${who}\n${q.question}${q.context ? `\n\n${q.context.slice(0, 600)}` : ""}`;
+  return `${tag} — ${who}\n${q.question}${q.context ? `\n\n${q.context.slice(0, 600)}` : ""}${hint && kind !== "owed" ? `\n\n${hint}` : ""}`;
 }
 
 /** Message for a text channel: numbered options and how to answer. `link` null = no public URL configured. */
 export function textFor(
   q: AgentQuestion, who: string, kind: Kind, code: number, link: string | null, canReply = true, lang: KernelLanguage = "es",
+  hint: string | null = null,
 ): string {
   const s = strings(lang);
   const lines = openOptions(q).map((o, i) => `${i + 1}. ${o.label}`);
@@ -94,7 +96,7 @@ export function textFor(
   const tail = canReply
     ? `${s.codeReply(code)} ${link ? s.orLink(link) : s.orDashboard}`
     : link ? s.link(link) : s.dashboard;
-  return `${headline(q, who, kind, lang)}\n\n${lines.join("\n")}\n\n${tail}`;
+  return `${headline(q, who, kind, lang, hint)}\n\n${lines.join("\n")}\n\n${tail}`;
 }
 
 /** What a resolved question's message turns into: the edit, and the reply to the button that resolved it. */

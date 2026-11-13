@@ -9,5 +9,8 @@ export interface OperatorChannelAdapter {
   send(msg: OperatorMessage): Promise<SentRef | null>;
   edit?(ref: SentRef, text: string): Promise<void>;
 }
-export type AnswerPort = (questionId: string, choice: import("../../modules/agents/question-delivery.js").HumanChoice)
-  => import("../../modules/agents/question-delivery.js").ChoiceResult;
+export type AnswerPort = (
+  questionId: string,
+  choice: import("../../modules/agents/question-delivery.js").HumanChoice,
+  source: import("../../modules/agents/question-delivery.js").AnswerSource,
+) => import("../../modules/agents/question-delivery.js").ChoiceResult;

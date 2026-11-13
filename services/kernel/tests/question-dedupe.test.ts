@@ -17,7 +17,8 @@ const q = (over: Partial<AgentQuestion>): AgentQuestion => ({
   status: "pending", selected_option: "", selected_index: -1, answered_note: "", answered_at: null,
   answered_by: "", chief_note: "", triage_started_at: null, created_at: "2026-10-28T14:03:33.113Z",
   opinion_status: "", opinion_run_id: "", opinion: null, opinion_error: "", opinion_at: null,
-  owed_at: null, reminded_at: null, for_operator: true, ...over,
+  owed_at: null, reminded_at: null, for_operator: true,
+  subject_key: "", category: "", answered_via: "", answered_actor: "", ...over,
 });
 
 describe("findDuplicateQuestion", () => {

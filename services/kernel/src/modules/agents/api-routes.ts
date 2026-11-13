@@ -6,10 +6,10 @@
 import { SkillVectorIndex, type SemanticScores } from "./skill-vectors.js";
 import { HttpError, type KernelHttpServer, type RouteMethod } from "../../core/http-server.js";
 import { agentOperations } from "./operations.js";
-import type { AgentService, QuestionOption, QuestionStatus } from "./service.js";
+import { normalizeCategory, type AgentService, type QuestionOption, type QuestionStatus } from "./service.js";
 import type { AgentExecutor } from "./executor.js";
 import { resolveGoal } from "./executor.js";
-import { resolveHumanChoice, type HumanChoice } from "./question-delivery.js";
+import { resolveHumanChoice, type AnswerSource, type HumanChoice } from "./question-delivery.js";
 import { createQuestionInvestigator, type QuestionInvestigator } from "./question-investigator.js";
 import type { EventBus } from "../../core/event-bus.js";
 import type { KernelLanguage } from "../../core/config.js";
@@ -54,6 +54,24 @@ export function parseAnswerBody(body: unknown): HumanChoice | null {
     return b.selected_index >= 0 ? { kind: "option", index: b.selected_index } : { kind: "free", text: b.selected_option.trim() };
   }
   return null;
+}
+
+/**
+ * Who is answering through the API. Every client shares one token, so the
+ * client says it: `X-Kernl-Via` (the dashboard sends `dashboard`; an office
+ * orchestrator its own name, e.g. `host-ops`) and `X-Kernl-Actor`, or the same
+ * as `via`/`actor` in the body. Neither given: an unnamed API client.
+ */
+export function answerSourceOf(headers: Record<string, string | string[] | undefined>, body: unknown): AnswerSource {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const pick = (h: string, k: string): string => {
+    const raw = headers[h];
+    const v = (Array.isArray(raw) ? raw[0] : raw) ?? (typeof b[k] === "string" ? (b[k] as string) : "");
+    return String(v).trim().slice(0, 120);
+  };
+  const via = pick("x-kernl-via", "via").toLowerCase().replace(/[^a-z0-9:_.-]+/g, "-") || "api";
+  const actor = pick("x-kernl-actor", "actor");
+  return actor ? { via, actor } : { via };
 }
 
 /** `?limit=` clamped to [1, 500], 50 when absent or not a number. */
@@ -251,21 +269,29 @@ export function registerAgentRoutes(
       status,
       answered_by: answeredBy === "chief" || answeredBy === "human" ? answeredBy : undefined,
       limit,
-    });
+    }).map((q) => ({
+      ...q,
+      // What past decisions of its kind suggest, and the last one on the same subject.
+      suggestion: service.decisions.suggestionFor(q.id),
+      previous: service.decisions.previousOnSubject(q),
+    }));
     return { questions, total: questions.length };
   });
 
-  server.route("POST", "/api/agents/questions/:id/answer", ({ params: { id }, body }) => {
+  server.route("POST", "/api/agents/questions/:id/answer", ({ req, params: { id }, body }) => {
     const choice = parseAnswerBody(body);
     if (!choice) throw new HttpError(400, "choice required");
-    const r = resolveHumanChoice(service, executor, events, id, choice);
+    const r = resolveHumanChoice(service, executor, events, id, choice, answerSourceOf(req.headers, body));
     if (!r.ok) throw new HttpError(r.reason === "not_open" ? 409 : 400, r.reason, { reason: r.reason });
     return { success: true, status: r.status };
   });
 
   // An office's host process (its own service on the host) files a question for one of its agents:
   // the answer reaches that agent like any other.
-  server.route<{ from_agent_slug: string; question: string; context?: string; options: QuestionOption[]; for_operator?: boolean }>(
+  server.route<{
+    from_agent_slug: string; question: string; context?: string; options: QuestionOption[]; for_operator?: boolean;
+    subject_key?: string; category?: string;
+  }>(
     "POST", "/api/agents/questions", ({ body }) => {
       const agent = body?.from_agent_slug ? service.getAgentBySlug(body.from_agent_slug) : undefined;
       if (!agent) throw new HttpError(404, "agent not found");
@@ -279,7 +305,9 @@ export function registerAgentRoutes(
         .filter((x): x is QuestionOption => x !== null);
       if (!question || options.length < 2 || options.length > 4) throw new HttpError(400, "question and 2-4 options required");
       return service.createQuestion({ from_agent_id: agent.id, flow_id: agent.flow_id ?? "", question,
-        context: String(body.context ?? ""), options, for_operator: body.for_operator !== false });
+        context: String(body.context ?? ""), options, for_operator: body.for_operator !== false,
+        subject_key: typeof body.subject_key === "string" ? body.subject_key : undefined,
+        category: typeof body.category === "string" ? body.category : undefined });
     },
   );
 
@@ -316,8 +344,58 @@ export function registerAgentRoutes(
     return { success: true, to_agent_id: r.to_agent_id };
   });
 
-  server.route("POST", "/api/agents/questions/:id/dismiss", ({ params: { id } }) => {
-    const r = resolveHumanChoice(service, executor, events, id, { kind: "dismiss" });
+  // ── Environment facts and decision policies (decisions-service.ts, env-facts-service.ts) ──
+  // An office's host process reports and closes environment problems too.
+  server.route("GET", "/api/agents/env-facts", ({ query }) => {
+    const flow = query.get("flow_id") ?? undefined;
+    const open = service.envFacts.listOpen(flow).map((f) => ({ ...f, waiting: service.envFacts.blocks(f.id).length }));
+    return { open, history: flow ? service.envFacts.history(flow, clampLimit(query.get("limit"))) : [] };
+  });
+  server.route<{ flow_id?: string; key?: string; description?: string; agent_slug?: string; subject_key?: string }>(
+    "POST", "/api/agents/env-facts", ({ req, body }) => {
+      const flow = String(body?.flow_id ?? "").trim();
+      const key = String(body?.key ?? "").trim();
+      if (!flow || !key) throw new HttpError(400, "flow_id and key are required");
+      const agent = body.agent_slug ? service.getAgentBySlug(body.agent_slug) : undefined;
+      const src = answerSourceOf(req.headers, body);
+      const r = service.envFacts.report({
+        flow_id: flow, key, description: body.description, by: src.actor ?? src.via,
+        blocked: agent ? { agent_id: agent.id, subject_key: body.subject_key } : undefined,
+      });
+      return { fact: r.fact, opened: r.opened, waiting: r.blocked };
+    },
+  );
+  server.route<{ flow_id?: string; note?: string }>("POST", "/api/agents/env-facts/:key/close", ({ req, params: { key }, body }) => {
+    const flow = String(body?.flow_id ?? "").trim();
+    if (!flow) throw new HttpError(400, "flow_id is required");
+    const src = answerSourceOf(req.headers, body);
+    const r = service.closeEnvFact({ flow_id: flow, key, by: src.actor ?? src.via, note: body?.note });
+    if (!r.closed) throw new HttpError(404, `Nothing open under ${key}`);
+    return { fact: r.fact, woken: r.woken };
+  });
+  server.route("GET", "/api/agents/decisions/:flow", ({ params: { flow } }) => ({
+    categories: service.decisions.categories(flow).map((c) => ({
+      ...c, policy: service.decisions.policy(flow, c.category), ...service.decisions.precision(flow, c.category),
+    })),
+  }));
+  server.route<{ mode?: string; min_precision?: number; min_samples?: number }>(
+    "PUT", "/api/agents/decisions/:flow/:category", ({ params: { flow, category }, body }) => {
+      try {
+        return {
+          policy: service.decisions.setPolicy(flow, normalizeCategory(category), {
+            ...(body?.mode ? { mode: body.mode as "off" | "suggest" | "auto" } : {}),
+            ...(typeof body?.min_precision === "number" ? { min_precision: body.min_precision } : {}),
+            ...(typeof body?.min_samples === "number" ? { min_samples: body.min_samples } : {}),
+          }),
+        };
+      } catch (e) {
+        throw new HttpError(400, e instanceof Error ? e.message : String(e));
+      }
+    },
+  );
+
+  server.route("POST", "/api/agents/questions/:id/dismiss", ({ req, params: { id }, body }) => {
+    const r = resolveHumanChoice(service, executor, events, id, { kind: "dismiss" }, answerSourceOf(req.headers, body));
     if (!r.ok) throw new HttpError(404, "Question not found or already handled");
     return { success: true };
   });

@@ -17,10 +17,10 @@ import { WHATSAPP_CC_AGENT_NAME } from "../modules/agents/agent-name-conventions
 import { runTopAgentStreamed } from "./telegram-stream.js";
 import { log } from "./logger.js";
 
-async function tryCode(oc: OperatorComms | null | undefined, text: string, platform: string): Promise<string | null> {
+async function tryCode(oc: OperatorComms | null | undefined, text: string, platform: string, user?: string): Promise<string | null> {
   if (!oc) return null;
   try {
-    return await oc.tryCodeReply(text, platform);
+    return await oc.tryCodeReply(text, platform, user);
   } catch (err) {
     log.warn(`operator-comms code reply: ${err instanceof Error ? err.message : String(err)}`);
     return null;
@@ -50,7 +50,7 @@ export function wireMessageRouting(opts: {
     telegramTransport.onMessage(async (text, msgCtx) => {
       log.debug(`Telegram message from ${msgCtx.userId}: ${text}`);
 
-      const coded = await tryCode(operatorComms, text, "telegram");
+      const coded = await tryCode(operatorComms, text, "telegram", String(msgCtx.userId ?? ""));
       if (coded) return { text: coded, parseMode: null };
 
       // Natural-language messages go to the top agent (the top-rank
@@ -97,7 +97,7 @@ export function wireMessageRouting(opts: {
       telegramTransport.setVoiceService(voiceService, true);
       telegramTransport.onVoice(async (text, msgCtx) => {
         log.debug(`Telegram voice from ${msgCtx.userId}: ${text}`);
-        const coded = await tryCode(operatorComms, text, "telegram");
+        const coded = await tryCode(operatorComms, text, "telegram", String(msgCtx.userId ?? ""));
         if (coded) return { text: coded, parseMode: null };
         const topAgent =
           !text.trim().startsWith("/") && agentService && agentExecutor
@@ -134,7 +134,7 @@ export function wireMessageRouting(opts: {
       log.debug(`Telegram callback from ${msgCtx.userId}: ${data}`);
       if (data.startsWith("oq:") && operatorComms) {
         // Plain text: the reply replaces the question, which may hold _ or *.
-        return { text: await operatorComms.handleCallback(data), parseMode: null };
+        return { text: await operatorComms.handleCallback(data, String(msgCtx.userId ?? "")), parseMode: null };
       }
       const response = await orchestrator.handleCallback(data, {
         userId: msgCtx.userId,
@@ -180,7 +180,7 @@ export function wireMessageRouting(opts: {
           };
         }
       }
-      const coded = await tryCode(operatorComms, message.text, msgCtx.platform);
+      const coded = await tryCode(operatorComms, message.text, msgCtx.platform, String(msgCtx.userId ?? ""));
       if (coded) return { text: coded };
       const response = await orchestrator.handleMessage(message.text, {
         userId: msgCtx.userId,
@@ -234,7 +234,7 @@ export function wireMessageRouting(opts: {
         return;
       }
 
-      const coded = await tryCode(operatorComms, msg.text, "whatsapp");
+      const coded = await tryCode(operatorComms, msg.text, "whatsapp", String(msg.author ?? ""));
       if (coded) {
         await waProvider.sendTo(msg.chat, { title: "", body: coded });
         return;

@@ -1085,6 +1085,78 @@ export const agentsMigrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_learning_confidence_run ON agent_learning_confidence (run_id);
     `,
   },
+  {
+    // Who decided, and about what. answered_by only told chief from "human",
+    // and an office orchestrator answering through the API counted as human:
+    // answered_via/answered_actor keep the channel and the sender. subject_key
+    // (`web#2653:a-b`) and category file every question under what it is about,
+    // so a decision can be found again for the same subject or the same kind.
+    version: 64,
+    sql: `
+      ALTER TABLE agent_questions ADD COLUMN subject_key    TEXT NOT NULL DEFAULT '';
+      ALTER TABLE agent_questions ADD COLUMN category       TEXT NOT NULL DEFAULT '';
+      ALTER TABLE agent_questions ADD COLUMN answered_via   TEXT NOT NULL DEFAULT '';
+      ALTER TABLE agent_questions ADD COLUMN answered_actor TEXT NOT NULL DEFAULT '';
+      CREATE INDEX IF NOT EXISTS idx_agent_questions_subject ON agent_questions (flow_id, subject_key, category, created_at);
+
+      -- What past decisions of the same kind suggested for a question, and
+      -- whether the operator then chose it: each category's measured precision.
+      CREATE TABLE IF NOT EXISTS agent_question_suggestions (
+        question_id   TEXT PRIMARY KEY,
+        flow_id       TEXT NOT NULL DEFAULT '',
+        category      TEXT NOT NULL DEFAULT '',
+        label         TEXT NOT NULL,
+        option_index  INTEGER NOT NULL DEFAULT -1,
+        share         REAL NOT NULL DEFAULT 0,
+        samples       INTEGER NOT NULL DEFAULT 0,
+        precision     REAL,
+        mode          TEXT NOT NULL DEFAULT 'suggest',
+        outcome       TEXT NOT NULL DEFAULT '',
+        created_at    TEXT NOT NULL,
+        resolved_at   TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_question_suggestions_cat ON agent_question_suggestions (flow_id, category, resolved_at);
+
+      -- Per office and category: off, suggest (default), or auto — answered
+      -- by the precedent only while its measured precision holds.
+      CREATE TABLE IF NOT EXISTS agent_decision_policies (
+        flow_id        TEXT NOT NULL,
+        category       TEXT NOT NULL,
+        mode           TEXT NOT NULL DEFAULT 'suggest' CHECK (mode IN ('off','suggest','auto')),
+        min_precision  REAL NOT NULL DEFAULT 0.97,
+        min_samples    INTEGER NOT NULL DEFAULT 30,
+        updated_at     TEXT NOT NULL,
+        PRIMARY KEY (flow_id, category)
+      );
+
+      -- Something in the environment that blocks work (DEV down, a missing
+      -- credential), open from valid_from until someone closes it. Agents that
+      -- hit it join the open fact instead of asking again, and are woken when
+      -- it closes.
+      CREATE TABLE IF NOT EXISTS agent_env_facts (
+        id          TEXT PRIMARY KEY,
+        flow_id     TEXT NOT NULL DEFAULT '',
+        key         TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        valid_from  TEXT NOT NULL,
+        valid_to    TEXT,
+        opened_by   TEXT NOT NULL DEFAULT '',
+        closed_by   TEXT NOT NULL DEFAULT '',
+        close_note  TEXT NOT NULL DEFAULT ''
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_env_facts_open ON agent_env_facts (flow_id, key) WHERE valid_to IS NULL;
+      CREATE TABLE IF NOT EXISTS agent_env_blocks (
+        fact_id     TEXT NOT NULL,
+        agent_id    TEXT NOT NULL,
+        subject_key TEXT NOT NULL DEFAULT '',
+        run_id      TEXT NOT NULL DEFAULT '',
+        note        TEXT NOT NULL DEFAULT '',
+        created_at  TEXT NOT NULL,
+        woken_at    TEXT,
+        PRIMARY KEY (fact_id, agent_id, subject_key)
+      );
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is
@@ -1093,5 +1165,5 @@ export const agentsMigrations: Migration[] = [
   //
   // NOTE: versions 61 and 62 are burned too. They belonged to a learning
   // import from other instances that was removed before any release; a dev
-  // DB may have recorded them. The next migration is 64.
+  // DB may have recorded them. The next migration is 65.
 ];

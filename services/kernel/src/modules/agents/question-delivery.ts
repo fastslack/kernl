@@ -190,11 +190,46 @@ export function answerResumeDisabled(agent: { variables?: string }): boolean {
   } catch { return false; }
 }
 
+/**
+ * Where an answer came from. `answered_by` only says chief or human, and every
+ * call to the answer API counted as "human" — an office's own orchestrator
+ * included. In one office 1,157 of 1,844 "human" answers came 15–60 s after
+ * the question, at any hour: nobody could tell who decided them.
+ */
+export interface AnswerSource {
+  /** dashboard, api, telegram, whatsapp, slack, mcp, rule… */
+  via: string;
+  /** Who, as far as the channel knows: `telegram:<user id>`, `agent:<id>`, `rule:precedent`, an API client's name. */
+  actor?: string;
+}
+
 export interface AnswerInput {
   selected_index: number;
   selected_option: string;
   note?: string;
-  answered_by: "chief" | "human";
+  answered_by: "chief" | "human" | "rule";
+  source?: AnswerSource;
+}
+
+/**
+ * Answer a question by its precedent (decisions-service.ts): the office put
+ * this category on `auto` and the precedent's measured precision qualifies.
+ */
+export function answerByPrecedent(
+  service: AgentService,
+  executor: Pick<AgentExecutor, "execute">,
+  events: EventBus | undefined,
+  q: { id: string; options: Array<{ label: string }> },
+  s: { option_index: number; precision: number | null; measured: number; share: number; samples: number },
+): boolean {
+  const opt = q.options[s.option_index];
+  if (!opt) return false;
+  const pct = (x: number) => `${Math.round(x * 100)}%`;
+  const note = `Precedent: chosen in ${pct(s.share)} of ${s.samples} earlier cases; right ${pct(s.precision ?? 0)} of the last ${s.measured} times it was suggested.`;
+  return answerAndDeliver(service, executor, events, q.id, {
+    selected_index: s.option_index, selected_option: opt.label, note, answered_by: "rule",
+    source: { via: "rule", actor: "rule:precedent" },
+  }) !== null;
 }
 
 export function answerAndDeliver(
@@ -213,6 +248,8 @@ export function answerAndDeliver(
     selected_option: input.selected_option,
     selected_index: input.selected_index,
     answered_by: input.answered_by,
+    via: input.source?.via ?? "",
+    actor: input.source?.actor ?? "",
     ts: new Date().toISOString(),
   });
 
@@ -226,7 +263,7 @@ export function answerAndDeliver(
   }
 
   try {
-    const who = input.answered_by === "chief" ? "The chief" : "Your supervisor";
+    const who = input.answered_by === "chief" ? "The chief" : input.answered_by === "rule" ? "A standing decision (the office's precedent)" : "Your supervisor";
     const noteSuffix = input.note && input.note !== input.selected_option ? `\n\nAdditional note: ${input.note}` : "";
     const goal =
       `${who} answered your earlier question.\n\n` +
@@ -275,24 +312,29 @@ export type HumanChoice =
 
 export type ChoiceResult = { ok: true; status: "owed" | "answered" | "dismissed" } | { ok: false; reason: "not_open" | "bad_choice" };
 
-/** Every operator answer — dashboard, Telegram button, "Q<n> <k>" reply — goes through here. */
+/**
+ * Every operator answer — dashboard, Telegram button, "Q<n> <k>" reply, an
+ * API client — goes through here. `source` says which; without it the answer
+ * is recorded as coming through an unnamed channel.
+ */
 export function resolveHumanChoice(
   service: AgentService,
   executor: Pick<AgentExecutor, "execute">,
   events: EventBus | undefined,
   id: string,
   choice: HumanChoice,
+  source: AnswerSource = { via: "unknown" },
 ): ChoiceResult {
   const q = service.getQuestion(id);
   if (!q || (q.status !== "pending" && q.status !== "owed")) return { ok: false, reason: "not_open" };
   const final = (selected_index: number, selected_option: string, note?: string): ChoiceResult => {
     // Before the answer is delivered: a stale "keep waiting" letter must not ride along with it.
     if (q.status === "owed") service.markOwedLettersRead(id);
-    return answerAndDeliver(service, executor, events, id, { selected_index, selected_option, note, answered_by: "human" })
+    return answerAndDeliver(service, executor, events, id, { selected_index, selected_option, note, answered_by: "human", source })
       ? { ok: true, status: "answered" } : { ok: false, reason: "not_open" };
   };
   const owe = (selected_index: number, selected_option: string): ChoiceResult => {
-    if (!service.markOwed(id, { selected_index, selected_option })) return { ok: false, reason: "not_open" };
+    if (!service.markOwed(id, { selected_index, selected_option, source })) return { ok: false, reason: "not_open" };
     service.postLetterAboutQuestion(id, q.question,
       `**Question:** ${q.question}\n\n**Answer:** ${selected_option} — a cargo del operador. ` +
       `No actúes todavía: seguí esperando. Cuando termine vas a recibir la respuesta final (o DESCARTADA).`);
@@ -312,7 +354,7 @@ export function resolveHumanChoice(
     case "free":
       return choice.text.trim() ? final(-1, choice.text.trim(), choice.text.trim()) : { ok: false, reason: "bad_choice" };
     case "dismiss": {
-      if (!service.dismissQuestion(id)) return { ok: false, reason: "not_open" };
+      if (!service.dismissQuestion(id, source)) return { ok: false, reason: "not_open" };
       service.markOwedLettersRead(id);
       service.postLetterAboutQuestion(id, q.question,
         `**Question:** ${q.question}\n\n**Answer:** DESCARTADA por el operador. Seguí tu protocolo para una pregunta descartada (no la repitas igual).`);
