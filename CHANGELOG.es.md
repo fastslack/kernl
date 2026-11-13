@@ -7,8 +7,40 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-13
+
+### Actualizar desde 0.5.0
+
+- **Una instalación que no pudo pasarse al grafo incluido lo vuelve a
+  intentar sola.** En una instalación con actividad, la copia de la 0.5.0
+  desde Neo4j fallaba y quedaba en Neo4j (`Neo4j import incomplete` en el
+  log): no se perdió nada, y el primer arranque de la 0.5.1 la copia de nuevo.
+  No hay que hacer nada a mano.
+
 ### Corregido
 
+- **La copia desde Neo4j funciona mientras el kernel escribe en él.**
+  Comparaba el grafo incluido contra los conteos del comienzo, pero el kernel
+  sigue escribiendo en Neo4j durante la copia (solo el grafo de experiencia de
+  los agentes sincroniza decenas de miles de corridas en el primer arranque),
+  así que en una instalación con actividad cada copia fallaba y se reintentaba,
+  y volvía a fallar, en cada arranque. Ahora compara contra lo que escribió,
+  saltea una relación hacia un nodo creado durante la copia y se pone al día
+  después del cambio. Sobre una copia de una instalación real: 62k nodos y 136k
+  relaciones en 34 segundos mientras el grafo crecía, y todas las etiquetas
+  iguales a Neo4j cinco minutos después del cambio.
+- **Todo se vuelve a proyectar después del cambio en caliente.** Las pasadas
+  que seguían corriendo sobre Neo4j cuando el cambio lo cerraba no terminaban
+  nunca y frenaban toda sincronización y backfill posterior (unas 38k corridas
+  de agentes no llegaban al grafo nuevo). Después del cambio los backfills
+  vuelven a correr y los grafos de experiencia y de decisiones se proyectan de
+  nuevo desde SQLite.
+- **Una copia fallida dice por qué.** El motivo guardado en `kernl_upgrades`
+  eran tres líneas de stack; ahora es el error.
+- **La imagen Docker compila en ARM.** `bun install` se colgaba en node-gyp en
+  arm64; ahora los headers de Node se bajan una vez durante el build.
+- **`AGENTS_SCHEDULER=off` tampoco relanza al arrancar a los agentes con
+  respuestas esperando**, como el scheduler y el barrido de la bandeja.
 - **Los backups ahora incluyen el grafo integrado.** Desde 0.5.0 el store de
   Relate (`data/graph`) es la única copia de la memoria de largo plazo del chat,
   los vínculos entre contactos y el archivo de noticias, y `backup.sh` lo

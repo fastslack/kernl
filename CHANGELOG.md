@@ -7,8 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-13
+
+### Upgrading from 0.5.0
+
+- **An install whose move to the built-in graph failed tries again on its
+  own.** On a busy install the 0.5.0 copy from Neo4j failed and stayed on
+  Neo4j (`Neo4j import incomplete` in the log): nothing was lost, and the
+  first start of 0.5.1 copies it again. Nothing to do by hand.
+
 ### Fixed
 
+- **The copy from Neo4j works while the kernel writes to it.** It checked the
+  built-in graph against the counts taken when it began, but the kernel keeps
+  writing to Neo4j during the copy (the agents' experience graph alone syncs
+  tens of thousands of runs on the first start), so every copy on a busy
+  install failed and was retried, and failed, on every start. It now checks
+  the graph against what it wrote, skips a relationship to a node created
+  during the copy, and catches up after the switch. On a copy of a real
+  install: 62k nodes and 136k relationships in 34 seconds while the graph
+  grew, every label matching Neo4j five minutes after the switch.
+- **Everything is projected again after the live switch.** Passes still
+  running on Neo4j when the switch closed it never finished and held up every
+  later sync and backfill (about 38k agent runs never reached the new graph).
+  After the switch the backfills run again and the experience and decision
+  graphs re-project from SQLite.
+- **A failed copy says why.** The reason recorded in `kernl_upgrades` was
+  three lines of stack; it is now the error itself.
+- **The Docker image builds on ARM.** `bun install` hung in node-gyp on
+  arm64; the Node headers are now fetched once during the build.
+- **`AGENTS_SCHEDULER=off` also stops relaunching agents with answers
+  waiting** on start, like the scheduler and the inbox sweep.
 - **Backups now include the built-in graph.** Since 0.5.0 the Relate store
   (`data/graph`) is the only copy of chat long-term memory, the links between
   contacts and the news archive, and `backup.sh` left it out. It now copies the
