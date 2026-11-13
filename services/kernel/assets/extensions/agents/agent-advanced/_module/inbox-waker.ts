@@ -12,7 +12,8 @@
  *   3. No schedule of the recipient may fire within `quietMs` from now.
  *   4. Per-agent in-memory cooldown — same agent isn't woken twice within
  *      `quietMs` even if multiple messages arrive in quick succession.
- *   5. Kill switch: env AGENTS_INBOX_WAKE=0 disables entirely.
+ *   5. Kill switch: env AGENTS_INBOX_WAKE=0 disables entirely;
+ *      AGENTS_SCHEDULER=off disables the periodic sweep.
  *   6. A claude_code agent whose model is over its usage limit stays asleep
  *      (no wake, no attempt spent) until the limit lifts: otherwise it runs on
  *      the fallback model all through the quota.
@@ -216,6 +217,13 @@ export class InboxWaker {
 
   startSweep(intervalMs: number, onExhausted?: (letters: AgentOfficeInboxMessage[]) => void): void {
     if (this.killSwitch || this.sweepTimer) return;
+    // The sweep is scheduled work: a kernel told to run nothing on its own
+    // (AGENTS_SCHEDULER=off — a demo, a rehearsal on a copy of real data) does
+    // not wake agents for letters already waiting. A letter posted now still does.
+    if (process.env.AGENTS_SCHEDULER?.trim().toLowerCase() === "off") {
+      log.info("InboxWaker: sweep off (AGENTS_SCHEDULER=off) — waiting letters do not wake their agents");
+      return;
+    }
     this.sweepTimer = setInterval(() => {
       // Archive FIRST, then sweep: a letter that just got bumped to
       // MAX_WAKE_ATTEMPTS by this same tick's sweep() must not be archived
