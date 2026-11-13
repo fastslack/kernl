@@ -55,7 +55,7 @@
     "@matware/mtw-request-ts-client": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@msgpack/msgpack": "^3.1.3",
-    "@relate/relate": "1.0.0",
+    "@relate/relate": "1.0.1",
     "@slack/bolt": "^4.6.0",
     "@types/sanitize-html": "^2.16.1",
     "archiver": "^7.0.1",
