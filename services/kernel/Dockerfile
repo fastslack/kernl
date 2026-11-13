@@ -276,6 +276,9 @@ RUN groupadd -g ${HOST_DOCKER_GID} hostdocker 2>/dev/null || true \
 
 USER bun
 
+# Sin NEO4J_*: el grafo viene incluido (Relate, en /app/data/graph). Con
+# NEO4J_URI fijo en la imagen, una instalación nueva no elegía Relate y quedaba
+# sin grafo. docker-compose.neo4j.yml los pone cuando hay un Neo4j.
 # KERNEL_MCP_BRIDGE: el SDK de Claude spawnea este script como MCP server
 # stdio para hablar con el kernel vía unix socket. El default del código es
 # /app/bin/mcp-stdio-bridge.ts, pero acá /app/bin es un symlink a
@@ -285,8 +288,6 @@ ENV MCP_TRANSPORT=http \
     DASHBOARD_ENABLED=false \
     DASHBOARD_PORT=3087 \
     SQLITE_PATH=/app/data/kernel.db \
-    NEO4J_URI=bolt://neo4j:7687 \
-    NEO4J_USER=neo4j \
     LOG_LEVEL=info \
     TIMEZONE=UTC \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \

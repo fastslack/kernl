@@ -97,13 +97,18 @@ export async function initDrivers(args: {
   }
   await llmRegistry.startAll();
 
-  // ── DB drivers — seed + start active ────────────────
-  // Fresh installs boot with `noop` active so the kernel doesn't try to
-  // reach a graph server until the user opts in from /extensions. The
-  // legacy Neo4jClient stays the source of truth for ctx.neo4j until
+  // ── DB drivers — seed, upgrade, start active ────────
+  // A fresh install starts on Relate (built in) when its client is present.
+  // An install from 0.4.x moves to Relate once, with its data, before the
+  // driver starts (core/graph-upgrade.ts): no graph → rebuilt from SQLite;
+  // Neo4j → copied whole, or rebuilt now and merged in when Neo4j answers.
+  // The legacy Neo4jClient stays the source of truth for ctx.neo4j until
   // consumers migrate to ctx.graph.
   dbRegistry.seedBuiltins();
+  const { upgradeGraphOnBoot, schedulePendingImport } = await import("../graph-upgrade.js");
+  await upgradeGraphOnBoot(dbRegistry.getGraphRegistry(), sqlite);
   await dbRegistry.startAllActive();
+  schedulePendingImport(dbRegistry.getGraphRegistry(), sqlite);
 
   // ── Skill Registry ──
   const skillRegistry = createSkillRegistry(process.cwd(), events);

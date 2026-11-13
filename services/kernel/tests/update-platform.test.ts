@@ -294,6 +294,12 @@ describe("dockerUpdateHint", () => {
     );
   });
 
+  it("keeps the Neo4j override for a kernel that reaches a Neo4j, even when its labels omit it", () => {
+    const hint = dockerUpdateHint(labels, { neo4j: true });
+    expect(hint).toContain("-f docker-compose.host.yml -f docker-compose.neo4j.yml build");
+    expect(dockerUpdateHint(labels)).not.toContain("neo4j");
+  });
+
   it("keeps a file from another directory absolute and quotes what the shell would split", () => {
     const hint = dockerUpdateHint({
       "com.docker.compose.project.working_dir": "/home/op/my stack",

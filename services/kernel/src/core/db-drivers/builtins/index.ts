@@ -6,10 +6,11 @@
  * this once after creating the registry and before `seedBuiltinRows()` so
  * the seeded rows reference real factories.
  *
- * Registration order matters: the first built-in seeded becomes
- * `status='active'` if no active row already exists. We register `noop`
- * first so a fresh install boots into "graph features off" — the user
- * explicitly opts in to Relate (embedded) or Neo4j from /extensions.
+ * Registration order matters: a driver that can configure itself is seeded
+ * active first — Relate whenever its client is installed and no NEO4J_URI
+ * points elsewhere, so a fresh install starts on the built-in graph. `noop`
+ * is the fallback when nothing else can run. An install from 0.4.x that
+ * already has an active row is moved by core/graph-upgrade.ts, not here.
  *
  * Among drivers that report `canSelfConfigure()`, registration order breaks
  * the tie, so `relate` comes before `neo4j`: an explicit `RELATE_DATABASE`
