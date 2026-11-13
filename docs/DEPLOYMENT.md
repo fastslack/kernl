@@ -244,14 +244,32 @@ Restoring replaces the target database, so it asks for confirmation; pass
 version guessed, guessed the repo's `./data`, and so "restored" a Docker
 deployment into a directory nothing reads.
 
+### Graph Backup
+
+The built-in graph (Relate) lives in `data/graph`, next to the SQLite database —
+inside the `kernel-data` volume on Docker. **`backup.sh` does not include it yet.**
+Most of the graph is rebuilt from SQLite on start (the backfills), but not all of
+it: chat long-term memory, the links between contacts and the news archive live
+only in the graph. To keep those, archive the store with the kernel stopped (the
+kernel holds it open):
+
+```bash
+scripts/kernl.sh stop kernel
+# Same caveat as below: confirm the volume name with `docker volume ls`.
+docker run --rm -v kernl-public_kernel-data:/data -v "$(pwd)/backups:/backup" \
+  alpine tar czf /backup/kernl-graph.tar.gz /data/graph
+scripts/kernl.sh start kernel
+```
+
+On a package or source install, stop Kernl and copy `<data-dir>/graph`.
+
 ### Neo4j Backup (optional server)
 
-The built-in graph lives in `data/graph`, next to the SQLite database, and is
-backed up with it. The steps below apply only to the optional Neo4j server.
+The steps below apply only to the optional Neo4j server.
 
 `backup.sh` already dumps Neo4j when the Docker stack is up (skip it with
-`KERNEL_BACKUP_SKIP_NEO4J=1`; the graph rebuilds from SQLite). To archive the
-volume by hand instead:
+`KERNEL_BACKUP_SKIP_NEO4J=1`; what lives only in the graph — chat memory, contact
+links, news — is then not in the backup). To archive the volume by hand instead:
 
 ```bash
 docker compose stop neo4j
