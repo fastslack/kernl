@@ -83,6 +83,47 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 ### Agregado
 
+- **Los agentes aprenden unos de otros.** Las corridas, las herramientas que
+  usaron y las lecciones que dejaron se proyectan en un grafo de experiencia
+  compartido, y el prompt de un agente trae las lecciones de otros agentes que
+  encajan con su objetivo, ordenadas por relevancia, confianza, herramientas y
+  oficina en común, y marcadas como datos no confiables. Cada cambio en lo que
+  sabe un agente queda registrado y se anuncia.
+- **Paquetes de oficina.** Las lecciones de una oficina se exportan como
+  archivo JSON o Markdown sin mails, teléfonos, tokens ni rutas personales;
+  importar uno deja sus lecciones para revisión (`kernel_office_pack_review`),
+  con la confianza limitada a 0,6.
+- **Hechos con dos líneas de tiempo.** `kernel_facts_assert`, `_retract` y
+  `_query` guardan cuándo fue cierto cada hecho y cuándo lo creyó Kernl; un
+  valor nuevo cierra o corrige el anterior y nada se borra.
+  `kernel_facts_explain` responde por qué actuó Kernl y qué sabía entonces.
+- **`kernel_brain_ask`:** una sola pregunta sobre el cerebro, el chat, las
+  memorias, las lecciones de los agentes y las personas, tareas, notas, mails y
+  eventos del grafo, por significado y por palabras, en una sola lista.
+- **Una persona a través de todas las fuentes.** Los contactos guardan todos
+  los mails, teléfonos y usuarios con que se los conoce;
+  `kernel_crm_duplicates`, `kernel_crm_merge` (con copia de respaldo),
+  `kernel_crm_not_duplicate` y `kernel_crm_person_360`.
+- **Procedencia.** Cada escritura por una herramienta guarda quién la hizo, si
+  funcionó y los ids que tocó (180 días); `kernel_audit_who_changed` y
+  `kernel_audit_changes`.
+- **Los agentes leen el grafo.** `kernel_graph_schema`, `kernel_graph_query`
+  (una consulta de solo lectura, verificada de tres formas) y
+  `kernel_graph_ask` (una pregunta en palabras comunes); `kernel_graph_scratch`
+  y `kernel_graph_slice` le dan a una corrida un grafo propio donde escribir.
+  Los clientes MCP de afuera nunca ven `GRAPH_PRIVATE_LABELS` (mails, memoria
+  del chat y hechos, por defecto).
+- **Análisis de grafo en cualquier motor.** `kernel_graph_analyze`: PageRank,
+  comunidades, componentes e intermediación, con GDS cuando el grafo lo tiene,
+  un GDS remoto con `GDS_REMOTE_URI`, y TypeScript puro si no.
+- **Un explorador del grafo** en /graph: el grafo en 3D, por etiqueta o
+  búsqueda, sumando vecinos a uno o dos saltos.
+- **Grafo de código para los repos.** `kernel_repos_code_hotspots`,
+  `kernel_repos_code_owners` y `kernel_repos_change_impact`, desde la historia
+  de git.
+- **Lugares.** Dónde son los eventos, viajes y hoteles, y qué hay cerca
+  (`kernel_places_near`); la geocodificación solo con
+  `PLACES_GEOCODER=nominatim`.
 - **Una máquina del tiempo sobre lo que Kernl sabía.** Elegís una persona,
   empresa o agente y un momento: Kernl rearma lo que sabía entonces, quién
   escribió cada hecho, cuáles se reemplazaron después y qué corridas de agentes
