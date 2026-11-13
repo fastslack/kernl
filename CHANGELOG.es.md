@@ -56,6 +56,27 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
   pasan a fechas nativas, los embeddings a `VECTOR<FLOAT32>`, las lecciones
   guardan cuándo se aprendieron y los vínculos de procedencia se rearman desde
   la tabla de auditoría. No hay que hacer nada a mano.
+- **La migración agents 64 corre al arrancar**: las preguntas guardan de qué
+  tratan y quién las respondió, por qué canal.
+
+### Agregado
+
+- **Las decisiones de los agentes se recuerdan y se miden.** Cada respuesta a
+  una pregunta de un agente guarda quién la dio y por qué canal (dashboard,
+  WhatsApp, Telegram, API, el Chief). Cuando el mismo tipo de pregunta recibe
+  siempre la misma respuesta, la siguiente la muestra como sugerencia, y se
+  mide cuántas veces acertó. Una oficina puede dejar que una categoría se
+  responda sola cuando acertó al menos el 97% de 30 veces, y solo donde una
+  extensión dice que el caso es seguro; una de cada diez preguntas sigue
+  yendo a una persona, para seguir midiendo.
+- **Hechos del entorno.** Cuando varios agentes quedan bloqueados por la misma
+  causa externa (un servidor caído, una credencial que falta), se registra una
+  vez; esperan sobre ella en lugar de volver a preguntar, y cerrarla los
+  despierta a todos.
+- **Las decisiones en el grafo.** Las preguntas, el trabajo del que tratan,
+  quién decidió y qué pasaba en ese momento pasan a ser nodos, así un agente
+  puede preguntar qué se decidió la última vez sobre el mismo pull request y
+  qué cambió desde entonces.
 
 ### Corregido
 

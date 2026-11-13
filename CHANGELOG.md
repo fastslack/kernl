@@ -56,6 +56,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   datetimes, embeddings become `VECTOR<FLOAT32>`, lessons get the time they
   were learned, and the provenance links are rebuilt from the audit table.
   Nothing to do by hand.
+- **Migration agents 64 runs on start**: questions remember what they are
+  about and who answered them, through which channel.
+
+### Added
+
+- **Agents' decisions are remembered and measured.** Every answer to an
+  agent's question records who gave it and through which channel (dashboard,
+  WhatsApp, Telegram, API, the Chief). When the same kind of question keeps
+  getting the same answer, the next one shows it as a suggestion, and how
+  often that suggestion was right is measured. An office can let a category be
+  answered on its own once it has been right at least 97% of 30 times, and
+  only where an extension says the case is safe; one question in ten still
+  goes to a person, to keep measuring.
+- **Environment facts.** When agents are blocked by the same outside cause
+  (a server down, a missing credential), it is recorded once; they wait on it
+  instead of asking again, and closing it wakes them all.
+- **Decisions in the graph.** Questions, the work they are about, who decided
+  and what was going on at the time become nodes, so an agent can ask what was
+  decided last time about the same pull request and what changed since.
 
 ### Fixed
 
