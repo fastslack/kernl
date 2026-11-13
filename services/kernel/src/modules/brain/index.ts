@@ -29,7 +29,8 @@
 
 import { z } from "zod";
 import type {
-  KernelModule,
+  DashboardDescriptor,
+  ExtensibleModule,
   ModuleContext,
   ToolDefinition,
   ToolResult,
@@ -45,10 +46,12 @@ import { BrainIndexer, MODULE_TO_KINDS } from "./indexer.js";
 import { askMemory, type AskDeps } from "./ask.js";
 import { FactStore, type Fact } from "./facts.js";
 import { explainBelief } from "./explain.js";
+import { TimeMachine } from "./time-machine.js";
+import { HttpError } from "../../core/http-server.js";
 import { getProvenanceService } from "../provenance/service.js";
 import { defineTool, defineToolNoInput } from "../../core/tool-builder.js";
 
-export interface BrainModule extends KernelModule {
+export interface BrainModule extends ExtensibleModule {
   getService(): BrainService | null;
   getIndexer(): BrainIndexer | null;
 }
@@ -64,6 +67,7 @@ export function createBrainModule(
   let chatEmbeddings: EmbeddingsClient | null = null;
   let askDeps: AskDeps | null = null;
   let facts: FactStore | null = null;
+  let timeMachine: TimeMachine | null = null;
   const autoIndex = process.env.BRAIN_AUTO_INDEX === "1";
 
   // Coalesce data.changed storms: collect kinds, flush on a short timer.
@@ -117,8 +121,15 @@ export function createBrainModule(
         graph: () => ctx.graph,
       };
       facts = new FactStore(ctx.sqlite, () => ctx.graph);
+      const store = facts;
+      timeMachine = new TimeMachine(ctx.sqlite, () => ctx.graph, (g) => store.ensureGraphSchema(g), (subject, at) => {
+        try {
+          const e = explainBelief(store, getProvenanceService(), { subject, at });
+          return e.status === "explained" ? { verdict: e.verdict, why: e.summary[0] ?? "" } : null;
+        } catch { return null; }
+      });
       // Asking works before the embeddings backend is up (text and graph legs).
-      tools = buildTools(() => service, () => indexer, () => askDeps, () => facts);
+      tools = buildTools(() => service, () => indexer, () => askDeps, () => facts, () => timeMachine);
       let embeddings: EmbeddingsClient | null = null;
       try {
         const timeout = new Promise<null>((res) => setTimeout(() => res(null), 250));
@@ -140,8 +151,39 @@ export function createBrainModule(
     getTools(): ToolDefinition[] { return tools; },
     getGraphBackfill() {
       const store = facts;
-      // v2: re-projects every fact with native datetimes and ended_at.
+      // v2: re-projects every fact with native datetimes and ended_at (0.5.0).
       return store ? { name: "facts", version: 2, order: 40, run: (g) => store.backfill(g) } : undefined;
+    },
+    // The time machine of the 3D office (/agents-flow): a subject's story and
+    // the graph as of any moment of it.
+    getDashboardDescriptor(): DashboardDescriptor {
+      return {
+        registerRoutes: (server) => {
+          const tm = () => {
+            if (!timeMachine) throw new HttpError(503, "Facts are not available.");
+            return timeMachine;
+          };
+          const guard = async <T>(fn: () => T | Promise<T>): Promise<T> => {
+            try {
+              return await fn();
+            } catch (err) {
+              if (err instanceof HttpError) throw err;
+              throw new HttpError(400, err instanceof Error ? err.message.split("\n")[0] : String(err));
+            }
+          };
+          // ?subject=<a person> or ?agent=<an agent's id or name>.
+          server.route("GET", "/api/time-machine/story", ({ query }) =>
+            guard(() => query.get("agent") ? tm().agentStory(query.get("agent")!) : tm().story(query.get("subject") ?? "")));
+          server.route("GET", "/api/time-machine/diff", ({ query }) =>
+            guard(() => tm().diff(query.get("subject") ?? "", query.get("from") ?? "", query.get("to") ?? "")));
+          server.route("GET", "/api/time-machine/at", ({ query }) => guard<unknown>(() => {
+            const t = query.get("t") ?? new Date().toISOString();
+            return query.get("agent")
+              ? tm().agentAsOf(query.get("agent")!, t)
+              : tm().asOf(query.get("subject") ?? "", t, { profile: query.get("profile") === "1" });
+          }));
+        },
+      };
     },
     getService(): BrainService | null { return service; },
     getIndexer(): BrainIndexer | null { return indexer; },
@@ -248,8 +290,34 @@ function buildTools(
   getIndexer: () => BrainIndexer | null,
   getAskDeps: () => AskDeps | null,
   getFacts: () => FactStore | null,
+  getTimeMachine: () => TimeMachine | null = () => null,
 ): ToolDefinition[] {
   return [
+    defineTool({
+      name: "kernel_facts_as_of",
+      description:
+        "The graph as it stood at a moment: every fact about a person or thing (subject ref or name) at `at`, " +
+        "each one classified by both timelines — known (true then and Kernl knew it), stale (Kernl believed it " +
+        "then but it was no longer true, or was a mistake) or unknown (true then, but Kernl had not learned it " +
+        "yet) — with the agent that wrote it and what it replaced. One traversal of the graph.",
+      schema: z.object({
+        subject: z.string().min(1).describe("Subject ref (Person:<id>) or a person's name."),
+        at: z.string().describe("The moment, ISO 8601."),
+      }),
+      outputSchema: z.unknown(),
+      tags: ["brain", "memory", "facts", "graph", "time"],
+      cost: { tokens_p50: 0, usd_p50: 0, latency_p50_ms: 10, reversible: true, cacheable: false },
+      async handler(a): Promise<ToolResult> {
+        const tm = getTimeMachine();
+        if (!tm) return errorResult("facts not available");
+        try {
+          const snap = await tm.asOf(a.subject, a.at);
+          return structuredResult({ ...snap, cypher: undefined });
+        } catch (err) {
+          return errorResult(err instanceof Error ? err.message : String(err));
+        }
+      },
+    }),
     defineTool({
       name: "kernel_facts_assert",
       description:
