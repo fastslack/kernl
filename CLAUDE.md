@@ -27,6 +27,11 @@
 - **Extensions import the kernel only through `@kernl/extension-sdk`**
   (`services/kernel/src/sdk/`), never `../../src/...` by path. The build gate
   (`scripts/check-extension-boundary.ts`) fails otherwise; see ARCHITECTURE.md.
+  The gate also reads the bundles: a kernel file an extension pulls in
+  transitively (a new module imported by an adapter that an extension
+  bundles, such as `core/llm/claude-code-adapter.ts`) fails the kernel build
+  unless it lives in `src/sdk/`. Run `npm run build` (it ends in
+  build:extensions) before committing a new import there.
 - **LLM calls — one door only**: every LLM call in the kernel and in every paid
   extension goes through the driver, `llm()` from `src/core/llm/client.ts` in
   the kernel, `llm()` from `@kernl/extension-sdk` in an extension
@@ -110,10 +115,19 @@ client `@relate/relate` is a kernel dependency (pinned in package.json and both
 lockfiles); `RELATE_CLIENT_MODULE` points at another copy. Every Cypher statement
 is planned against it in tests/cypher-corpus.test.ts — keep that green. Modules
 that project rows into the graph offer `getGraphBackfill()` so existing data
-reaches a new store (core/graph-backfill.ts). Write Cypher that runs on both: no
+reaches a new store (core/graph-backfill.ts). A projection that keeps its
+own watermark (the experience graph's `:AgentXpSync`, the decision graph's
+in-memory one) subscribes to `onGraphReplaced()` and starts over on a new store:
+the 0.5.0 upgrade swaps Neo4j for Relate while the kernel runs. A sync or
+backfill pass belongs to the store it started on — never make a pass on a new
+store wait for one still running on the old (a stopped driver may never
+answer it). Write Cypher that runs on both: no
 `apoc.*`, no options map on `db.index.fulltext.queryNodes` (use `LIMIT`), and
 read counts with `Number(v)` or `.toNumber()` — the driver returns
-neo4j-style integers. `scripts/relate-migrate.sh` copies a Neo4j graph into a
+neo4j-style integers. Paging parameters (`LIMIT $n`, `SKIP $n`) can be plain
+numbers: the Neo4j driver sends them as integers (`integerPagingParams`),
+since Neo4j refuses the floats JavaScript numbers become.
+`scripts/relate-migrate.sh` copies a Neo4j graph into a
 store; vector and full-text indexes are recreated by the kernel on start.
 
 **LifeService created in bootstrap:**
@@ -156,7 +170,13 @@ Use `/arch` to discover modules, tools, API routes, and project structure.
 `docker compose up --force-recreate kernel`. Several sessions share the stack: the script takes a lock so a second
 restart waits for the first, pauses the active offices so no new agent run starts, lets the running ones finish (up
 to `KERNL_DRAIN_TIMEOUT`, 600 s), restarts, and resumes exactly the offices it paused. `--no-drain` only for an
-emergency; `scripts/kernl.sh resume-offices` if a drain was cut short.
+emergency; `scripts/kernl.sh resume-offices` if a drain was cut short. To upgrade the stack, `scripts/kernl.sh update`:
+fast-forward pull, build while the old kernel serves, then recreate kernel and dashboard through the same door.
+
+**A kernel that runs nothing on its own:** `AGENTS_SCHEDULER=off` (demos, rehearsals on a copy of real data) stops the
+agent scheduler, the inbox waker's periodic sweep and the boot sweep that relaunches agents with answers waiting.
+Manual runs, chains, triggers and a letter or answer posted now still run. It does not cut the network: a kernel on a
+copy of real data still holds its credentials, so rehearse with no outbound network as well.
 </docker-compose>
 
 <scripts>
