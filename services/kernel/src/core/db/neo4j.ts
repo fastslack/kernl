@@ -1,5 +1,6 @@
 import neo4j, { type Driver, type Session } from "neo4j-driver";
 import { log } from "../logger.js";
+import { integerPagingParams } from "./neo4j-params.js";
 
 export interface Neo4jConfig {
   uri: string;
@@ -47,7 +48,7 @@ export class Neo4jClient {
   async run(cypher: string, params?: Record<string, unknown>) {
     const session = this.session();
     try {
-      return await session.run(cypher, params);
+      return await session.run(cypher, integerPagingParams(cypher, params));
     } finally {
       await session.close();
     }

@@ -14,6 +14,7 @@
 
 import neo4j, { type Driver, type Session } from "neo4j-driver";
 import { log } from "../../logger.js";
+import { integerPagingParams } from "../../db/neo4j-params.js";
 import type {
   GraphDriver,
   GraphDriverStatus,
@@ -269,7 +270,7 @@ export class Neo4jGraphDriver implements GraphDriver {
     }
     const session = this.driver.session();
     try {
-      const native = await session.run(cypher, params);
+      const native = await session.run(cypher, integerPagingParams(cypher, params));
       // neo4j-driver records natively expose keys/get/toObject — structural
       // cast to GraphRecord avoids per-row wrapping.
       return native as unknown as GraphResult;
@@ -300,7 +301,7 @@ export class Neo4jGraphDriver implements GraphDriver {
       return await native.executeWrite((tx) =>
         fn({
           async run(cypher: string, params?: Record<string, unknown>) {
-            return (await tx.run(cypher, params)) as unknown as GraphResult;
+            return (await tx.run(cypher, integerPagingParams(cypher, params))) as unknown as GraphResult;
           },
           async close() {},
         }),
@@ -316,7 +317,7 @@ export class Neo4jGraphDriver implements GraphDriver {
 function adaptSession(native: Session): GraphSession {
   return {
     async run(cypher: string, params?: Record<string, unknown>) {
-      const r = await native.run(cypher, params);
+      const r = await native.run(cypher, integerPagingParams(cypher, params));
       return r as unknown as GraphResult;
     },
     async close() {
