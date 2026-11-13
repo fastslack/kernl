@@ -50,7 +50,84 @@ export class AgentMemoryService {
    */
   private embeddings: EmbeddingsClient | null = null;
 
-  constructor(private db: SqliteDb) {}
+  /**
+   * `emit` publishes learning events to the agents.flow stream (the 3D office,
+   * the live log): created by any path, reinforced or weakened by a run, retired
+   * by another agent's run or by the cleanup.
+   */
+  constructor(
+    private db: SqliteDb,
+    private emit: (event: string, payload: Record<string, unknown>) => void = () => {},
+  ) {}
+
+  private agentName(id: string): string {
+    try {
+      return (this.db.prepare("SELECT name FROM agents WHERE id = ?").get(id) as { name: string } | undefined)?.name ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  /** A learning's confidence over time, oldest first, with the run (and agent) that moved it. */
+  getConfidenceHistory(learningId: string, limit = 200): Array<{ at: string; before: number | null; after: number; delta: number; run_id: string; agent_id: string; agent_name: string; cause: string }> {
+    try {
+      return this.db
+        .prepare(
+          `SELECT h.at, h.before, h.after, h.delta, h.run_id, h.agent_id, COALESCE(a.name, '') AS agent_name, h.cause
+             FROM agent_learning_confidence h LEFT JOIN agents a ON a.id = h.agent_id
+            WHERE h.learning_id = ? ORDER BY h.at, h.rowid LIMIT ?`,
+        )
+        .all(learningId, limit) as never;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * How each lesson's confidence moved over time, for many lessons at once —
+   * the learning time machine replays a library from these. `[at, after]` pairs,
+   * oldest first; `retired_at` is when it fell below the floor (or was swept),
+   * or its last update for a lesson retired before the history existed.
+   */
+  getConfidenceTimelines(learningIds: string[]): Record<string, { points: Array<[string, number]>; retired_at: string | null }> {
+    const out: Record<string, { points: Array<[string, number]>; retired_at: string | null }> = {};
+    if (learningIds.length === 0) return out;
+    for (let i = 0; i < learningIds.length; i += 500) {
+      const ids = learningIds.slice(i, i + 500);
+      const marks = ids.map(() => "?").join(",");
+      try {
+        const rows = this.db
+          .prepare(`SELECT learning_id, at, after, cause FROM agent_learning_confidence WHERE learning_id IN (${marks}) ORDER BY at, rowid`)
+          .all(...ids) as Array<{ learning_id: string; at: string; after: number; cause: string }>;
+        for (const r of rows) {
+          const t = (out[r.learning_id] ??= { points: [], retired_at: null });
+          t.points.push([r.at, r.after]);
+          if (!t.retired_at && (r.cause === "sweep" || (r.cause.startsWith("run:") && r.after < 0.15))) t.retired_at = r.at;
+        }
+      } catch { /* no history table yet */ }
+      const retired = this.db
+        .prepare(`SELECT id, updated_at FROM agent_learnings WHERE active = 0 AND id IN (${marks})`)
+        .all(...ids) as Array<{ id: string; updated_at: string }>;
+      for (const r of retired) {
+        const t = (out[r.id] ??= { points: [], retired_at: null });
+        t.retired_at ??= r.updated_at;
+      }
+    }
+    return out;
+  }
+
+  /** One row of a learning's confidence history; never fails the caller. */
+  private recordConfidence(row: { learningId: string; before: number | null; after: number; runId?: string; agentId?: string; cause: string }): void {
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO agent_learning_confidence (learning_id, at, before, after, delta, run_id, agent_id, cause)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(row.learningId, isoNow(), row.before, row.after, row.before === null ? 0 : row.after - row.before,
+          row.runId ?? "", row.agentId ?? "", row.cause);
+    } catch { /* the table arrives with agents migration 63 */ }
+  }
 
   /** Inject the embeddings client. Idempotent — last writer wins. */
   setEmbeddingsClient(client: EmbeddingsClient | null): void {
@@ -124,6 +201,10 @@ export class AgentMemoryService {
     source_runs?: string[];
     /** null/omitted = craft learning (every project); set = only for that project. */
     project_id?: string | null;
+    /** Where it came from: auto (grading), feedback, tool, outbox, office-pack, marketplace, manual. */
+    source?: string;
+    /** The run that produced it, when there is one. */
+    run_id?: string;
   }): AgentLearning {
     const now = isoNow();
     const learning: AgentLearning = {
@@ -151,6 +232,22 @@ export class AgentMemoryService {
       );
 
     this.scheduleEmbed("agent_learnings", "embedding", "embedding_model", learning.id, learning.content);
+    const source = input.source ?? "manual";
+    const runId = input.run_id ?? input.source_runs?.[0] ?? "";
+    this.recordConfidence({ learningId: learning.id, before: null, after: learning.confidence, runId, agentId: learning.agent_id, cause: `created:${source}` });
+    // A pack or a marketplace install brings dozens at once: recorded, not animated.
+    if (source !== "office-pack" && source !== "marketplace") {
+      this.emit("agent:flow:learning_created", {
+        agent_id: learning.agent_id,
+        agent_name: this.agentName(learning.agent_id),
+        run_id: runId,
+        learning_id: learning.id,
+        learning_type: learning.type,
+        content: learning.content,
+        confidence: learning.confidence,
+        source,
+      });
+    }
     return learning;
   }
 
@@ -344,16 +441,22 @@ export class AgentMemoryService {
       .map(({ embedding: _, ...rest }) => rest as AgentLearning);
   }
 
-  updateLearningConfidence(id: string, delta: number): void {
+  updateLearningConfidence(
+    id: string,
+    delta: number,
+    by: { runId?: string; agentId?: string; cause?: string } = {},
+  ): { before: number; after: number } | null {
     const learning = this.db
       .prepare("SELECT confidence FROM agent_learnings WHERE id = ?")
       .get(id) as { confidence: number } | undefined;
-    if (!learning) return;
+    if (!learning) return null;
 
     const newConf = Math.max(0, Math.min(1, learning.confidence + delta));
     this.db
       .prepare("UPDATE agent_learnings SET confidence = ?, updated_at = ? WHERE id = ?")
       .run(newConf, isoNow(), id);
+    this.recordConfidence({ learningId: id, before: learning.confidence, after: newConf, runId: by.runId, agentId: by.agentId, cause: by.cause ?? "run" });
+    return { before: learning.confidence, after: newConf };
   }
 
   deactivateLearning(id: string): void {
@@ -385,6 +488,7 @@ export class AgentMemoryService {
     agentId: string,
     runCreatedAt: string,
     outcome: "success" | "partial" | "failure" | "neutral",
+    runId?: string,
   ): { updated: number; deactivated: number } {
     const delta =
       outcome === "success" ? 0.08
@@ -393,22 +497,85 @@ export class AgentMemoryService {
       : 0;
     if (delta === 0) return { updated: 0, deactivated: 0 };
 
-    const learnings = this.getLearningsActiveAt(agentId, runCreatedAt);
+    // When the run's prompt was recorded, only what it carried is credited or
+    // blamed — and a failure never weakens an `avoid` learning: a failure is
+    // what that learning warned about, not evidence against it. Runs recorded
+    // before that existed fall back to every learning active at the time.
+    const injected = runId ? this.getInjectedLearnings(runId) : null;
+    const learnings: Array<Pick<AgentLearning, "id" | "type">> = injected
+      ? injected.filter((l) => !(delta < 0 && l.type === "avoid"))
+      : this.getLearningsActiveAt(agentId, runCreatedAt);
     let updated = 0;
     let deactivated = 0;
+    const items: Array<Record<string, unknown>> = [];
+    const retiredByOwner = new Map<string, Array<{ id: string; type: string; content: string; confidence: number }>>();
     for (const l of learnings) {
-      this.updateLearningConfidence(l.id, delta);
+      const moved = this.updateLearningConfidence(l.id, delta, { runId, agentId, cause: `run:${outcome}` });
+      if (!moved) continue;
       updated++;
-      // Re-fetch to check new confidence
-      const fresh = this.db
-        .prepare("SELECT confidence FROM agent_learnings WHERE id = ?")
-        .get(l.id) as { confidence: number } | undefined;
-      if (fresh && fresh.confidence < 0.15) {
+      const row = this.db
+        .prepare("SELECT agent_id, type, content FROM agent_learnings WHERE id = ?")
+        .get(l.id) as { agent_id: string; type: string; content: string } | undefined;
+      const owner = row?.agent_id ?? "";
+      const retired = moved.after < 0.15;
+      if (retired) {
         this.deactivateLearning(l.id);
         deactivated++;
+        // The running agent's own retirements are announced by its grading;
+        // another agent's lesson retired by this run is announced to its owner.
+        if (owner && owner !== agentId) {
+          retiredByOwner.set(owner, [...(retiredByOwner.get(owner) ?? []), { id: l.id, type: row?.type ?? "", content: row?.content ?? "", confidence: moved.after }]);
+        }
       }
+      items.push({
+        learning_id: l.id, owner_agent_id: owner, owner_agent_name: owner === agentId ? "" : this.agentName(owner),
+        shared: owner !== "" && owner !== agentId, learning_type: row?.type ?? l.type,
+        before: moved.before, after: moved.after, delta: moved.after - moved.before, deactivated: retired,
+      });
+    }
+    if (items.length) {
+      this.emit("agent:flow:learning_reinforced", {
+        agent_id: agentId, agent_name: this.agentName(agentId), run_id: runId ?? "", outcome, items,
+      });
+    }
+    for (const [owner, list] of retiredByOwner) {
+      this.emit("agent:flow:learning_deactivated", {
+        agent_id: owner, agent_name: this.agentName(owner), run_id: runId ?? "",
+        count: list.length, learnings: list, cause: "shared", by_agent_id: agentId,
+      });
     }
     return { updated, deactivated };
+  }
+
+  /**
+   * Record which learnings a run's prompt carried. Called once per prompt
+   * assembly per kind (own / shared); an empty list still marks the run as
+   * recorded, so grading knows it carried nothing rather than "unknown".
+   */
+  recordInjectedLearnings(runId: string, learningIds: string[], shared: boolean): void {
+    const stmt = this.db.prepare(
+      "INSERT OR IGNORE INTO agent_run_learnings (run_id, learning_id, shared) VALUES (?, ?, ?)",
+    );
+    stmt.run(runId, "", 0);
+    for (const id of learningIds) stmt.run(runId, id, shared ? 1 : 0);
+  }
+
+  /**
+   * The learnings a run's prompt carried, still active, with their type —
+   * null when the run's prompt was never recorded.
+   */
+  getInjectedLearnings(runId: string): Array<Pick<AgentLearning, "id" | "type">> | null {
+    const marked = this.db
+      .prepare("SELECT 1 FROM agent_run_learnings WHERE run_id = ? LIMIT 1")
+      .get(runId);
+    if (!marked) return null;
+    return this.db
+      .prepare(
+        `SELECT l.id, l.type FROM agent_run_learnings rl
+           JOIN agent_learnings l ON l.id = rl.learning_id
+          WHERE rl.run_id = ? AND l.active = 1`,
+      )
+      .all(runId) as Array<Pick<AgentLearning, "id" | "type">>;
   }
 
   /**
@@ -416,12 +583,23 @@ export class AgentMemoryService {
    * Returns count deactivated.
    */
   cleanupLowConfidenceLearnings(agentId: string, minConfidence = 0.15): number {
+    const going = this.db
+      .prepare("SELECT id, type, content, confidence FROM agent_learnings WHERE agent_id = ? AND active = 1 AND confidence < ?")
+      .all(agentId, minConfidence) as Array<{ id: string; type: string; content: string; confidence: number }>;
+    if (going.length === 0) return 0;
     const result = this.db
       .prepare(
         `UPDATE agent_learnings SET active = 0, updated_at = ?
          WHERE agent_id = ? AND active = 1 AND confidence < ?`,
       )
       .run(isoNow(), agentId, minConfidence);
+    for (const l of going) {
+      this.recordConfidence({ learningId: l.id, before: l.confidence, after: l.confidence, agentId, cause: "sweep" });
+    }
+    this.emit("agent:flow:learning_deactivated", {
+      agent_id: agentId, agent_name: this.agentName(agentId), run_id: "",
+      count: going.length, learnings: going, cause: "sweep",
+    });
     return result.changes as number;
   }
 }

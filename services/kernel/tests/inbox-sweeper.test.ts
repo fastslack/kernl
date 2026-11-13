@@ -50,6 +50,26 @@ describe("inbox sweeper", () => {
     expect(row.wake_attempts).toBe(1);
   });
 
+  it("AGENTS_SCHEDULER=off keeps the periodic sweep from starting: waiting letters wake no one", async () => {
+    const flow = service.createFlow({ name: "Ops" } as any);
+    const a = mkAgent("Sender", flow.id);
+    const b = mkAgent("Receiver", flow.id);
+    service.postToColleague({ from_agent_id: a.id, to_agent_id: b.id, subject: "hola", body: "x" });
+    db.run("UPDATE agent_office_inbox SET created_at = ?", [AN_HOUR_AGO()]);
+    const before = process.env.AGENTS_SCHEDULER;
+    process.env.AGENTS_SCHEDULER = "off";
+    const waker = new InboxWaker(service, executor, events, { quietMs: 60_000 });
+    try {
+      waker.startSweep(5);
+      await new Promise((r) => setTimeout(r, 40));
+      expect(executed).toEqual([]);
+    } finally {
+      waker.stopSweep();
+      if (before === undefined) delete process.env.AGENTS_SCHEDULER;
+      else process.env.AGENTS_SCHEDULER = before;
+    }
+  });
+
   it("does not wake an agent that already has a running run", async () => {
     const flow = service.createFlow({ name: "Ops" } as any);
     const a = mkAgent("Sender", flow.id);

@@ -7,6 +7,125 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-13
+
+### Upgrading from 0.4.6
+
+- **The graph is built in now, and your install moves to it on its own.** On
+  the first start of this version Kernl switches to Relate, the embedded graph,
+  once. Nothing to do by hand:
+  - **No graph before** (the desktop app): Relate is switched on and filled from
+    your SQLite data in the first minute. If a Neo4j with data in it answers
+    (older stacks wrote chat memory there even with the graph switched off),
+    it is copied instead.
+  - **Neo4j before** (every Docker install): Kernl starts on Neo4j as before
+    and copies the graph into Relate in the background (chat memory, contact
+    links, news, the agents' lessons and decisions), all of it but the cinema
+    catalogue, which no longer lives in the graph (see below). When
+    the copy is done and the counts check out it switches to Relate without a
+    restart, then brings over what reached Neo4j during the copy. Neo4j is left
+    exactly as it was; activating it again in /extensions is the way back. The
+    copy takes about 1 ms per node or relationship on an M-series Mac, and
+    Kernl keeps working all along. On a real install the cinema catalogue was
+    0.93M of 0.95M nodes; without it the rest (13k nodes, 7.5k relationships)
+    copied in 7 seconds. A restart during the copy starts it over.
+  - **Neo4j not running at that moment**: Kernl starts on Relate anyway, filled
+    from SQLite, and brings over what lives only in Neo4j (chat memory, contact
+    links, news) as soon as Neo4j answers. It checks on every start and every
+    30 minutes.
+  - **If the copy fails**, Kernl stays on Neo4j with all its data and tries
+    again on the next start.
+  - **Large graphs**: Relate keeps the graph in memory, with no cap unless one
+    is chosen. Before copying, Kernl estimates how much your graph will take and
+    copies it under 1.5× that, up to what the machine can hold (the container's
+    memory limit, or 80% of RAM), then keeps that cap as Relate's memory limit.
+    A graph larger than the machine can hold stays on Neo4j, and the copy is
+    only tried again once there is more memory (or a larger
+    `RELATE_LOGICAL_GRAPH_SIZE_LIMIT`), not on every start.
+  - **Memory and start time**: Relate holds the whole graph in RAM. The
+    install above, without the catalogue, takes 2.7 MB on disk, peaked at
+    230 MB while copying and opens in a fraction of a second; with the
+    catalogue it was 3.3 GB, 12.2 GB and two minutes. A large graph of your
+    own still needs that kind of headroom.
+  - What happened is recorded in the `kernl_upgrades` table and the log
+    (`Graph upgrade: …`).
+  - To stay on Neo4j (you use Graph Data Science, say), set
+    `KERNL_KEEP_NEO4J=1`. `KERNL_GRAPH_UPGRADE=off` skips the step entirely.
+- **Docker:** update with `scripts/kernl.sh update` — it pulls, builds while
+  the old kernel keeps serving, and recreates the kernel and the dashboard with
+  the offices drained first, as `restart` does. While the `neo4j-data`
+  volume exists it keeps the Neo4j service up, so the copy can read it. Once
+  the log says the upgrade is done you can stop it with
+  `scripts/kernl.sh stop neo4j`; your data stays in the volume.
+- **The graph's schema upgrades on start**: fact times become native
+  datetimes, embeddings become `VECTOR<FLOAT32>`, lessons get the time they
+  were learned, and the provenance links are rebuilt from the audit table.
+  Nothing to do by hand.
+- **Migration agents 64 runs on start**: questions remember what they are
+  about and who answered them, through which channel.
+- **Bundled extensions that changed carry a new version** (Cinema 1.38.0, and
+  Agent Advanced, CRM, Google Sync, Goals, Notes, Reminders, Repos, Shopping
+  and Tasks one patch up), so an install whose copy lives in the extensions
+  folder takes the new code instead of keeping 0.4.6's.
+- **The cinema catalogue leaves the graph.** It was a projection of SQLite
+  (works, Wikidata identities, directors, genres, subjects, collections) that
+  nothing read any more once its vectors moved to SQLite, and on a real
+  install it was ~90% of the graph. The copy from Neo4j leaves it behind, and
+  a built-in graph that already holds it gives it back once on start (the
+  CRM's people stay: only directors without a CRM id go). Browsing, search,
+  similar titles and "for you" work as before. Recovering yearless uploads by
+  their aliases now runs on a SQLite full-text index (migration cinema 22
+  builds it from the aliases already pulled), and its proposals still go to
+  review. The cinema share of the graph is gone from System › Storage; titles
+  a limit there left out stay out of semantic search.
+
+### Added
+
+- **A time machine over what Kernl knew.** Pick a person, company or agent and
+  a moment: Kernl rebuilds what it knew then, who wrote each fact, which ones
+  were replaced later, and the agent runs that acted on a fact while it was
+  already stale. In the 3D office the graph rises as a hologram over its office.
+- **The engine room.** The graph at work: the latest statements with the
+  engine's own timing, the schema as a blueprint, index use, and the path
+  between two names. A room of its own in the 3D office.
+- **What the offices learned.** Each lesson's impact (the runs that recalled
+  it, what changed, how its confidence moved), a library of every lesson by
+  week with its lineage across agents, and a constellation that places lessons
+  by meaning; a recalled lesson flares and sends a beam to the desk that got it.
+- **Agents' decisions are remembered and measured.** Every answer to an
+  agent's question records who gave it and through which channel (dashboard,
+  WhatsApp, Telegram, API, the Chief). When the same kind of question keeps
+  getting the same answer, the next one shows it as a suggestion, and how
+  often that suggestion was right is measured. An office can let a category be
+  answered on its own once it has been right at least 97% of 30 times, and
+  only where an extension says the case is safe; one question in ten still
+  goes to a person, to keep measuring.
+- **Environment facts.** When agents are blocked by the same outside cause
+  (a server down, a missing credential), it is recorded once; they wait on it
+  instead of asking again, and closing it wakes them all.
+- **Decisions in the graph.** Questions, the work they are about, who decided
+  and what was going on at the time become nodes, so an agent can ask what was
+  decided last time about the same pull request and what changed since.
+
+### Fixed
+
+- **The Docker image builds on ARM.** whisper.cpp's CPU variants include one
+  bookworm's compiler does not know on arm64, so the kernel image failed to
+  build on Graviton, a Raspberry Pi or Docker on an Apple Silicon Mac.
+- **`LIMIT $n` on Neo4j.** The JavaScript driver sends every number as a
+  float, which Neo4j refuses after `LIMIT` and `SKIP` ("'5000.0' is not a valid
+  value"): the cinema graph's orphan cleanup, the graph explorer, chat memory
+  and the lesson constellation failed on Neo4j. The parameters a statement
+  pages with are now sent as integers.
+- **`AGENTS_SCHEDULER=off` left the inbox sweep running**, which woke agents
+  for letters already waiting. It is off with the scheduler now.
+- **Chat with Claude Code moves to the next connected account** when one hits
+  its usage limit, and to the rest of the model chain when every account is
+  out, instead of ending the turn on a 429.
+- **Relate's memory limit is applied.** Under Bun the cap never reached the
+  engine; a limit chosen in /extensions (or the one the upgrade sizes) is now
+  enforced, and no limit is applied unless one is chosen.
+
 ## [0.4.6] - 2026-11-08
 
 ### Upgrading from 0.4.5

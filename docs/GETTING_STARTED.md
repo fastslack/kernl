@@ -5,7 +5,7 @@ A personal life management server that works as an MCP tool provider for Claude,
 ## Prerequisites
 
 - **Bun >= 1.2** (recommended) or Node.js >= 20
-- **Docker** (optional, for Neo4j graph database)
+- **Docker** (optional — the graph is built in; Docker is for the container stack or an optional Neo4j)
 
 ## Installation
 
@@ -97,10 +97,16 @@ are distributed separately with a [Kernl Pro license](https://lifekernl.com/pric
 
 ## Optional Features
 
-### Neo4j (Graph Analytics)
+### Graph
+The graph is built in: the kernel runs Relate, an embedded Cypher engine, on
+`data/graph`. Memory, semantic recall and the agents' shared experience work
+with no setup.
+
+### Neo4j (optional, Graph Data Science)
 ```bash
-docker compose up -d neo4j
-# Enables: contact network analysis, community detection, semantic search
+docker compose -f docker-compose.yml -f docker-compose.neo4j.yml up -d
+# Then activate "Neo4j" in /extensions. Enables GDS analytics:
+# contact network analysis, community detection, PageRank
 ```
 
 ### Telegram Bot

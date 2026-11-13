@@ -10,14 +10,16 @@ Common setup and onboarding questions. If yours isn't here, open a
 docker compose up -d --build
 open http://localhost:3086
 ```
-Zero config: kernel + dashboard + Neo4j + SearXNG. The dashboard binds to
+Zero config: kernel (with its built-in graph) + dashboard + SearXNG. The dashboard binds to
 `127.0.0.1:3086` (loopback only). The kernel auto-generates and persists an auth
 token and an encryption key on first boot.
 
 **Do I need Neo4j?**
-No. Graph features (analytics, similarity, some intelligence tools) light up when
-Neo4j is reachable and degrade gracefully when it isn't. The default stack
-includes it; you can remove the `neo4j` service to run leaner.
+No. The graph is built in: the kernel runs Relate, an embedded Cypher engine, on
+`data/graph` — memory, semantic recall and the agents' shared learning work
+with no server. Neo4j is optional, for Graph Data Science analytics (community
+detection, PageRank): `docker compose -f docker-compose.yml -f docker-compose.neo4j.yml up -d`,
+then activate "Neo4j" in `/extensions`.
 
 **Does it run on Apple Silicon / ARM?**
 The published images target `linux/amd64` and `linux/arm64`. If you build locally
@@ -25,14 +27,14 @@ on an M-series Mac and a native dependency (`better-sqlite3`, the ONNX embedding
 runtime) fails to compile, please open an issue with the build log — multi-arch
 support is actively maintained and these reports are how we keep it working.
 
-**A port is already in use (3086 / 7474 / 7687).**
-Those are the dashboard, Neo4j HTTP, and Neo4j Bolt ports. Stop the conflicting
-service or override the port mappings in a compose override file.
+**A port is already in use (3086, or 17474 / 17687 with Neo4j).**
+3086 is the dashboard; 17474 and 17687 are the optional Neo4j's HTTP and Bolt
+ports. Stop the conflicting service or override the port mappings in a compose
+override file.
 
-**Neo4j gets OOM-killed / I have little RAM.**
-Neo4j is the heaviest service. The public compose caps its heap low, but on a
-≤2 GB host you may still want to drop the `neo4j` service entirely and run without
-graph features.
+**I have little RAM.**
+The default stack has no graph server — the graph runs inside the kernel. Leave
+out `docker-compose.neo4j.yml` on a small host: Neo4j alone wants 1–2 GB.
 
 ## Runtime & contributing
 

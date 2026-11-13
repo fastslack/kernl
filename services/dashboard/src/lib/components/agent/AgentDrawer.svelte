@@ -61,6 +61,8 @@
    * las secciones, que en 560px de ancho respiran de más.
    */
   export let compact = false;
+  /** Offer the time machine on this agent (the 3D office has one). */
+  export let timeMachine = false;
 
   // ── Estado que sigue siendo de quien monta el drawer ──────────────
   // Las escrituras (run, pause/resume, rename, revisión) las sigue haciendo el
@@ -508,6 +510,11 @@
                   : $t('agent.head.run')}
           </span>
         </button>
+        {#if timeMachine}
+          <button class="ip-btn" type="button" on:click={() => dispatch('timemachine')} title={$t('tm.agent.open')}>
+            <span class="ip-btn-ico">⏱</span><span>{$t('tm.title')}</span>
+          </button>
+        {/if}
         {#if creativosOffice}
           <button class="ip-btn ip-btn-live" on:click={() => (sceneOpen = true)}
                   title="Watch this office draw, live, without leaving the office">

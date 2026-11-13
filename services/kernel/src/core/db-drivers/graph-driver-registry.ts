@@ -274,6 +274,32 @@ export class GraphDriverRegistry {
     return false;
   }
 
+  /** The slug the database records as active (before anything starts), or null. */
+  getActiveRowSlug(): string | null {
+    if (!this.db) return null;
+    try {
+      const row = this.db
+        .prepare(
+          `SELECT slug FROM installed_extensions
+            WHERE type = 'db-driver' AND status = 'active'
+              AND json_extract(manifest_json, '$.db.kind') = ?
+            LIMIT 1`,
+        )
+        .get(KIND) as { slug: string } | undefined;
+      return row?.slug ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Record `slug` as the active graph without starting anything — for the
+   * boot-time upgrade (core/graph-upgrade.ts), which runs before startActive().
+   */
+  markActive(slug: string): void {
+    if (this.factories.has(slug)) this.markActiveRow(slug);
+  }
+
   private hasActiveRow(): boolean {
     if (!this.db) return false;
     try {

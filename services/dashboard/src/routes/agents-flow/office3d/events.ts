@@ -19,11 +19,13 @@ import {
   enqueueDelivery, updateActivityBoard,
   sendWalker, sendWalkerToPoint, removeArrivedWalkers,
   shake, paperPlane, convergingParticles, fallingGlyph, curvedArrow, floatingGlyph,
+  lessonThread, chyronLabel,
   runTradeExecution,
   type AnimationRegistry, type NoteStack,
   type Walker, type SpeechBubble, type RoomInfo, type CorridorGrid, type Aabb2D, type Vec3,
 } from './index.js';
 import type { SittingWorkers } from './walkers/index.js';
+import { esc } from './esc.js';
 import type {
   WorldAgent, WorldFlow, LiveMeeting, LiveTurn, MgmtEntry, AnimatedTagOpts, CoordInfo,
 } from '../world-types.js';
@@ -99,6 +101,8 @@ export interface LiveEventContext {
   topAgent(): { id: string; name: string } | null;
   highestRank(): { id: string; name: string } | null;
   handleInfraToggle(data: { flow_id?: string; action?: string; ok?: boolean }): void;
+  /** A3: a recalled lesson's star flares over the building (when the sky is shown). */
+  constellationPing?(learningIds: string[], agentId: string): void;
 }
 
 // ── Process live events ────────────────────────
@@ -488,6 +492,100 @@ export function processLiveEvents(ctx: LiveEventContext): void {
             tag: `lesson-drop:${aid}`,
           }));
         }
+      });
+    }
+    else if (t === 'learning_recalled') {
+      // (A1) Relate brought this run lessons other agents learned: a violet
+      // thread from each one's desk into this agent's head, as thick as the
+      // lesson's score, with why it travelled (relevance, shared tools, office).
+      const items = Array.isArray(e.data.items) ? (e.data.items as Array<Record<string, unknown>>) : [];
+      const to = ctx.deskPos.get(aid);
+      const head = to ? { x: to.x, y: 1.85, z: to.z + 0.55 } : null;
+      const shared = items.filter(i => String(i.source_agent_id ?? '') && String(i.source_agent_id) !== aid);
+      ctx.constellationPing?.(items.map(i => String(i.learning_id ?? '')).filter(Boolean), aid);
+      if (shared.length > 0) {
+        showAnimatedTag(aid, { icon: '🧵', anim: 'sparkle', color: '#a66bff', label: shared.length > 1 ? `RECALL ×${shared.length}` : 'RECALL', durationFrames: 300 });
+      }
+      if (head && ctx.scene) tryFireAnim(`recall:${aid}:${String(e.data.run_id ?? '')}`, 4, () => {
+        // One card over the agent that receives them: a line per lesson, who
+        // learned it and why it travelled (score, relevance, tools, office).
+        const target = String(e.data.agent_name ?? ctx.agents.find(a => a.id === aid)?.name ?? '');
+        const lines = shared.slice(0, 4).map((it) => {
+          const sid = String(it.source_agent_id ?? '');
+          const name = String(it.source_agent_name ?? ctx.agents.find(a => a.id === sid)?.name ?? '');
+          const why = [
+            it.score != null ? `score ${Math.round(Number(it.score) * 100)}` : '',
+            it.relevance != null ? `relevance ${Math.round(Number(it.relevance) * 100)}%` : '',
+            Number(it.tool_overlap ?? 0) > 0 ? `${Number(it.tool_overlap)} shared tool${Number(it.tool_overlap) > 1 ? 's' : ''}` : '',
+            it.same_office ? 'same office' : '',
+          ].filter(Boolean).join(' · ');
+          return `<div style="color:#d9c2ff;text-align:left">🧵 ${esc(name)}</div>`
+            + (why ? `<div style="font-weight:400;font-size:11px;opacity:.8;text-align:left;margin:0 0 3px 18px">${esc(why)}</div>` : '');
+        });
+        // After the threads land: the card would hide them on their way in.
+        if (lines.length) setTimeout(() => {
+          if (!ctx.scene) return;
+          ctx.animRegistry.add(chyronLabel(ctx.scene, {
+            position: { x: head.x, y: head.y + 3.2, z: head.z },
+            html: `<div style="font-size:10px;letter-spacing:1px;opacity:.7;margin-bottom:4px">${esc(target)} RECALLS</div>${lines.join('')}`,
+            color: '#a66bff', durationSec: 3.6, minWidthPx: 170, tag: `recall:${aid}`,
+          }));
+        }, 1100 + Math.min(shared.length, 4) * 350);
+        shared.slice(0, 4).forEach((it, k) => {
+          const sid = String(it.source_agent_id ?? '');
+          const sp = ctx.deskPos.get(sid);
+          const score = Number(it.score ?? 0.6);
+          setTimeout(() => {
+            if (!ctx.scene) return;
+            if (!sp) {
+              // Learned by an agent not on this floor (another office or instance):
+              // the lesson still arrives, from above.
+              ctx.animRegistry.add(convergingParticles(ctx.scene, { target: head, spawnRadius: 1.8, count: 12, color: 0xa66bff, durationSec: 1.3, tag: `recall:${aid}` }));
+              return;
+            }
+            const from = { x: sp.x, y: 2.6, z: sp.z + 0.55 };
+            ctx.animRegistry.add(lessonThread(ctx.scene, { from, to: head, weight: score, tag: `recall:${aid}` }));
+            markActivity(sid);
+          }, k * 350);
+        });
+      });
+    }
+    else if (t === 'learning_reinforced') {
+      // The run is over: each lesson it carried gained or lost confidence. A
+      // shared lesson sends a spark back along the thread to the agent that
+      // learned it — green when the run backed it up, red when it did not.
+      const items = Array.isArray(e.data.items) ? (e.data.items as Array<Record<string, unknown>>) : [];
+      const from = ctx.deskPos.get(aid);
+      const up = items.filter(i => Number(i.delta ?? 0) > 0).length;
+      const down = items.filter(i => Number(i.delta ?? 0) < 0).length;
+      if (up || down) {
+        showAnimatedTag(aid, {
+          icon: down > up ? '📉' : '📈', anim: 'pop', color: down > up ? '#ff6b6b' : '#50ff88',
+          label: `LESSONS ${[up ? `+${up}` : '', down ? `−${down}` : ''].filter(Boolean).join(' ')}`, durationFrames: 200,
+        });
+      }
+      if (from && ctx.scene) tryFireAnim(`reinforce:${aid}:${String(e.data.run_id ?? '')}`, 3, () => {
+        items.filter(i => i.shared && Number(i.delta ?? 0) !== 0).slice(0, 4).forEach((it, k) => {
+          const oid = String(it.owner_agent_id ?? '');
+          const op = ctx.deskPos.get(oid);
+          if (!op) return;
+          const good = Number(it.delta) > 0;
+          setTimeout(() => {
+            if (!ctx.scene) return;
+            ctx.animRegistry.add(lessonThread(ctx.scene, {
+              mode: 'spark', from: { x: from.x, y: 1.85, z: from.z + 0.55 }, to: { x: op.x, y: 2.6, z: op.z + 0.55 },
+              color: good ? 0x50ff88 : 0xff5050, tag: `reinforce:${aid}`,
+            }));
+            setTimeout(() => {
+              const before = Math.round(Number(it.before ?? 0) * 100), after = Math.round(Number(it.after ?? 0) * 100);
+              showAnimatedTag(oid, {
+                icon: it.deactivated ? '🗑️' : good ? '✨' : '⚠️', anim: good ? 'sparkle' : 'shake',
+                color: good ? '#50ff88' : '#ff6b6b', label: `${before}→${after}`, durationFrames: 220,
+              });
+              markActivity(oid);
+            }, 900);
+          }, 400 + k * 300);
+        });
       });
     }
     else if (t === 'meeting_requested') {

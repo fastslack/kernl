@@ -203,7 +203,7 @@ ok "Data directories ready"
 
 # ── 5. Build & start ─────────────────────────────────────────────────
 step "Building images and starting stack"
-info "First build pulls bun:1.2 + neo4j:5.22 — give it a few minutes."
+info "First build pulls bun:1.2 — give it a few minutes."
 
 docker compose pull --ignore-buildable 2>/dev/null || true
 
@@ -212,7 +212,7 @@ info "Building dashboard bundle..."
 docker compose run --rm --user "$(id -u):$(id -g)" dashboard-build >/dev/null 2>&1 \
     || warn "dashboard-build returned non-zero — continuing"
 
-docker compose up -d --build neo4j kernel dashboard
+docker compose up -d --build kernel dashboard
 
 # ── 6. Health ────────────────────────────────────────────────────────
 step "Waiting for services"
@@ -234,12 +234,6 @@ else
     warn "Dashboard not yet reachable — refresh http://localhost:3086 in a moment"
 fi
 
-NEO4J_PASS="$(grep -oE '^NEO4J_PASSWORD=.*' .env | cut -d'=' -f2- || echo password)"
-if docker exec mtw-neo4j cypher-shell -u neo4j -p "$NEO4J_PASS" "RETURN 1" >/dev/null 2>&1; then
-    ok "Neo4j is up"
-else
-    warn "Neo4j still initializing (GDS plugin takes ~30s on first boot)"
-fi
 
 # ── 7. systemd unit ──────────────────────────────────────────────────
 if [[ "$INSTALL_SYSTEMD" == "true" ]]; then
@@ -279,7 +273,6 @@ cat <<EOF
     Dashboard    ${BLUE}http://localhost:3086${NC}
     Kernel API   ${BLUE}http://localhost:3087/api${NC}
     MCP HTTP     ${BLUE}http://localhost:3086/mcp${NC}
-    Neo4j        ${BLUE}http://localhost:17474${NC}  ${DIM}(neo4j / $NEO4J_PASS)${NC}
 
   ${BOLD}MCP client (Claude Desktop / Cursor):${NC}
     ${DIM}{

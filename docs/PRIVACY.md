@@ -7,7 +7,7 @@ Kernl is a **local-first, self-hosted** personal life management server. Your da
 | Category | Data | Storage |
 |----------|------|---------|
 | Tasks | Title, description, status, priority, due dates | SQLite |
-| Contacts | Name, email, phone, company, relationship, interaction history | SQLite + Neo4j (optional) |
+| Contacts | Name, email, phone, company, relationship, interaction history | SQLite + local graph |
 | Communications | Email drafts, sent messages, threads, attachments | SQLite + filesystem |
 | Reminders | Title, trigger time, recurrence, snooze state | SQLite |
 | Shopping | Products, lists, purchases, prices | SQLite |
@@ -19,13 +19,13 @@ Kernl is a **local-first, self-hosted** personal life management server. Your da
 | Nutrition | Meals, macros, water intake, fasting, body stats | SQLite |
 | Documents | Metadata (title, category, expiry) -- no file content | SQLite |
 | Notes | Title, body (markdown), tags | SQLite + FTS5 |
-| Chat | Conversation episodes, messages, extracted entities | SQLite + Neo4j |
+| Chat | Conversation episodes, messages, extracted entities | SQLite + local graph |
 | Life Log | Habits, mood, water intake, exercise, notes | SQLite |
 
 ## Where Data Is Stored
 
 - **SQLite database**: `./data/kernel.db` (configurable via `SQLITE_PATH`)
-- **Neo4j graph** (optional): Local Docker container, not cloud
+- **Graph**: a local file (`data/graph`, Relate) inside the kernel — or, if you add it, a local Neo4j container. Never cloud
 - **Attachments**: `./data/attachments/` directory
 - **Embeddings**: Computed locally using `Xenova/all-MiniLM-L6-v2` ONNX model (no cloud inference)
 

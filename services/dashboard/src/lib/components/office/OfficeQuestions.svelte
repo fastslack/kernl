@@ -29,7 +29,7 @@
 		try {
 			const res = await fetch(`/api/agents/questions/${q.id}/answer`, {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
+				headers: { 'Content-Type': 'application/json', 'X-Kernl-Via': 'dashboard' },
 				body: JSON.stringify({ choice }),
 			});
 			return res.ok || res.status === 409;
@@ -55,7 +55,7 @@
 		if (busy[q.id]) return;
 		busy = { ...busy, [q.id]: true };
 		try {
-			await fetch(`/api/agents/questions/${q.id}/dismiss`, { method: 'POST' });
+			await fetch(`/api/agents/questions/${q.id}/dismiss`, { method: 'POST', headers: { 'X-Kernl-Via': 'dashboard' } });
 		} catch { /* network: the card stays until the next load */ }
 		finally {
 			busy = { ...busy, [q.id]: false };

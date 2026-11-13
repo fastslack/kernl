@@ -316,6 +316,7 @@ const en = {
   "nav.view.sysoverview": "Overview",
   "nav.view.architecture": "Arch 3D",
   "nav.view.friends": "Friends",
+  "nav.view.graph": "Graph",
   "nav.view.share": "Share",
   "share.title": "Share",
   "share.sub": "Send text and files to your Kernl friends — straight over your network when they are close.",

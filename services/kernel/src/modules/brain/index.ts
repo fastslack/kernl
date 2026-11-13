@@ -8,6 +8,14 @@
  *   * `kernel_brain_feedback` — apply a usage signal (autoaprendizaje).
  *   * `kernel_brain_decay`    — pull learned weights back toward baseline.
  *   * `kernel_brain_stats`    — coverage: items per kind + watermarks.
+ *   * `kernel_brain_ask`      — "what do I know about X?": brain, chat
+ *     memories, agent learnings and graph entities in one fused answer,
+ *     each result with what it is connected to (ask.ts).
+ *   * `kernel_facts_assert` / `_retract` / `_query` — facts with two
+ *     timelines: when each was true, and when Kernl knew it (facts.ts).
+ *   * `kernel_facts_explain` — what Kernl believed at the moment of a
+ *     decision against what was true then, who wrote it, and whether a
+ *     difference was late information or a wrong fact (explain.ts).
  *
  * Embeddings are built late (in services.ts), same as tool-memory — the
  * factory promise is awaited with a short race so boot never blocks.
@@ -21,22 +29,29 @@
 
 import { z } from "zod";
 import type {
-  KernelModule,
+  DashboardDescriptor,
+  ExtensibleModule,
   ModuleContext,
   ToolDefinition,
   ToolResult,
 } from "../../core/types.js";
 import { structuredResult, errorResult, fireAndForget } from "../../core/helpers.js";
 import { log } from "../../core/logger.js";
-import type { EmbeddingsClient } from "../../core/embeddings/index.js";
+import { LocalEmbeddings, type EmbeddingsClient } from "../../core/embeddings/index.js";
 import type { DataChangedPayload } from "../../core/kernel-events.js";
 import { runMigrations } from "../../core/db/migrations.js";
 import { brainMigrations } from "./migrations.js";
 import { BrainService } from "./service.js";
 import { BrainIndexer, MODULE_TO_KINDS } from "./indexer.js";
+import { askMemory, type AskDeps } from "./ask.js";
+import { FactStore, type Fact } from "./facts.js";
+import { explainBelief } from "./explain.js";
+import { TimeMachine } from "./time-machine.js";
+import { HttpError } from "../../core/http-server.js";
+import { getProvenanceService } from "../provenance/service.js";
 import { defineTool, defineToolNoInput } from "../../core/tool-builder.js";
 
-export interface BrainModule extends KernelModule {
+export interface BrainModule extends ExtensibleModule {
   getService(): BrainService | null;
   getIndexer(): BrainIndexer | null;
 }
@@ -47,6 +62,12 @@ export function createBrainModule(
   let service: BrainService | null = null;
   let indexer: BrainIndexer | null = null;
   let tools: ToolDefinition[] = [];
+  let embeddingsClient: EmbeddingsClient | null = null;
+  // Chat memories are written with the bundled local model (chat/service.ts).
+  let chatEmbeddings: EmbeddingsClient | null = null;
+  let askDeps: AskDeps | null = null;
+  let facts: FactStore | null = null;
+  let timeMachine: TimeMachine | null = null;
   const autoIndex = process.env.BRAIN_AUTO_INDEX === "1";
 
   // Coalesce data.changed storms: collect kinds, flush on a short timer.
@@ -68,7 +89,8 @@ export function createBrainModule(
   function wireService(ctx: ModuleContext, embeddings: EmbeddingsClient): void {
     service = new BrainService(ctx.sqlite, embeddings);
     indexer = new BrainIndexer(ctx.sqlite, service);
-    tools = buildTools(() => service, () => indexer);
+    embeddingsClient = embeddings;
+    tools = buildTools(() => service, () => indexer, () => askDeps, () => facts);
 
     ctx.events.on(
       "data.changed",
@@ -91,6 +113,23 @@ export function createBrainModule(
     name: "brain",
     async initialize(ctx: ModuleContext) {
       runMigrations(ctx.sqlite, "brain", brainMigrations);
+      askDeps = {
+        db: ctx.sqlite,
+        brain: () => service,
+        embeddings: () => embeddingsClient,
+        chatEmbeddings: () => (chatEmbeddings ??= new LocalEmbeddings()),
+        graph: () => ctx.graph,
+      };
+      facts = new FactStore(ctx.sqlite, () => ctx.graph);
+      const store = facts;
+      timeMachine = new TimeMachine(ctx.sqlite, () => ctx.graph, (g) => store.ensureGraphSchema(g), (subject, at) => {
+        try {
+          const e = explainBelief(store, getProvenanceService(), { subject, at });
+          return e.status === "explained" ? { verdict: e.verdict, why: e.summary[0] ?? "" } : null;
+        } catch { return null; }
+      });
+      // Asking works before the embeddings backend is up (text and graph legs).
+      tools = buildTools(() => service, () => indexer, () => askDeps, () => facts, () => timeMachine);
       let embeddings: EmbeddingsClient | null = null;
       try {
         const timeout = new Promise<null>((res) => setTimeout(() => res(null), 250));
@@ -110,6 +149,42 @@ export function createBrainModule(
       }
     },
     getTools(): ToolDefinition[] { return tools; },
+    getGraphBackfill() {
+      const store = facts;
+      // v2: re-projects every fact with native datetimes and ended_at (0.5.0).
+      return store ? { name: "facts", version: 2, order: 40, run: (g) => store.backfill(g) } : undefined;
+    },
+    // The time machine of the 3D office (/agents-flow): a subject's story and
+    // the graph as of any moment of it.
+    getDashboardDescriptor(): DashboardDescriptor {
+      return {
+        registerRoutes: (server) => {
+          const tm = () => {
+            if (!timeMachine) throw new HttpError(503, "Facts are not available.");
+            return timeMachine;
+          };
+          const guard = async <T>(fn: () => T | Promise<T>): Promise<T> => {
+            try {
+              return await fn();
+            } catch (err) {
+              if (err instanceof HttpError) throw err;
+              throw new HttpError(400, err instanceof Error ? err.message.split("\n")[0] : String(err));
+            }
+          };
+          // ?subject=<a person> or ?agent=<an agent's id or name>.
+          server.route("GET", "/api/time-machine/story", ({ query }) =>
+            guard(() => query.get("agent") ? tm().agentStory(query.get("agent")!) : tm().story(query.get("subject") ?? "")));
+          server.route("GET", "/api/time-machine/diff", ({ query }) =>
+            guard(() => tm().diff(query.get("subject") ?? "", query.get("from") ?? "", query.get("to") ?? "")));
+          server.route("GET", "/api/time-machine/at", ({ query }) => guard<unknown>(() => {
+            const t = query.get("t") ?? new Date().toISOString();
+            return query.get("agent")
+              ? tm().agentAsOf(query.get("agent")!, t)
+              : tm().asOf(query.get("subject") ?? "", t, { profile: query.get("profile") === "1" });
+          }));
+        },
+      };
+    },
     getService(): BrainService | null { return service; },
     getIndexer(): BrainIndexer | null { return indexer; },
     async shutdown() {
@@ -139,6 +214,73 @@ const FeedbackInput = z.object({
   signal: z.enum(["open", "co_open", "correct", "ignore"]).describe("Usage signal driving the weight nudge."),
 });
 
+const AskInput = z.object({
+  query: z.string().min(1).describe("Who or what to ask about, in free text (\"Ada\", \"the Q4 report\", \"deploy failures\")."),
+  limit: z.number().int().positive().max(30).default(10),
+  related: z.number().int().min(0).max(20).default(5).describe("Neighbours to show per result from the graph; 0 to skip."),
+});
+
+const SUBJECT_HELP =
+  'Who or what the fact is about. A node reference ("Person:<contact id>", "Task:<id>") links it in the graph; ' +
+  '"me" for the user; otherwise a plain name.';
+
+const AssertInput = z.object({
+  subject: z.string().min(1).describe(SUBJECT_HELP),
+  subject_name: z.string().optional().describe("Readable name of the subject, when `subject` is a reference."),
+  predicate: z.string().min(1).describe('What is said about it, short and reusable: "works_at", "lives_in", "prefers", "birthday".'),
+  object: z.string().min(1).describe("The value."),
+  multi: z.boolean().default(false).describe("Several values can be true at once (speaks, likes). Default: a new value replaces the old one."),
+  mode: z.enum(["change", "correction"]).default("change").describe(
+    "change: the world changed — the old value stays in the history, true until this one began. " +
+    "correction: the old value was wrong — it is replaced over the same span.",
+  ),
+  valid_from: z.string().optional().describe("When it became true (ISO date or time). Default now."),
+  confidence: z.number().min(0).max(1).default(0.8),
+  source: z.string().optional().describe("Where it came from: chat, agent, mail, user…"),
+  source_ref: z.string().optional().describe("Id of the message, run or row it came from."),
+});
+
+const RetractInput = z.object({
+  id: z.string().min(1),
+  how: z.enum(["ended", "wrong"]).default("ended").describe("ended: it was true until `at`. wrong: it never was."),
+  at: z.string().optional().describe("When it stopped being true (ISO). Default now."),
+});
+
+const FactsQueryInput = z.object({
+  subject: z.string().optional(),
+  predicate: z.string().optional(),
+  text: z.string().optional().describe("Match in the subject name, predicate or value."),
+  as_of: z.string().optional().describe("What was true at this moment (ISO). Default now."),
+  known_at: z.string().optional().describe("As Kernl believed it at this moment (ISO). Default now."),
+  history: z.boolean().default(false).describe("Every value ever recorded, including ended and corrected ones."),
+  limit: z.number().int().positive().max(500).default(50),
+});
+
+const ExplainInput = z.object({
+  subject: z.string().optional().describe('A fact subject, e.g. "Person:<id>".'),
+  name: z.string().optional().describe("Or a name to find the subject by."),
+  predicate: z.string().optional().describe("Only this predicate (works_at, email…)."),
+  at: z.string().optional().describe("The moment of the decision (ISO)."),
+  action_ref: z.string().optional().describe("Or the id of what the action produced or touched; its first recorded call gives the moment."),
+});
+
+function factView(f: Fact) {
+  return {
+    id: f.id,
+    subject: f.subject,
+    subject_name: f.subject_name || undefined,
+    predicate: f.predicate,
+    object: f.object,
+    valid_from: f.valid_from,
+    valid_to: f.valid_to ?? undefined,
+    recorded_at: f.recorded_at,
+    superseded_at: f.superseded_at ?? undefined,
+    status: f.superseded_at ? "corrected" : f.valid_to ? "ended" : "current",
+    confidence: f.confidence,
+    source: f.source || undefined,
+  };
+}
+
 const DecayInput = z.object({
   rate: z.number().min(0).max(1).default(0.1),
 });
@@ -146,8 +288,142 @@ const DecayInput = z.object({
 function buildTools(
   getSvc: () => BrainService | null,
   getIndexer: () => BrainIndexer | null,
+  getAskDeps: () => AskDeps | null,
+  getFacts: () => FactStore | null,
+  getTimeMachine: () => TimeMachine | null = () => null,
 ): ToolDefinition[] {
   return [
+    defineTool({
+      name: "kernel_facts_as_of",
+      description:
+        "The graph as it stood at a moment: every fact about a person or thing (subject ref or name) at `at`, " +
+        "each one classified by both timelines — known (true then and Kernl knew it), stale (Kernl believed it " +
+        "then but it was no longer true, or was a mistake) or unknown (true then, but Kernl had not learned it " +
+        "yet) — with the agent that wrote it and what it replaced. One traversal of the graph.",
+      schema: z.object({
+        subject: z.string().min(1).describe("Subject ref (Person:<id>) or a person's name."),
+        at: z.string().describe("The moment, ISO 8601."),
+      }),
+      outputSchema: z.unknown(),
+      tags: ["brain", "memory", "facts", "graph", "time"],
+      cost: { tokens_p50: 0, usd_p50: 0, latency_p50_ms: 10, reversible: true, cacheable: false },
+      async handler(a): Promise<ToolResult> {
+        const tm = getTimeMachine();
+        if (!tm) return errorResult("facts not available");
+        try {
+          const snap = await tm.asOf(a.subject, a.at);
+          return structuredResult({ ...snap, cypher: undefined });
+        } catch (err) {
+          return errorResult(err instanceof Error ? err.message : String(err));
+        }
+      },
+    }),
+    defineTool({
+      name: "kernel_facts_assert",
+      description:
+        "Record a fact about a person, thing or the user — subject, predicate, value — with when it " +
+        "became true. A new value for the same subject and predicate ends the old one (mode change) " +
+        "or replaces it as a mistake (mode correction); the history is kept, so the memory does not " +
+        "hold two contradicting answers. Saying the same thing again changes nothing.",
+      schema: AssertInput,
+      outputSchema: z.unknown(),
+      tags: ["brain", "memory", "facts"],
+      sideEffects: ["facts.recorded:1"],
+      cost: { tokens_p50: 0, usd_p50: 0, latency_p50_ms: 10, reversible: true, cacheable: false },
+      async handler(a): Promise<ToolResult> {
+        const store = getFacts();
+        if (!store) return errorResult("facts not available");
+        const out = store.assert({
+          subject: a.subject, subjectName: a.subject_name, predicate: a.predicate, object: a.object,
+          multi: a.multi, mode: a.mode, validFrom: a.valid_from, confidence: a.confidence,
+          source: a.source, sourceRef: a.source_ref,
+        });
+        return structuredResult({
+          status: out.status,
+          fact: factView(out.fact),
+          ended: out.ended.map(factView),
+          corrected: out.superseded.map(factView),
+        });
+      },
+    }),
+    defineTool({
+      name: "kernel_facts_retract",
+      description: "A fact no longer holds (how=ended, from `at`) or never did (how=wrong). It stays in the history.",
+      schema: RetractInput,
+      outputSchema: z.unknown(),
+      tags: ["brain", "memory", "facts"],
+      sideEffects: ["facts.retracted:1"],
+      cost: { tokens_p50: 0, usd_p50: 0, latency_p50_ms: 10, reversible: false, cacheable: false },
+      async handler(a): Promise<ToolResult> {
+        const store = getFacts();
+        if (!store) return errorResult("facts not available");
+        const f = store.retract(a.id, a.how, a.at);
+        return f ? structuredResult({ fact: factView(f) }) : errorResult(`unknown fact: ${a.id}`);
+      },
+    }),
+    defineTool({
+      name: "kernel_facts_query",
+      description:
+        "Facts that are true now — or were true at `as_of`, or as Kernl believed them at `known_at`. " +
+        "`history` lists every value ever recorded with when it held and whether it was corrected.",
+      schema: FactsQueryInput,
+      outputSchema: z.unknown(),
+      tags: ["brain", "memory", "facts"],
+      cost: { tokens_p50: 0, usd_p50: 0, latency_p50_ms: 10, reversible: true, cacheable: false },
+      async handler(a): Promise<ToolResult> {
+        const store = getFacts();
+        if (!store) return errorResult("facts not available");
+        const rows = store.query({
+          subject: a.subject, predicate: a.predicate, text: a.text,
+          asOf: a.as_of, knownAt: a.known_at, history: a.history, limit: a.limit,
+        });
+        return structuredResult({ facts: rows.map(factView) });
+      },
+    }),
+    defineTool({
+      name: "kernel_facts_explain",
+      description:
+        "Why did Kernl (or an agent) act that way? Give the person or thing (subject ref or name) and the " +
+        "moment of the decision — `at`, or `action_ref`, the id of what the action produced or touched " +
+        "(an email, a task…). Returns what Kernl believed then against what is now known to have been " +
+        "true then, fact by fact, who wrote each belief and from what source, and a verdict: consistent, " +
+        "late_information (the world changed but Kernl learned it after the decision) or wrong_belief " +
+        "(the stored fact was later corrected as a mistake).",
+      schema: ExplainInput,
+      outputSchema: z.unknown(),
+      tags: ["brain", "memory", "facts", "audit", "provenance"],
+      cost: { tokens_p50: 0, usd_p50: 0, latency_p50_ms: 10, reversible: true, cacheable: false },
+      async handler(a): Promise<ToolResult> {
+        const store = getFacts();
+        if (!store) return errorResult("facts not available");
+        try {
+          return structuredResult(explainBelief(store, getProvenanceService(), {
+            subject: a.subject, name: a.name, predicate: a.predicate, at: a.at, actionRef: a.action_ref,
+          }));
+        } catch (err) {
+          return errorResult(err instanceof Error ? err.message : String(err));
+        }
+      },
+    }),
+    defineTool({
+      name: "kernel_brain_ask",
+      description:
+        "What do I know about X? Searches every memory at once — indexed tasks, " +
+        "notes, contacts and mail (brain), past chat messages, what agents have " +
+        "learned, and the people, tasks, mail, events and products in the graph — " +
+        "by meaning and by words, merges the findings into one ranked list, and " +
+        "shows what each result is connected to. Use it before answering a " +
+        "question about a person, project or topic.",
+      schema: AskInput,
+      outputSchema: z.unknown(),
+      tags: ["brain", "memory", "search", "graph"],
+      cost: { tokens_p50: 0, usd_p50: 0, latency_p50_ms: 150, reversible: true, cacheable: false },
+      async handler(a): Promise<ToolResult> {
+        const deps = getAskDeps();
+        if (!deps) return errorResult("brain not initialised");
+        return structuredResult(await askMemory(deps, { query: a.query, limit: a.limit, related: a.related }));
+      },
+    }),
     defineTool({
       name: "kernel_brain_recall",
       description:

@@ -469,15 +469,33 @@ export const DOCKER_UPDATE_HINT =
  * started from, so the command is rebuilt from those labels; `cd` first,
  * because the overrides read their variables from that directory's .env.
  * Without labels (not started by compose) the generic line is all there is.
+ *
+ * The stack scripts/kernl.sh manages (project kernl-public, with host.yml) is
+ * told to run `scripts/kernl.sh update` instead: same pull and build, but the
+ * kernel is recreated through the script's door — offices paused and running
+ * agent runs given time to finish — and with the compose files it picks.
  */
-export function dockerUpdateHint(labels?: Record<string, string | undefined> | null): string {
+export function dockerUpdateHint(
+  labels?: Record<string, string | undefined> | null,
+  opts: { neo4j?: boolean } = {},
+): string {
   const files = (labels?.["com.docker.compose.project.config_files"] ?? "")
     .split(",")
     .map((f) => f.trim())
     .filter(Boolean);
+  // A kernel that reaches a Neo4j (NEO4J_URI) came up with docker-compose.neo4j.yml,
+  // which older stacks did not stamp on the kernel's own labels. Dropping it
+  // would recreate the kernel without the Neo4j password.
+  if (opts.neo4j && files.length && !files.some((f) => /docker-compose\.neo4j\.yml$/.test(f))) {
+    const base = files.find((f) => /docker-compose\.yml$/.test(f));
+    if (base) files.push(base.replace(/docker-compose\.yml$/, "docker-compose.neo4j.yml"));
+  }
   const dir = labels?.["com.docker.compose.project.working_dir"]?.trim() ?? "";
   if (files.length === 0 || !dir) return DOCKER_UPDATE_HINT;
   const quote = (p: string) => (/^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, "'\\''")}'`);
+  if (labels?.["com.docker.compose.project"] === "kernl-public" && files.some((f) => /docker-compose\.host\.yml$/.test(f))) {
+    return `cd ${quote(dir)} && scripts/kernl.sh update`;
+  }
   const prefix = dir.endsWith("/") ? dir : `${dir}/`;
   const fileArgs = files
     .map((f) => `-f ${quote(f.startsWith(prefix) ? f.slice(prefix.length) : f)}`)

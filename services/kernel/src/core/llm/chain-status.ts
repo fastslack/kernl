@@ -1,5 +1,4 @@
 import { getClaudeModelLimit, claudeModelMatches } from "../../sdk/claude-limits.js";
-import { primaryClaudeAccountId } from "../../sdk/claude-accounts.js";
 import type { getHealth } from "./provider-health.js";
 import type { BlockedModel } from "./model-blocklist.js";
 import { canonicalSlug } from "./provider-catalog.js";
@@ -14,7 +13,9 @@ export function describeChainLink(
   health?: ReturnType<typeof getHealth>,
   blockedModel?: Pick<BlockedModel, "reason" | "error_raw">,
 ) {
-  const limit = /^(claude_code|claude-code)$/.test(link.slug) ? getClaudeModelLimit(link.model, Date.now(), primaryClaudeAccountId()) : null;
+  // Limited only once every connected account is: while one still has quota
+  // the subscription rotates to it, so the link is not out.
+  const limit = /^(claude_code|claude-code)$/.test(link.slug) ? getClaudeModelLimit(link.model, Date.now()) : null;
   let status: LinkStatus = isPrimary ? "active" : "standby";
   let reason: string | undefined;
   if (!link.available) {

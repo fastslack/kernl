@@ -39,7 +39,12 @@ export function assetsRoot(): string {
   //   rpm/deb  bin/mcp-server.js + assets/ under /opt/kernl   → here/..
   //   .app     Resources/mcp-server.js + Resources/assets/    → here
   //   win zip  <root>/mcp-server.js + <root>/assets/          → here
+  // KERNEL_ASSETS_DIR names the assets/ directory itself (the provider registry
+  // reads it the same way). It wins: a kernel started from source in another
+  // directory — a demo or test data dir as cwd — otherwise finds no extensions.
+  const explicit = process.env.KERNEL_ASSETS_DIR?.trim();
   const candidates = [
+    ...(explicit ? [resolve(explicit, "..")] : []),
     process.cwd(),        // dev (services/kernel) and Docker (/app)
     here,                 // .app Resources/ and the Windows zip root
     resolve(here, ".."),  // deb/rpm: /opt/kernl/bin → /opt/kernl

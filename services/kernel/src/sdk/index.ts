@@ -26,6 +26,8 @@ export * from "./facades.js";
 export * from "./types.js";
 
 export * from "./helpers.js";
+export * from "./graph-batch.js";
+export * from "./graph-vectors.js";
 export * from "./http-error.js";
 export * from "./args.js";
 export { focusSkillFile, runFocusQuery } from "./skill-file-focus.js";

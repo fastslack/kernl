@@ -1,8 +1,8 @@
 import { describe, it, expect, mock, beforeEach, afterEach, afterAll, setSystemTime } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 // What the CLI sends when the subscription is over its limit: the notice as an
 // assistant text with `error: "rate_limit"`, then a *success* result flagged
@@ -605,6 +605,133 @@ describe("claude_code agent run across several accounts", () => {
     expect(tried()).toEqual(["A/" + OPUS, "B/" + OPUS, "A/" + FABLE, "B/" + FABLE]);
     expect(result.error).toMatch(/429 usage limit reached on claude-fable-5-1/);
   }, 30_000);
+});
+
+// The chat (Chief's direct channel, /chat) used to run every turn on the
+// primary account and only switch models: with the primary's week used up it
+// answered "429 … quota exhausted" while another account still had quota.
+describe("ChatClaudeCodeProvider across several accounts", () => {
+  const OPUS = "claude-opus-5-5";
+  const FABLE = "claude-fable-5-2";
+  const prevXdg = process.env.XDG_CONFIG_HOME;
+  const prevToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  let xdg = "";
+  const dirs: Record<string, string> = {};
+
+  beforeEach(() => {
+    xdg = mkdtempSync(join(tmpdir(), "claude-chat-accounts-"));
+    process.env.XDG_CONFIG_HOME = xdg;
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    setClaudePrimaryTokenProbe(() => false);
+    setClaudeAccountResolver(() => [{ id: "maguirre", label: "" }, { id: "doctor", label: "" }, { id: "dev", label: "" }]);
+    for (const id of ["maguirre", "doctor", "dev"]) {
+      dirs[id] = claudeAccountDir(id);
+      mkdirSync(dirs[id]!, { recursive: true });
+      writeFileSync(join(dirs[id]!, ".credentials.json"), "{}");
+    }
+  });
+
+  afterEach(() => {
+    setClaudeAccountResolver(null);
+    setClaudePrimaryTokenProbe(null);
+    rmSync(xdg, { recursive: true, force: true });
+    if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = prevXdg;
+    if (prevToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    else process.env.CLAUDE_CODE_OAUTH_TOKEN = prevToken;
+  });
+
+  const name = (dir: string | undefined) => Object.entries(dirs).find(([, d]) => d === dir)?.[0] ?? String(dir);
+  const tried = () => routes.map((r) => `${name(r.dir)}/${r.model}`);
+  const limitOn = (id: string, model: string) => limitedRoutes.add(`${dirs[id]}|${model}`);
+  const stream = (p: InstanceType<typeof ChatClaudeCodeProvider>, model: string, sessionId?: string) => {
+    const texts: string[] = [];
+    return p.chatCompletionStream("hola", (ev) => {
+      if (ev.type === "assistant_text") texts.push(ev.text);
+    }, { model, sessionId }).then((run) => ({ run, texts }));
+  };
+
+  it("answers a Fable turn on the account that still has quota", async () => {
+    limitOn("maguirre", FABLE);
+    limitOn("doctor", FABLE);
+    const { run, texts } = await stream(provider(), FABLE);
+    expect(tried()).toEqual([`maguirre/${FABLE}`, `doctor/${FABLE}`, `dev/${FABLE}`]);
+    expect(texts).toEqual([`hola desde ${FABLE}`]);
+    expect(run.finalText).toBe(`hola desde ${FABLE}`);
+  });
+
+  it("starts the next turn on that account instead of retrying the limited ones", async () => {
+    limitOn("maguirre", FABLE);
+    limitOn("doctor", FABLE);
+    await stream(provider(), FABLE);
+    routes.length = 0;
+    await stream(provider(), FABLE);
+    expect(tried()).toEqual([`dev/${FABLE}`]);
+  });
+
+  it("keeps the requested model on the next account before falling back to another model", async () => {
+    process.env.CLAUDE_CODE_LIMIT_FALLBACK_MODEL = "claude-fable-5-1";
+    limitOn("maguirre", OPUS);
+    const res = await ask(provider());
+    expect(tried()).toEqual([`maguirre/${OPUS}`, `doctor/${OPUS}`]);
+    expect(res.content).toBe(`hola desde ${OPUS}`);
+  });
+
+  it("throws the 429 only once every account is out", async () => {
+    for (const id of ["maguirre", "doctor", "dev"]) limitOn(id, FABLE);
+    await expect(stream(provider(), FABLE)).rejects.toBeInstanceOf(limits.ClaudeUsageLimitError);
+    expect(tried()).toEqual([`maguirre/${FABLE}`, `doctor/${FABLE}`, `dev/${FABLE}`]);
+  });
+
+  it("never sends the primary's token with another account", async () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "primary-token";
+    limitOn("maguirre", FABLE);
+    await stream(provider(), FABLE);
+    expect(routes.map((r) => [name(r.dir), r.token])).toEqual([["maguirre", "primary-token"], ["doctor", undefined]]);
+  });
+
+  it("moves past an account whose session is dead", async () => {
+    limitOn("maguirre", FABLE);
+    deadDirs.add(dirs.doctor!);
+    const { run } = await stream(provider(), FABLE);
+    expect(tried()).toEqual([`maguirre/${FABLE}`, `doctor/${FABLE}`, `dev/${FABLE}`]);
+    expect(run.finalText).toBe(`hola desde ${FABLE}`);
+    expect(limits.isClaudeAccountDown("doctor")).toBe(true);
+  });
+
+  it("hands the conversation over to the account the turn moves to", async () => {
+    const project = join(dirs.maguirre!, "projects", "-app");
+    mkdirSync(join(project, "sess-1"), { recursive: true });
+    writeFileSync(join(project, "sess-1.jsonl"), '{"turn":1}\n');
+    writeFileSync(join(project, "sess-1", "side.json"), "{}");
+    limitOn("maguirre", FABLE);
+    await stream(provider(), FABLE, "sess-1");
+    const moved = join(dirs.doctor!, "projects", "-app");
+    expect(readFileSync(join(moved, "sess-1.jsonl"), "utf-8")).toBe('{"turn":1}\n');
+    expect(existsSync(join(moved, "sess-1", "side.json"))).toBe(true);
+  });
+
+  it("brings the newest transcript back when the turn returns to the first account", async () => {
+    const older = join(dirs.maguirre!, "projects", "-app", "sess-2.jsonl");
+    const newer = join(dirs.doctor!, "projects", "-app", "sess-2.jsonl");
+    mkdirSync(dirname(older), { recursive: true });
+    mkdirSync(dirname(newer), { recursive: true });
+    writeFileSync(older, "1\n");
+    writeFileSync(newer, "1\n2\n");
+    utimesSync(older, new Date(2026, 0, 1), new Date(2026, 0, 1));
+    await stream(provider(), FABLE, "sess-2");
+    expect(tried()).toEqual([`maguirre/${FABLE}`]);
+    expect(readFileSync(older, "utf-8")).toBe("1\n2\n");
+  });
+
+  it("stays on a pinned account", async () => {
+    process.env.CLAUDE_CODE_LIMIT_FALLBACK_MODEL = "claude-fable-5-1";
+    limitOn("maguirre", OPUS);
+    limitOn("maguirre", "claude-fable-5-1");
+    const pinned = new ChatClaudeCodeProvider(OPUS, { cliPath: "/bin/sh", accountId: "maguirre" });
+    await expect(ask(pinned)).rejects.toBeInstanceOf(limits.ClaudeUsageLimitError);
+    expect(tried()).toEqual([`maguirre/${OPUS}`, "maguirre/claude-fable-5-1"]);
+  });
 });
 
 

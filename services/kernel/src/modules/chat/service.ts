@@ -49,6 +49,7 @@ import type {
 } from "./types.js";
 import { EPISODE_SOURCES } from "./types.js";
 import { ChatClaudeCodeProvider } from "../../core/llm/claude-code-adapter.js";
+import { ClaudeUsageLimitError } from "../../sdk/claude-limits.js";
 import { canonicalSlug } from "../../core/llm/provider-catalog.js";
 // Iteration-budget warning — single canonical copy lives in the core tool-loop
 // (same pattern keeps the conversational chat loop and the autonomous-agent
@@ -1125,11 +1126,23 @@ export class ChatService {
         runResult = await runTurn(turnContent(TEXT_ONLY_CAPS));
       }
     } catch (err) {
-      sink({
-        type: "error",
-        message: err instanceof Error ? err.message : String(err),
-      });
-      throw err;
+      // Every Claude Code account (and its fallback model) is out of quota and
+      // nothing was shown yet: the rest of the global chain answers this turn
+      // as text, rather than the conversation ending on a 429.
+      const fallback = err instanceof ClaudeUsageLimitError && !err.partial
+        && collectedBlocks.length === 0 && !options.signal?.aborted
+        ? await this.answerPastClaudeLimit(episodeId, systemText, err)
+        : null;
+      if (fallback) {
+        wrappedSink({ type: "assistant_text", text: fallback.text });
+        runResult = { finalText: fallback.text, tokensUsed: fallback.tokensUsed };
+      } else {
+        sink({
+          type: "error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
     }
 
     // 4. Store the final assistant message with full content_blocks JSON so
@@ -1317,6 +1330,46 @@ export class ChatService {
   }
 
   // ── Private helpers ───────────────────────────────
+
+  /**
+   * The answer to a streamed turn that no Claude Code account could take:
+   * the global chain (/models) minus Claude Code, text only — the SDK's tools
+   * and session belong to Claude Code. The episode keeps its provider, so the
+   * next turn tries the subscription again first. Null when no other provider
+   * is set up or every one of them failed too (the 429 then stands).
+   */
+  private async answerPastClaudeLimit(
+    episodeId: string,
+    systemText: string,
+    limitErr: ClaudeUsageLimitError,
+  ): Promise<{ text: string; tokensUsed: number } | null> {
+    const chain = (this.config.agents?.defaultModelChain ?? [])
+      .filter((l) => canonicalSlug(l.provider) !== "claude-code");
+    const first = chain.find((l) => this.providers.get(l.provider)?.available());
+    if (!first) return null;
+    const history = this.getMessages(episodeId).slice(-this.maxEpisodeMessages);
+    const prepared = prepareHistory(history, (ids) => this.attachmentRecords(ids));
+    try {
+      const completion = await this._chatCompletionWithChain(
+        { provider: this.providers.get(first.provider)!, model: first.model || "" },
+        chain,
+        prepared.messages,
+        {
+          system: `${systemText}\n\n[NOTE] Claude Code is out of usage quota on every connected account, so this turn runs on another model without tools. Answer from the conversation alone; do not claim to have run, created or changed anything.`,
+          tools: undefined,
+          attachmentSlots: prepared.slots,
+        },
+      );
+      if (!completion.content) return null;
+      log.warn(`Chat stream: Claude Code limited on every account (${limitErr.message.slice(0, 160)}) — answered by the global chain`);
+      // Said in the reply: it reads like any other answer otherwise.
+      const note = "\n\n---\n_Claude Code no tiene cuota en ninguna cuenta: respondió otro modelo de la cadena, sin herramientas._";
+      return { text: completion.content + note, tokensUsed: completion.tokens_used };
+    } catch (err) {
+      log.warn(`Chat stream: the global chain could not answer past the Claude Code limit: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}`);
+      return null;
+    }
+  }
 
   /** Try the primary provider+model, then walk through the global fallback chain
    *  (config.agents.defaultModelChain — what the /models page edits). Returns

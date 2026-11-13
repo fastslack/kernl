@@ -8,7 +8,8 @@
 #      open http://localhost:3086
 #
 #  What you get: kernel API + MCP (http://localhost:3086/mcp), the dashboard,
-#  Neo4j (graph features), SearXNG (key-free web search), the Rust bridge
+#  the built-in graph (Relate, embedded in the kernel — no graph server),
+#  SearXNG (key-free web search), the Rust bridge
 #  (mtw-request — realtime engine, torrents), and the WhatsApp bridge
 #  (whatsapp-bridge). The kernel degrades gracefully if any sidecar is down.
 #
@@ -108,9 +109,6 @@ services:
       HOST_HOME: ${HOST_HOME:-${HOME}}
       KERNEL_DATA_VOLUME: ${KERNEL_DATA_VOLUME:-kernl-public_kernel-data}
       KERNEL_AGENT_DOCKER_NETWORK: ${KERNEL_AGENT_DOCKER_NETWORK:-kernl-public_default}
-      NEO4J_URI: bolt://neo4j:7687
-      NEO4J_USER: neo4j
-      NEO4J_PASSWORD: kernlgraph
       SEARXNG_BASE_URL: http://searxng:8080
       TIMEZONE: ${TIMEZONE:-UTC}
       # ── MCP Bridge (external MCP servers) ──
@@ -205,9 +203,6 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - kernel-data:/app/data
-      # Neo4j's data, read-only: System › Storage measures the graph on disk to
-      # enforce its size ceiling (modules/storage/graph.ts, NEO4J_DATA_DIR).
-      - neo4j-data:/neo4j-data:ro
       # The Unix socket mtw-request listens on. Harmless when the engine is
       # not running: the bridge just finds nothing there and stays disabled.
       - bridge-sock:/run/mtw
@@ -226,8 +221,6 @@ services:
       # the socket is readable without running as root.
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
-      neo4j:
-        condition: service_started
       searxng:
         condition: service_started
 
@@ -266,57 +259,8 @@ services:
       SEARXNG_BASE_URL: http://searxng:8080/
       SEARXNG_SECRET: ${SEARXNG_SECRET:-kernl-public-eval-secret}
 
-  # ── Neo4j (graph intelligence; kernel degrades if absent) ─
-  #  Heaviest service. On a ≤2 GB host it may be OOM-killed — that's fine, the
-  #  kernel runs without it (graph features just go dark). To run leaner, delete
-  #  this service and the `neo4j:` depends_on entry above. Tip: run
-  #  `bash scripts/preflight.sh` first to catch port/RAM problems early.
-  neo4j:
-    image: neo4j:5.22.0
-    container_name: kernl-public-neo4j
-    restart: unless-stopped
-    environment:
-      # Neo4j 5.x rejects passwords shorter than 8 characters and exits 70 on
-      # startup, which `restart: unless-stopped` turns into a crash loop. Keep
-      # this at 8+ chars, and in sync with NEO4J_PASSWORD above and the
-      # healthcheck below.
-      NEO4J_AUTH: neo4j/kernlgraph
-      # Graph Data Science. The image resolves a version compatible with the
-      # tag above and downloads it on first boot, so this needs outbound
-      # network once; set NEO4J_PLUGINS=[] to run without it (graph analytics
-      # go dark, plain Cypher and native vector search are unaffected).
-      NEO4J_PLUGINS: '${NEO4J_PLUGINS:-["graph-data-science"]}'
-      # Defaults stay small so the quick start fits a modest host. Raise them
-      # in .env once the graph holds real volume — GDS projections live in the
-      # heap, so analytics on a large graph is what usually needs the room.
-      # What the server tells Browser to connect to. Without this it advertises
-      # its own internal 7687, which on the host is whatever else is listening
-      # there — on a machine running a second Neo4j, Browser silently opens the
-      # wrong database. Must match the published bolt port below. Only affects
-      # what clients are told; the kernel dials bolt://neo4j:7687 directly.
-      NEO4J_server_bolt_advertised__address: localhost:${NEO4J_BOLT_PORT:-17687}
-      NEO4J_server_memory_heap_initial__size: ${NEO4J_HEAP_INITIAL:-256m}
-      NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP_MAX:-512m}
-      NEO4J_server_memory_pagecache_size: ${NEO4J_PAGECACHE:-256m}
-    # Health shows in `docker compose ps`; the kernel does NOT block on it (it
-    # degrades gracefully), so a dead Neo4j never wedges startup.
-    healthcheck:
-      test: ["CMD-SHELL", "cypher-shell -u neo4j -p kernlgraph 'RETURN 1' >/dev/null 2>&1 || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 45s
-    # Neo4j Browser + Bolt, on loopback only. The kernel reaches Neo4j over the
-    # compose network and needs none of this; it is here so a human can open the
-    # browser and read the graph. Non-default host ports keep it clear of a
-    # second Neo4j on the same machine, and 127.0.0.1 keeps the database off the
-    # network — the password lives in this file, so it must not be reachable.
-    ports:
-      - "127.0.0.1:${NEO4J_HTTP_PORT:-17474}:7474"
-      - "127.0.0.1:${NEO4J_BOLT_PORT:-17687}:7687"
-    volumes:
-      - neo4j-data:/data
-      - neo4j-logs:/logs
+  # Neo4j is optional: docker-compose.neo4j.yml adds it (Graph Data Science,
+  # or an install that predates the built-in graph).
 
 volumes:
   kernel-data:
@@ -328,5 +272,3 @@ volumes:
   mtw-whatsapp-sock:
   # WhatsApp bridge session database (/var/lib/mtw-whatsapp/session.db).
   mtw-whatsapp-data:
-  neo4j-data:
-  neo4j-logs:

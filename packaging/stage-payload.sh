@@ -471,6 +471,8 @@ if [ "${HOST_PLATFORM:-}" = "$PLATFORM" ] && [ -d services/kernel/node_modules/b
   mkdir -p "$SRC_TREE/node_modules/@huggingface"
   cp -a services/kernel/node_modules/@huggingface/transformers "$SRC_TREE/node_modules/@huggingface/"
   cp -a services/kernel/node_modules/neo4j-driver "$SRC_TREE/node_modules/" 2>/dev/null || true
+  mkdir -p "$SRC_TREE/node_modules/@relate"
+  cp -a services/kernel/node_modules/@relate/relate "$SRC_TREE/node_modules/@relate/"
 
   # Resolve dep closure of those four against the host's node_modules.
   echo "▶ resolving dep closure"
@@ -498,6 +500,9 @@ if [ "${HOST_PLATFORM:-}" = "$PLATFORM" ] && [ -d services/kernel/node_modules/b
     }
     walk('better-sqlite3'); walk('onnxruntime-node');
     walk('@huggingface/transformers'); walk('neo4j-driver');
+    // The built-in graph: the client, its platform package (an optional dep)
+    // and koffi, which loads the engine.
+    walk('@relate/relate');
     for (const d of $EXT_DEPS) walk(d);
     console.log(JSON.stringify([...seen]));
   ")"
@@ -524,7 +529,7 @@ else
   node -e "
     const fs = require('node:fs');
     const pkg = require('./services/kernel/package.json');
-    const names = ['better-sqlite3', 'onnxruntime-node', '@huggingface/transformers', 'neo4j-driver',
+    const names = ['better-sqlite3', 'onnxruntime-node', '@huggingface/transformers', 'neo4j-driver', '@relate/relate',
                    ...$EXT_DEPS];
     const dependencies = {};
     for (const name of names) {
@@ -565,6 +570,23 @@ else
   )
   cp -a "$NATIVE_TMP/node_modules/." "$SRC_TREE/node_modules/"
   rm -rf "$NATIVE_TMP"
+fi
+
+# Relate — the built-in graph. A regular kernel dependency now (@relate/relate,
+# pinned in package.json / the lockfiles), staged with the native modules
+# above. Check the target's engine library made it, and trim koffi — the FFI
+# loader the client uses — to the target's binary: it ships one per platform.
+RELATE_NATIVE_PKG="relate-${NPM_PLATFORM}-${NPM_ARCH}"
+ls "$SRC_TREE/node_modules/@relate/$RELATE_NATIVE_PKG/lib/" 2>/dev/null | grep -q relate_ffi || {
+  echo "ERROR: Relate engine for ${NPM_PLATFORM}-${NPM_ARCH} missing from the staged payload (@relate/$RELATE_NATIVE_PKG)" >&2
+  exit 1
+}
+KOFFI_DIR="$SRC_TREE/node_modules/koffi"
+if [ -d "$KOFFI_DIR/build/koffi" ]; then
+  rm -rf "$KOFFI_DIR/src" "$KOFFI_DIR/vendor" "$KOFFI_DIR/doc"
+  for d in "$KOFFI_DIR"/build/koffi/*; do
+    [ "$(basename "$d")" = "${NPM_PLATFORM}_${NPM_ARCH}" ] || rm -rf "$d"
+  done
 fi
 
 # The agent SDK's native CLI for the target platform.

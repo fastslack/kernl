@@ -9,6 +9,10 @@
   import { rpcOrCall } from '$lib/ws.js';
   import MessageStream from './MessageStream.svelte';
   import AgentWorld3D from './AgentWorld3D.svelte';
+  import TimeMachine from './TimeMachine.svelte';
+  import LearningLibrary from './LearningLibrary.svelte';
+  import EngineRoom from './EngineRoom.svelte';
+  import Constellation from './Constellation.svelte';
   import OfficeDirectory from '$lib/components/office/OfficeDirectory.svelte';
   import OfficeRail from '$lib/components/office/OfficeRail.svelte';
   import CommandBar from '$lib/components/office/CommandBar.svelte';
@@ -107,6 +111,30 @@
   // so the tab bar, the back button and a shared link all agree, and switching
   // never remounts the 3D world.
   $: directoryView = $page.url.searchParams.get('view') === 'offices';
+  // ?tm=<a person's name or ref> opens the time machine on them.
+  let tmOpen = false;
+  // The experience library (books, weeks, lineage): ?library opens it, ?library=<lesson id> on that lesson.
+  let libOpen = false;
+  let libLesson = '';
+  let libFromUrl: string | null = null;
+  // Relate's engine room: ?engine opens it.
+  let engOpen = false;
+  let engFromUrl = false;
+  // The constellation of lessons: ?sky opens it.
+  let skyOpen = false;
+  let skyFromUrl = false;
+  let tmSubject = '';
+  /** An agent's time machine (opened from its drawer, or ?tm-agent=<id or name>). */
+  let tmAgent = '';
+  /** Re-mounts the panel when it is opened on someone else. */
+  let tmKey = 0;
+  let tmFromUrl = '';
+  $: { const q = $page.url.searchParams.get('tm'); if (q && q !== tmFromUrl) { tmFromUrl = q; tmSubject = q; tmAgent = ''; tmOpen = true; } }
+  let tmAgentFromUrl = '';
+  $: { if ($page.url.searchParams.has('engine') && !engFromUrl) { engFromUrl = true; engOpen = true; } }
+  $: { if ($page.url.searchParams.has('sky') && !skyFromUrl) { skyFromUrl = true; skyOpen = true; } }
+  $: { const q = $page.url.searchParams.get('library'); if (q !== null && q !== libFromUrl) { libFromUrl = q; libLesson = q; libOpen = true; } }
+  $: { const q = $page.url.searchParams.get('tm-agent'); if (q && q !== tmAgentFromUrl) { tmAgentFromUrl = q; tmAgent = q; tmSubject = ''; tmOpen = true; } }
   async function showWorld(): Promise<void> {
     if (!directoryView) return;
     const u = new URL($page.url);
@@ -795,7 +823,7 @@
         working={effectiveRunning.size}
         runsToday={todayRuns}
         inbox={inboxCount}
-        extraItems={worldViewItems}
+        extraItems={[...worldViewItems, { id: 'time-machine', label: $t('tm.title') }, { id: 'library', label: $t('lib.title') }, { id: 'engine', label: $t('eng.title') }, { id: 'sky', label: $t('sky.title') }]}
         on:newoffice={() => openWizard()}
         on:meeting={openMeetingModal}
         on:activity={toggleActivity}
@@ -804,7 +832,7 @@
         on:perf={() => enterWorld(() => world?.togglePerfHud())}
         on:stream={toggleStreamVisible}
         {streamVisible}
-        on:extra={(e) => enterWorld(() => { worldViewItems.find((i) => i.id === e.detail.id)?.run(); worldViewItems = world?.pluginViewItems() ?? []; })}
+        on:extra={(e) => e.detail.id === 'time-machine' ? enterWorld(() => { tmOpen = true; }) : e.detail.id === 'library' ? enterWorld(() => { libLesson = ''; libOpen = true; engOpen = false; }) : e.detail.id === 'engine' ? enterWorld(() => { engOpen = true; libOpen = false; skyOpen = false; }) : e.detail.id === 'sky' ? enterWorld(() => { skyOpen = true; libOpen = false; engOpen = false; }) : enterWorld(() => { worldViewItems.find((i) => i.id === e.detail.id)?.run(); worldViewItems = world?.pluginViewItems() ?? []; })}
         on:inbox={() => enterWorld(() => world?.openHeadquartersInbox())}
         on:registerrepo={() => enterWorld(() => world?.openRegisterRepo())}
       />
@@ -831,6 +859,7 @@
           on:moveagent={(e) => moveAgent(e.detail.agentId, e.detail.flowId)}
           on:newoffice={(e) => openWizard(e.detail?.lotId ?? '')}
           on:agentselect={(e) => { selectedAgentId = e.detail.id; if (e.detail.id) { panelOfficeId = null; activityOpen = false; } }}
+          on:timemachine={(e) => { tmSubject = ''; tmAgent = e.detail.agentId ?? ''; tmKey += 1; tmOpen = true; world?.selectAgent(null); }}
           on:sceneready={onSceneReady}
           on:worldchange={() => { worldViewItems = world?.pluginViewItems() ?? []; }}
           on:meetings={(e) => (meetings = e.detail.list)}
@@ -839,6 +868,21 @@
           on:liveopen={() => { void showWorld(); activityOpen = false; panelOfficeId = null; }}
         />
         </div>
+        {/if}
+        {#if tmOpen && !directoryView}
+          {#key tmKey}
+            <TimeMachine world={world} subject={tmSubject} agent={tmAgent} on:close={() => { tmOpen = false; tmSubject = ''; tmAgent = ''; }} />
+          {/key}
+        {/if}
+        {#if libOpen && !directoryView}
+          <LearningLibrary world={world} flows={worldFlows.map((f) => ({ id: f.id, name: f.name }))} learningId={libLesson}
+            on:close={() => { libOpen = false; libLesson = ''; }} />
+        {/if}
+        {#if skyOpen && !directoryView && !libOpen && !engOpen}
+          <Constellation world={world} on:close={() => { skyOpen = false; }} />
+        {/if}
+        {#if engOpen && !directoryView && !libOpen}
+          <EngineRoom world={world} on:close={() => { engOpen = false; }} />
         {/if}
         {#if directoryView}
           <OfficeDirectory model={railModel} loading={!dataLoaded} error={dataError} inbox={inboxCount} {powerBusy}

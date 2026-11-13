@@ -7,6 +7,133 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-13
+
+### Actualizar desde 0.4.6
+
+- **El grafo ahora viene incluido y tu instalación se pasa sola.** En el primer
+  arranque de esta versión Kernl cambia a Relate, el grafo embebido, una sola
+  vez. No hay que hacer nada a mano:
+  - **Sin grafo antes** (la app de escritorio): se activa Relate y se llena con
+    tus datos de SQLite en el primer minuto. Si responde un Neo4j con datos
+    (los stacks viejos guardaban ahí la memoria del chat aun con el grafo
+    apagado), se copia ese.
+  - **Con Neo4j antes** (toda instalación Docker): Kernl arranca sobre Neo4j
+    como siempre y copia el grafo a Relate en segundo plano (memoria del chat,
+    vínculos entre contactos, noticias, las lecciones y decisiones de los
+    agentes), todo menos el catálogo de cine, que ya no vive en el grafo (ver
+    abajo). Cuando termina y los conteos coinciden, pasa a Relate sin
+    reiniciar y trae lo que llegó a Neo4j durante la copia. Neo4j queda tal
+    cual; volver a activarlo en /extensions es el camino de vuelta. La copia
+    tarda cerca de 1 ms por nodo o relación en una Mac M y Kernl sigue
+    funcionando todo ese tiempo. En una instalación real el catálogo de cine
+    era 0,93M de 0,95M nodos; sin él, el resto (13k nodos, 7,5k relaciones) se
+    copió en 7 segundos. Si se reinicia durante la copia, la copia empieza de nuevo.
+  - **Neo4j apagado en ese momento**: Kernl arranca igual sobre Relate, lleno
+    desde SQLite, y trae lo que vive solo en Neo4j (memoria del chat, vínculos,
+    noticias) en cuanto Neo4j responde. Lo revisa en cada arranque y cada
+    30 minutos.
+  - **Si la copia falla**, Kernl sigue en Neo4j con todos sus datos y lo vuelve
+    a intentar en el próximo arranque.
+  - **Grafos grandes**: Relate tiene el grafo en memoria, sin límite salvo que
+    se elija uno. Antes de copiar, Kernl estima cuánto va a ocupar y copia con
+    1,5× eso como tope, hasta lo que la máquina puede dar (el límite de memoria
+    del contenedor, o el 80% de la RAM), y deja ese tope como límite de memoria
+    de Relate. Un grafo más grande que lo que entra se queda en Neo4j, y la
+    copia se reintenta recién cuando hay más memoria (o un
+    `RELATE_LOGICAL_GRAPH_SIZE_LIMIT` mayor), no en cada arranque.
+  - **Memoria y tiempo de arranque**: Relate tiene todo el grafo en RAM. La
+    instalación de arriba, sin el catálogo, ocupa 2,7 MB en disco, llegó a
+    230 MB al copiarse y abre en menos de un segundo; con el catálogo eran
+    3,3 GB, 12,2 GB y dos minutos. Un grafo grande propio sigue necesitando
+    ese margen.
+  - Lo que pasó queda en la tabla `kernl_upgrades` y en el log
+    (`Graph upgrade: …`).
+  - Para quedarte en Neo4j (porque usás Graph Data Science, por ejemplo), poné
+    `KERNL_KEEP_NEO4J=1`. `KERNL_GRAPH_UPGRADE=off` saltea el paso entero.
+- **Docker:** actualizá con `scripts/kernl.sh update`: hace pull, construye
+  mientras el kernel viejo sigue atendiendo y recrea el kernel y el dashboard
+  pausando antes las oficinas, como `restart`. Mientras exista el volumen
+  `neo4j-data` mantiene levantado el servicio de Neo4j, así la copia puede
+  leerlo. Cuando el log diga que el upgrade terminó podés frenarlo con
+  `scripts/kernl.sh stop neo4j`; tus datos quedan en el volumen.
+- **El esquema del grafo se actualiza al arrancar**: los tiempos de los hechos
+  pasan a fechas nativas, los embeddings a `VECTOR<FLOAT32>`, las lecciones
+  guardan cuándo se aprendieron y los vínculos de procedencia se rearman desde
+  la tabla de auditoría. No hay que hacer nada a mano.
+- **La migración agents 64 corre al arrancar**: las preguntas guardan de qué
+  tratan y quién las respondió, por qué canal.
+- **Las extensiones incluidas que cambiaron traen versión nueva** (Cinema
+  1.38.0, y Agent Advanced, CRM, Google Sync, Metas, Notas, Recordatorios,
+  Repos, Compras y Tareas un patch arriba), así una instalación cuya copia vive
+  en la carpeta de extensiones toma el código nuevo en vez de quedarse con el
+  de la 0.4.6.
+- **El catálogo de cine sale del grafo.** Era una proyección de SQLite (obras,
+  identidades de Wikidata, directores, géneros, temas, colecciones) que nadie
+  leía desde que sus vectores pasaron a SQLite, y en una instalación real era
+  ~90% del grafo. La copia desde Neo4j lo deja atrás, y un grafo incluido que
+  ya lo tiene lo devuelve una vez al arrancar (las personas del CRM quedan:
+  solo se van los directores sin id del CRM). Navegar, buscar, títulos
+  similares y "para vos" funcionan igual. El rescate de uploads sin año por
+  sus alias corre ahora sobre un índice de texto completo de SQLite (la
+  migración cinema 22 lo arma con los alias ya descargados), y sus propuestas
+  siguen yendo a revisión. La parte de cine del grafo ya no aparece en
+  Sistema › Almacenamiento; los títulos que un límite dejó afuera ahí siguen
+  fuera de la búsqueda semántica.
+
+### Agregado
+
+- **Una máquina del tiempo sobre lo que Kernl sabía.** Elegís una persona,
+  empresa o agente y un momento: Kernl rearma lo que sabía entonces, quién
+  escribió cada hecho, cuáles se reemplazaron después y qué corridas de agentes
+  actuaron sobre un hecho que ya estaba viejo. En la oficina 3D el grafo se
+  levanta como un holograma sobre su oficina.
+- **La sala de máquinas.** El grafo trabajando: las últimas consultas con los
+  tiempos del propio motor, el esquema como plano, el uso de índices y el
+  camino entre dos nombres. Una sala propia en la oficina 3D.
+- **Lo que aprendieron las oficinas.** El impacto de cada lección (las corridas
+  que la recordaron, qué cambió, cómo se movió su confianza), una biblioteca con
+  todas las lecciones por semana y su linaje entre agentes, y una constelación
+  que ubica las lecciones por significado; una lección recordada brilla y manda
+  un haz al escritorio que la recibió.
+- **Las decisiones de los agentes se recuerdan y se miden.** Cada respuesta a
+  una pregunta de un agente guarda quién la dio y por qué canal (dashboard,
+  WhatsApp, Telegram, API, el Chief). Cuando el mismo tipo de pregunta recibe
+  siempre la misma respuesta, la siguiente la muestra como sugerencia, y se
+  mide cuántas veces acertó. Una oficina puede dejar que una categoría se
+  responda sola cuando acertó al menos el 97% de 30 veces, y solo donde una
+  extensión dice que el caso es seguro; una de cada diez preguntas sigue
+  yendo a una persona, para seguir midiendo.
+- **Hechos del entorno.** Cuando varios agentes quedan bloqueados por la misma
+  causa externa (un servidor caído, una credencial que falta), se registra una
+  vez; esperan sobre ella en lugar de volver a preguntar, y cerrarla los
+  despierta a todos.
+- **Las decisiones en el grafo.** Las preguntas, el trabajo del que tratan,
+  quién decidió y qué pasaba en ese momento pasan a ser nodos, así un agente
+  puede preguntar qué se decidió la última vez sobre el mismo pull request y
+  qué cambió desde entonces.
+
+### Corregido
+
+- **La imagen de Docker se construye en ARM.** Entre las variantes de CPU de
+  whisper.cpp hay una que el compilador de bookworm no conoce en arm64, así que
+  la imagen del kernel no se construía en Graviton, una Raspberry Pi o Docker en
+  una Mac con Apple Silicon.
+- **`LIMIT $n` en Neo4j.** El driver de JavaScript manda todo número como
+  float, y Neo4j lo rechaza después de `LIMIT` y `SKIP` ("'5000.0' is not a
+  valid value"): fallaban la limpieza de huérfanos del grafo de cine, el
+  explorador del grafo, la memoria del chat y la constelación de lecciones. Los
+  parámetros de paginado ahora viajan como enteros.
+- **`AGENTS_SCHEDULER=off` dejaba andando el barrido de la bandeja**, que
+  despertaba agentes por cartas que ya estaban esperando. Ahora se apaga junto
+  con el scheduler.
+- **El chat con Claude Code pasa a la siguiente cuenta conectada** cuando una
+  llega a su límite de uso, y al resto de la cadena de modelos cuando todas se
+  agotaron, en vez de terminar el turno con un 429.
+- **Se aplica el límite de memoria de Relate.** Bajo Bun el tope nunca llegaba
+  al motor; ahora se respeta el que se elige en /extensions (o el que calcula el
+  upgrade), y no se aplica ninguno si nadie lo elige.
+
 ## [0.4.6] - 2026-11-08
 
 ### Actualizar desde 0.4.5

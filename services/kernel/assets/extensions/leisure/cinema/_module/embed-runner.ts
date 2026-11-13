@@ -19,10 +19,9 @@
  * resume.
  */
 
-import { log, type GraphDriver, type EmbeddingsClient } from "@kernl/extension-sdk";
+import { log, type EmbeddingsClient } from "@kernl/extension-sdk";
 import type { CinemaService } from "./service.js";
 import { embedPending } from "./embeddings.js";
-import { GRAPH_FROZEN_MESSAGE } from "./graph-state.js";
 
 export type EmbedRunnerStatus =
   | "idle"
@@ -86,7 +85,6 @@ export class EmbedRunner {
   constructor(
     private service: CinemaService,
     private getEmbedder: () => EmbeddingsClient | null,
-    private getGraph: () => GraphDriver | null,
   ) {}
 
   snapshot(): EmbedRunnerSnapshot {
@@ -124,10 +122,7 @@ export class EmbedRunner {
       return this.snapshot();
     }
     const embedder = this.getEmbedder();
-    const graph = this.getGraph();
     if (!embedder) throw new Error("embeddings client not initialised");
-    if (!graph?.capabilities.cypher) throw new Error("graph driver unavailable — neo4j down");
-    if (this.service.graphFrozen()) throw new Error(GRAPH_FROZEN_MESSAGE);
 
     this.batchSize = Math.max(1, Math.min(opts.batchSize ?? DEFAULT_BATCH_SIZE, 256));
     this.status = "running";
@@ -160,9 +155,8 @@ export class EmbedRunner {
 
   private async runLoop(): Promise<void> {
     const embedder = this.getEmbedder();
-    const graph = this.getGraph();
-    if (!embedder || !graph) {
-      this.error = "missing embedder or graph at runtime";
+    if (!embedder) {
+      this.error = "missing embedder at runtime";
       this.status = "failed";
       this.finishedAt = new Date().toISOString();
       return;
@@ -178,7 +172,7 @@ export class EmbedRunner {
       }
       const t0 = Date.now();
       try {
-        const r = await embedPending(this.service, embedder, graph, this.batchSize);
+        const r = await embedPending(this.service, embedder, this.service.vectorStore(), this.batchSize);
         this.lastBatchMs = Date.now() - t0;
         // `attempted === 0` is the only true "no more pending rows" signal.
         // `embedded === 0` used to double as a done check, but now a batch

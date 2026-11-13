@@ -64,15 +64,15 @@ docker compose up -d --build dashboard
 |------------------|-------|-------------------|
 | Dashboard (SPA)  | 3086  | SvelteKit frontend|
 | API / MCP HTTP   | 3087  | Backend API       |
-| Neo4j Browser    | 17474 | Web UI            |
-| Neo4j Bolt       | 17687 | Driver protocol   |
+| Neo4j Browser    | 17474 | Web UI (only with docker-compose.neo4j.yml) |
+| Neo4j Bolt       | 17687 | Driver protocol (only with docker-compose.neo4j.yml) |
 
 ### Container Management
 
 ```bash
 docker compose ps              # Check status
 docker compose logs kernel -f  # Follow backend logs
-docker compose logs neo4j -f   # Follow Neo4j logs
+docker compose logs neo4j -f   # Follow Neo4j logs (if you added docker-compose.neo4j.yml)
 docker compose down            # Stop all
 docker compose down -v         # Stop and remove volumes (destructive)
 ```
@@ -244,7 +244,10 @@ Restoring replaces the target database, so it asks for confirmation; pass
 version guessed, guessed the repo's `./data`, and so "restored" a Docker
 deployment into a directory nothing reads.
 
-### Neo4j Backup
+### Neo4j Backup (optional server)
+
+The built-in graph lives in `data/graph`, next to the SQLite database, and is
+backed up with it. The steps below apply only to the optional Neo4j server.
 
 `backup.sh` already dumps Neo4j when the Docker stack is up (skip it with
 `KERNEL_BACKUP_SKIP_NEO4J=1`; the graph rebuilds from SQLite). To archive the

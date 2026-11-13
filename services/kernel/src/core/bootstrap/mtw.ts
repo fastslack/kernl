@@ -358,6 +358,8 @@ export async function initMtw(args: {
     "agent:flow:auto_eval_skipped",
     "agent:flow:learning_created",
     "agent:flow:learning_deactivated",
+    "agent:flow:learning_recalled",
+    "agent:flow:learning_reinforced",
     "agent:flow:meeting_requested",
     "agent:flow:meeting_started",
     "agent:flow:meeting_turn",

@@ -4,8 +4,8 @@ set -e
 echo ""
 echo "setup.sh is deprecated — use the Docker installer instead:"
 echo ""
-echo "  ./install.sh              Full install (kernel + dashboard + Neo4j)"
-echo "  ./install.sh --no-neo4j   Without Neo4j (lighter, SQLite only)"
+echo "  ./install.sh              Full install (kernel + dashboard; graph built in)"
+echo "  Neo4j is optional: docker compose -f docker-compose.yml -f docker-compose.neo4j.yml up -d"
 echo "  ./install.sh --help       All options"
 echo ""
 

@@ -19,6 +19,7 @@ import { cinemaTranscribeJobsMigration } from "./018_transcribe_jobs.js";
 import { cinemaConvertJobsMigration } from "./019_convert_jobs.js";
 import { cinemaFtsContentlessMigration } from "./020_fts_contentless.js";
 import { cinemaGraphLimitsMigration } from "./021_graph_limits.js";
+import { cinemaAliasFtsMigration } from "./022_alias_fts.js";
 
 export const cinemaMigrations: Migration[] = [
   {
@@ -115,4 +116,5 @@ export const cinemaMigrations: Migration[] = [
   cinemaConvertJobsMigration,
   cinemaFtsContentlessMigration,
   cinemaGraphLimitsMigration,
+  cinemaAliasFtsMigration,
 ];

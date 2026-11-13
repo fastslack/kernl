@@ -41,6 +41,7 @@ import {
 import type { ToolMemoryService } from "./modules/tool-memory/service.js";
 import { getRequestContext } from "./core/request-context.js";
 import { callerToolDenial } from "./core/caller-tool-gate.js";
+import { recordToolCall } from "./modules/provenance/service.js";
 import { proxyPeerCall } from "./core/peer-proxy.js";
 import type { MeshServiceLike } from "./core/extension-seams.js";
 
@@ -426,6 +427,17 @@ export function createMcpServer(
             .catch(() => { /* logged inside service */ });
         }
 
+        recordToolCall({
+          tool: name,
+          args,
+          resultText: handlerResult.content?.map((c) => ("text" in c ? c.text : "")).join("\n"),
+          structured: handlerResult.structuredContent,
+          ok: handlerResult.isError !== true,
+          sideEffects: tool.sideEffects,
+          actor: requestCtx.callerAgentId
+            ? { kind: "agent", id: requestCtx.callerAgentId, runId: requestCtx.callerRunId }
+            : { kind: "client", id: "mcp" },
+        });
         const final = attachReceipt(name, args, wireResult, sideEffects);
         events?.emit("tool.call.end", { tool: name, from: "self", to: "", isError: handlerResult.isError === true, correlation_id: correlationId }).catch(() => {});
         if (identity && !handlerResult.isError) {

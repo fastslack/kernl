@@ -78,15 +78,15 @@ Kernl implements the following security measures:
 - **CORS**: Configurable origin whitelist via `CORS_ALLOWED_ORIGINS`
 - **Input Validation**: Zod schemas validate all MCP tool inputs
 - **SQL Injection Prevention**: Parameterized queries throughout
-- **Local-First**: All data stored locally (SQLite + optional Neo4j). Zero telemetry.
+- **Local-First**: All data stored locally (SQLite + the built-in graph file; Neo4j only if you add it). Zero telemetry.
 
 ## Hardening Notes for Operators
 
 - **Always set `KERNEL_AUTH_TOKEN` and `KERNEL_ENCRYPTION_KEY`** — generate
   each with `openssl rand -hex 32` (the server refuses tokens shorter than
   32 chars). `install.sh` generates them for you.
-- **Change the Neo4j password** — never ship the compose stack with a weak
-  or default password.
+- **If you add Neo4j, change its password** — `docker-compose.neo4j.yml` ships a
+  default one; never expose it with a weak or default password.
 - **Restrict CORS** — set `CORS_ALLOWED_ORIGINS` to your dashboard URL only.
 - Never commit your `.env`, `data/`, or `*.db` files — they are gitignored
   by default; keep them that way.

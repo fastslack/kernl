@@ -72,7 +72,7 @@ export class NoopGraphDriver implements GraphDriver {
       ready: this.started,
       source: "builtin",
       capabilities: this.capabilities,
-      info: { reason: "Graph backend disabled — enable Neo4j or Kùzu in /extensions" },
+      info: { reason: "Graph backend disabled — enable Relate or Neo4j in /extensions" },
     };
   }
 
@@ -85,6 +85,12 @@ export class NoopGraphDriver implements GraphDriver {
   async withSession<T>(_fn: (session: GraphSession) => Promise<T>): Promise<T> {
     throw new Error(
       "NoopGraphDriver.withSession() called — caller skipped capabilities check. Gate on `driver.capabilities.transactions` before opening a session.",
+    );
+  }
+
+  async withTransaction<T>(_fn: (tx: GraphSession) => Promise<T>): Promise<T> {
+    throw new Error(
+      "NoopGraphDriver.withTransaction() called — caller skipped capabilities check. Gate on `driver.capabilities.transactions` first.",
     );
   }
 }

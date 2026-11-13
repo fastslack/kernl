@@ -17,10 +17,16 @@ type Deps = {
   dashboardUrl: () => string | null;
   /** Kernel language for every operator-facing text (read live: Settings can change it). */
   language?: () => KernelLanguage;
+  /** What past decisions suggest for a question, shown under it; null for none. */
+  hint?: (q: AgentQuestion) => string | null;
   now?: () => number;
 };
 
 const HOUR = 3_600_000;
+
+function sourceOf(platform: string, user?: string): { via: string; actor?: string } {
+  return user ? { via: platform, actor: `${platform}:${user}` } : { via: platform };
+}
 
 /**
  * With no OPERATOR_CHANNELS, only channels that reach the operator directly
@@ -61,19 +67,21 @@ export class OperatorComms {
     await this.deliver(() => ({ text: `${n.title}\n${n.body}`, silent: true }), null);
   }
 
-  async handleCallback(data: string): Promise<string> {
+  /** A Telegram button. `user` is the sender's id on Telegram, when the transport knows it. */
+  async handleCallback(data: string, user?: string): Promise<string> {
     const m = /^oq:([0-9a-f-]{36}):(\d+|task|done|dismiss)$/i.exec(data);
     if (!m) return strings(this.lang()).invalidButton;
     const [, id, c] = m;
     const choice = /^\d+$/.test(c) ? { kind: "option" as const, index: Number(c) } : { kind: c.toLowerCase() as "task" | "done" | "dismiss" };
-    return this.reply(id, this.d.answer(id, choice));
+    return this.reply(id, this.d.answer(id, choice, sourceOf("telegram", user)));
   }
 
   /**
    * "Q<code> <k>" from a text channel. Only from a channel the questions go
-   * to (`platform` not in the candidate set → not ours, null).
+   * to (`platform` not in the candidate set → not ours, null). `user` is the
+   * sender's id on that platform, recorded with the answer.
    */
-  async tryCodeReply(text: string, platform: string): Promise<string | null> {
+  async tryCodeReply(text: string, platform: string, user?: string): Promise<string | null> {
     const m = /^\s*q(\d+)\s+(\d+|l|d)\s*$/i.exec(text);
     if (!m) return null;
     if (!this.candidates(this.d.adapters()).includes(platform)) return null;
@@ -81,12 +89,13 @@ export class OperatorComms {
     if (!row) return null;
     const q = this.d.service.getQuestion(row.question_id);
     if (!q) return null;
+    const src = sourceOf(platform, user);
     const k = m[2].toLowerCase();
-    if (k === "d") return this.reply(q.id, this.d.answer(q.id, { kind: "dismiss" }));
-    if (k === "l") return this.reply(q.id, this.d.answer(q.id, q.status === "owed" ? { kind: "done" } : { kind: "task" }));
+    if (k === "d") return this.reply(q.id, this.d.answer(q.id, { kind: "dismiss" }, src));
+    if (k === "l") return this.reply(q.id, this.d.answer(q.id, q.status === "owed" ? { kind: "done" } : { kind: "task" }, src));
     const opt = openOptions(q)[Number(k) - 1];
     if (!opt) return strings(this.lang()).badChoice;
-    return this.reply(q.id, this.d.answer(q.id, { kind: "option", index: opt.index }));
+    return this.reply(q.id, this.d.answer(q.id, { kind: "option", index: opt.index }, src));
   }
 
   /**
@@ -121,9 +130,11 @@ export class OperatorComms {
     const code = this.codeFor(q.id); // reserved synchronously, before any await
     await this.safeDashboard({ title: headline(q, who, kind, lang).split("\n")[0], body: q.question, priority: kind === "ask" ? "high" : "normal" });
     const link = this.d.dashboardUrl();
+    let hint: string | null = null;
+    try { hint = this.d.hint?.(q) ?? null; } catch (err) { log.warn(`operator-comms: hint failed: ${String(err)}`); }
     await this.deliver((a) => a.buttons
-      ? { text: `${headline(q, who, kind, lang)}${link ? `\n\n${link}` : ""}`, buttons: buttonsFor(q, lang) }
-      : { text: textFor(q, who, kind, code, link, a.receive, lang) }, q, code);
+      ? { text: `${headline(q, who, kind, lang, hint)}${link ? `\n\n${link}` : ""}`, buttons: buttonsFor(q, lang) }
+      : { text: textFor(q, who, kind, code, link, a.receive, lang, hint) }, q, code);
   }
 
   /** First ready channel in preference order; the next one if it fails. */

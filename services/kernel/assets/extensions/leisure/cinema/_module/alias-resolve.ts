@@ -7,12 +7,18 @@
  * candidates at all — not a low score, *no candidates* — and why one whose year
  * is wrong by more than three looks at the wrong shelf entirely.
  *
- * The alias full-text index does not care about years. Given a messy release
- * title it returns the works whose aliases read like it, out of all 258k at
- * once. That is the whole contribution here: **recall**. Scoring is deliberately
- * the matcher's own `titleSimilarity`, and the bar is its own `REVIEW_FLOOR`, so
- * a proposal from this path is worth exactly what a proposal from that path is
- * worth — only found differently.
+ * A full-text index over the aliases does not care about years. Given a messy
+ * release title it returns the works whose aliases read like it, out of all
+ * 258k at once. That is the whole contribution here: **recall**. Scoring is
+ * deliberately the matcher's own `titleSimilarity`, and the bar is its own
+ * `REVIEW_FLOOR`, so a proposal from this path is worth exactly what a proposal
+ * from that path is worth — only found differently.
+ *
+ * The index is SQLite FTS5 (`cinema_alias_fts`, over `cinema_canonical_aliases`)
+ * and the candidates live in `cinema_resolve_candidates`. This used to run on
+ * the graph — a Lucene index over `(:CanonicalWork)` nodes, CANDIDATE edges and
+ * a GDS component pass — which meant projecting the whole catalogue into the
+ * graph for one lookup. Nothing else read that projection.
  *
  * ## Nothing here decides anything
  *
@@ -28,10 +34,9 @@
  * candidates, so the whole contribution can be withdrawn in one statement.
  */
 
-import { log, type SqliteDb, type GraphDriver } from "@kernl/extension-sdk";
+import { log, type SqliteDb } from "@kernl/extension-sdk";
 import { extractYear, normalizeTitle, titleSimilarity } from "./title-norm.js";
 import { MATCHER_VERSION, REVIEW_FLOOR, yearFactor } from "./canonical/matcher.js";
-import { ALIAS_INDEX } from "./graph-projection.js";
 
 /**
  * How a proposal from this path is recognised later.
@@ -46,27 +51,30 @@ import { ALIAS_INDEX } from "./graph-projection.js";
  * Hence version 0 — "no matcher has ruled on this" — which is exactly true, and
  * puts the row at the front of the queue the moment the real matcher has
  * something new to say.
+ *
+ * The mark keeps its old name: proposals written while this ran on the graph
+ * carry it, and a revert has to find them too.
  */
 export const GRAPH_PROPOSAL_MARK = "graph-fulltext";
 /** Rows this path writes claim no matcher verdict. */
 const GRAPH_PROPOSAL_VERSION = 0;
 
-/** Full-text hits to consider per title before scoring. */
+/** Works to consider per title before scoring. */
 const CANDIDATES_PER_TITLE = 8;
+/** Alias hits read per title to find that many distinct works. */
+const ALIAS_HITS_PER_TITLE = 40;
 /** Titles per pass. */
 export const DEFAULT_RESOLVE_BATCH = 500;
-/** In-memory GDS graph name for the component pass. */
-const GDS_GRAPH = "cinemaResolve";
 
 /**
- * Lucene's syntax characters, neutralised.
- *
- * Release titles are full of them — `[1968]`, `A/V`, `Who?`, `C++` — and an
- * unescaped one is not a bad result but a thrown query, which would take the
- * whole batch down with it.
+ * A normalized title as an FTS5 query: every word, quoted (so FTS5 syntax in a
+ * release title — `AND`, `NEAR`, `*`, `"` — is text, not an operator), OR-ed so
+ * a work matching most words ranks first. Single letters are left out; they
+ * match a large share of the corpus and decide nothing.
  */
-export function luceneEscape(raw: string): string {
-  return raw.replace(/[+\-!(){}\[\]^"~*?:\\/&|]/g, "\\$&");
+export function ftsQuery(norm: string): string {
+  const words = [...new Set(norm.split(/\s+/).filter((w) => w.length > 1))];
+  return words.map((w) => `"${w.replace(/"/g, '""')}"`).join(" OR ");
 }
 
 export interface ResolveBatchResult {
@@ -74,7 +82,7 @@ export interface ResolveBatchResult {
   titles: number;
   /** Titles that got at least one candidate above the floor. */
   withCandidates: number;
-  /** CANDIDATE edges written. */
+  /** Candidates written. */
   candidates: number;
   cursor: string;
 }
@@ -107,58 +115,54 @@ function pendingTitles(db: SqliteDb, cursor: string, limit: number): PendingTitl
 
 /**
  * Ask the alias index for lookalikes, score them the matcher's way, and record
- * the survivors as CANDIDATE edges.
- *
- * One full-text query per title: batching them into a single Cypher call would
- * mean one OR-ed query whose scores are no longer per-title comparable.
+ * the survivors as candidates. One query per title: one OR-ed query for a whole
+ * batch would rank titles against each other.
  */
-export async function proposeBatch(
+export function proposeBatch(
   db: SqliteDb,
-  graph: GraphDriver | null,
   cursor: string,
   limit: number = DEFAULT_RESOLVE_BATCH,
-): Promise<ResolveBatchResult> {
-  if (!graph?.capabilities.cypher) {
-    throw new Error("candidate proposal requires an active graph driver with cypher support");
-  }
+): ResolveBatchResult {
   const titles = pendingTitles(db, cursor, limit);
   if (titles.length === 0) return { titles: 0, withCandidates: 0, candidates: 0, cursor };
 
-  const edges: Array<{ identifier: string; qid: string; score: number }> = [];
-  let withCandidates = 0;
+  const hitsFor = db.prepare(
+    `SELECT a.qid AS qid
+       FROM cinema_alias_fts f
+       JOIN cinema_canonical_aliases a ON a.rowid = f.rowid
+      WHERE cinema_alias_fts MATCH ?
+   ORDER BY bm25(cinema_alias_fts)
+      LIMIT ?`,
+  );
+  const work = db.prepare("SELECT label, year FROM cinema_canonical_works WHERE qid = ?");
+  const aliases = db.prepare("SELECT alias_norm FROM cinema_canonical_aliases WHERE qid = ?");
+  const save = db.prepare(
+    `INSERT INTO cinema_resolve_candidates (identifier, qid, score) VALUES (?, ?, ?)
+     ON CONFLICT(identifier, qid) DO UPDATE SET score = excluded.score`,
+  );
 
+  let withCandidates = 0;
+  let candidates = 0;
   for (const t of titles) {
     const norm = normalizeTitle(t.title);
-    if (!norm) continue;
-    const query = luceneEscape(norm).trim();
+    const query = norm ? ftsQuery(norm) : "";
     if (!query) continue;
 
     // The year in the metadata column, or the one the release title carries
     // ("Angel Puss (1944)") — same two places the matcher looks.
     const uploadYear = t.year > 0 ? t.year : extractYear(t.title);
 
-    let hits: Array<{ qid: string; label: string; year: number; aliases: string[] }> = [];
+    let qids: string[];
     try {
-      const result = await graph.run(
-        `CALL db.index.fulltext.queryNodes($index, $query, {limit: $k})
-         YIELD node
-         RETURN node.qid AS qid, node.label AS label, node.year AS year,
-                coalesce(node.aliases, []) AS aliases`,
-        { index: ALIAS_INDEX, query, k: CANDIDATES_PER_TITLE },
-      );
-      hits = result.records.map((r) => ({
-        qid: r.get("qid") as string,
-        label: (r.get("label") as string) ?? "",
-        year: Number(r.get("year") ?? 0),
-        aliases: (r.get("aliases") as string[]) ?? [],
-      }));
+      const rows = hitsFor.all(query, ALIAS_HITS_PER_TITLE) as Array<{ qid: string }>;
+      qids = [...new Set(rows.map((r) => r.qid))].slice(0, CANDIDATES_PER_TITLE);
     } catch (err) {
       // A single unparseable title must not sink the batch.
       log.debug(`cinema resolve: full-text query failed for "${t.title}" — ${String(err)}`);
       continue;
     }
 
-    // Lucene ranks by term overlap, which is the wrong yardstick for deciding
+    // Full-text ranks by term overlap, which is the wrong yardstick for deciding
     // sameness — rescore with the matcher's own similarity against the best
     // alias each work answers to, then apply its year factor.
     //
@@ -169,39 +173,30 @@ export async function proposeBatch(
     // an upload with no year at all gets 0.9 — enough to reach review on a
     // strong title, never enough to be accepted automatically.
     let matched = false;
-    for (const h of hits) {
-      if (!h.qid) continue;
-      const factor = yearFactor(uploadYear, h.year);
+    for (const qid of qids) {
+      const w = work.get(qid) as { label: string; year: number } | undefined;
+      if (!w) continue;
+      const factor = yearFactor(uploadYear, Number(w.year ?? 0));
       if (factor === 0) continue;
-      let best = 0;
-      for (const alias of [h.label, ...h.aliases]) {
-        const score = titleSimilarity(norm, normalizeTitle(alias));
+      let best = titleSimilarity(norm, normalizeTitle(w.label ?? ""));
+      for (const a of aliases.all(qid) as Array<{ alias_norm: string }>) {
+        const score = titleSimilarity(norm, a.alias_norm);
         if (score > best) best = score;
       }
       const final = best * factor;
       if (final >= REVIEW_FLOOR) {
-        edges.push({ identifier: t.identifier, qid: h.qid, score: final });
+        save.run(t.identifier, qid, final);
+        candidates++;
         matched = true;
       }
     }
     if (matched) withCandidates++;
   }
 
-  if (edges.length > 0) {
-    await graph.run(
-      `UNWIND $edges AS e
-       MERGE (t:CinemaTitle {identifier: e.identifier})
-       MERGE (c:CanonicalWork {qid: e.qid})
-       MERGE (t)-[r:CANDIDATE]->(c)
-       SET r.score = e.score`,
-      { edges },
-    );
-  }
-
   return {
     titles: titles.length,
     withCandidates,
-    candidates: edges.length,
+    candidates,
     cursor: titles[titles.length - 1].identifier,
   };
 }
@@ -221,57 +216,45 @@ export interface ComponentResult {
 }
 
 /**
- * Group the candidate graph into connected components with GDS, then read each
- * component as a claim about the world.
+ * Group the candidates into connected components — uploads and the works they
+ * might be, joined by a candidate — and read each one as a claim about the
+ * world.
  *
- * A component is a set of uploads and the canonical works they might be. When it
- * holds exactly ONE canonical work, nothing rivals that identity — the same
- * reasoning behind the matcher's unrivalled floor, applied to a cluster instead
- * of a single row. When it holds several, the uploads are still copies of *each
- * other* even though which film they are is open; that is a real answer to a
- * different question, and it is why this runs as a graph algorithm rather than a
- * per-row loop.
+ * When a component holds exactly ONE canonical work, nothing rivals that
+ * identity — the same reasoning behind the matcher's unrivalled floor, applied
+ * to a cluster instead of a single row. When it holds several, the uploads are
+ * still copies of *each other* even though which film they are is open.
+ *
+ * A union-find over the candidate rows: they are tens of thousands at most.
  */
-export async function resolveComponents(
-  db: SqliteDb,
-  graph: GraphDriver | null,
-): Promise<ComponentResult> {
-  if (!graph?.capabilities.gds) {
-    throw new Error("component resolution requires GDS — install the plugin and restart Neo4j");
+export function resolveComponents(db: SqliteDb): ComponentResult {
+  const rows = db
+    .prepare("SELECT identifier, qid, score FROM cinema_resolve_candidates")
+    .all() as Array<{ identifier: string; qid: string; score: number }>;
+
+  const parent = new Map<string, string>();
+  const find = (x: string): string => {
+    let root = x;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    for (let n = x; n !== root; ) { const next = parent.get(n)!; parent.set(n, root); n = next; }
+    return root;
+  };
+  const union = (a: string, b: string) => {
+    for (const x of [a, b]) if (!parent.has(x)) parent.set(x, x);
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+  // Titles and works share one namespace here; prefix them apart.
+  for (const r of rows) union(`t:${r.identifier}`, `w:${r.qid}`);
+
+  const groups = new Map<string, { qids: Set<string>; titles: Map<string, number> }>();
+  for (const r of rows) {
+    const root = find(`t:${r.identifier}`);
+    const g = groups.get(root) ?? { qids: new Set(), titles: new Map() };
+    g.qids.add(r.qid);
+    g.titles.set(r.identifier, Math.max(g.titles.get(r.identifier) ?? 0, Number(r.score) || 0));
+    groups.set(root, g);
   }
-
-  // Drop first: a projection is a snapshot, and a stale one would answer about
-  // the graph as it was several passes ago.
-  await graph.run(`CALL gds.graph.drop($name, false) YIELD graphName`, { name: GDS_GRAPH })
-    .catch(() => {});
-  await graph.run(
-    `CALL gds.graph.project($name,
-       ['CinemaTitle', 'CanonicalWork'],
-       { CANDIDATE: { orientation: 'UNDIRECTED' } })
-     YIELD nodeCount`,
-    { name: GDS_GRAPH },
-  );
-
-  const result = await graph.run(
-    `CALL gds.wcc.stream($name) YIELD nodeId, componentId
-     WITH componentId, gds.util.asNode(nodeId) AS n
-     WITH componentId,
-          collect(CASE WHEN n:CanonicalWork THEN n.qid END) AS rawQids,
-          collect(CASE WHEN n:CinemaTitle THEN n END) AS rawTitles
-     WITH componentId,
-          [x IN rawQids WHERE x IS NOT NULL] AS qids,
-          [x IN rawTitles WHERE x IS NOT NULL] AS titleNodes
-     WHERE size(titleNodes) > 0 AND size(qids) > 0
-     UNWIND titleNodes AS t
-     OPTIONAL MATCH (t)-[r:CANDIDATE]->(:CanonicalWork)
-     WITH componentId, qids, t, max(r.score) AS score
-     RETURN componentId, qids,
-            collect({id: t.identifier, score: coalesce(score, 0.0)}) AS titles`,
-    { name: GDS_GRAPH },
-  );
-
-  await graph.run(`CALL gds.graph.drop($name, false) YIELD graphName`, { name: GDS_GRAPH })
-    .catch(() => {});
 
   // Only rows the matcher gave up on. `state='none'` in the WHERE is the whole
   // safety story: an auto/confirmed/rejected/review row is never touched, so a
@@ -292,40 +275,27 @@ export async function resolveComponents(
 
   let unrivalled = 0, ambiguous = 0, proposed = 0, coCopies = 0;
   const now = new Date().toISOString();
-
-  for (const record of result.records) {
-    const titles = (record.get("titles") as Array<{ id: string; score: number }>) ?? [];
-    const qids = (record.get("qids") as string[]) ?? [];
-    const distinctQids = [...new Set(qids)];
-    if (titles.length > 1) coCopies += titles.length;
-
-    if (distinctQids.length === 1) {
-      unrivalled++;
-      const qid = distinctQids[0];
-      const candidatesJson = JSON.stringify([{ qid, via: GRAPH_PROPOSAL_MARK }]);
-      for (const t of titles) {
-        const score = Number(t.score ?? 0);
-        insert.run(t.id, qid, score, candidatesJson, now);
-        const info = propose.run(qid, score, candidatesJson, now, t.id);
-        proposed += info.changes ?? 0;
-      }
-    } else {
+  for (const g of groups.values()) {
+    if (g.titles.size > 1) coCopies += g.titles.size;
+    if (g.qids.size !== 1) {
       ambiguous++;
+      continue;
+    }
+    unrivalled++;
+    const qid = [...g.qids][0];
+    const candidatesJson = JSON.stringify([{ qid, via: GRAPH_PROPOSAL_MARK }]);
+    for (const [id, score] of g.titles) {
+      const inserted = insert.run(id, qid, score, candidatesJson, now).changes ?? 0;
+      const updated = propose.run(qid, score, candidatesJson, now, id).changes ?? 0;
+      proposed += inserted > 0 ? inserted : updated;
     }
   }
 
   log.info(
-    `cinema resolve: ${result.records.length} components — ${unrivalled} unrivalled, ` +
+    `cinema resolve: ${groups.size} components — ${unrivalled} unrivalled, ` +
     `${ambiguous} ambiguous, ${proposed} rows sent to review`,
   );
-
-  return {
-    components: result.records.length,
-    unrivalled,
-    ambiguous,
-    proposed,
-    coCopies,
-  };
+  return { components: groups.size, unrivalled, ambiguous, proposed, coCopies };
 }
 
 /**

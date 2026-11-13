@@ -41,10 +41,14 @@ import { claudeAuthEnv } from "./claude-code-auth.js";
 import { recordLlmCall } from "../../sdk/facades.js";
 import { sdkResultUsage, sumSdkUsage, type SdkModelUsage } from "../../sdk/llm-usage.js";
 import {
+  ClaudeAccountSessionError,
   ClaudeLimitObserver,
   ClaudeUsageLimitError,
-  withClaudeLimitFallback,
+  withClaudeAccountRotation,
+  type ClaudeRoute,
 } from "../../sdk/claude-limits.js";
+import { primaryClaudeAccountId } from "../../sdk/claude-accounts.js";
+import { ensureSessionOnAccount } from "../../sdk/claude-session-handover.js";
 import type {
   ChatMessage,
   ChatCompletionResult,
@@ -256,14 +260,19 @@ export class ChatClaudeCodeProvider {
     messages: ChatMessage[],
     opts?: ChatCompletionOptions,
   ): Promise<ChatCompletionResult> {
-    return withClaudeLimitFallback(opts?.model || this.defaultModel, (model) => this.completeOnce(messages, opts, model));
+    return withClaudeAccountRotation(
+      opts?.model || this.defaultModel,
+      (route) => this.completeOnce(messages, opts, route),
+      { pinnedAccount: this.cfg.accountId },
+    );
   }
 
   private async completeOnce(
     messages: ChatMessage[],
     opts: ChatCompletionOptions | undefined,
-    model: string,
+    route: ClaudeRoute,
   ): Promise<ChatCompletionResult> {
+    const model = route.model;
     const bin = this.findBinary();
     if (!bin) {
       throw new Error(
@@ -280,7 +289,7 @@ export class ChatClaudeCodeProvider {
       throw new Error("claude_code provider: no user message to send");
     }
 
-    const childEnv = this.buildChildEnv();
+    const childEnv = this.buildChildEnv(route.accountId);
     const system = this.buildTranscriptSystem(opts?.system, messages);
     const promptIterable = this.buildPromptStream(lastUser);
 
@@ -334,17 +343,13 @@ export class ChatClaudeCodeProvider {
       }
     } catch (err) {
       // The CLI may exit non-zero after reporting the limit; the limit is the cause.
-      if (!limit.hit) throw err;
+      if (!limit.hit) throw asSessionError(err, route.accountId);
     } finally {
       try { q.close(); } catch { /* already closed */ }
     }
 
     if (limit.hit) throw new ClaudeUsageLimitError(limit.hit, model);
-    if (authFailed) {
-      throw new Error(
-        "claude_code: OAuth authentication failed. Run `claude login` to refresh credentials.",
-      );
-    }
+    if (authFailed) throw new ClaudeAccountSessionError(AUTH_FAILED_MESSAGE, route.accountId);
     if (!finalText) {
       throw new Error("claude_code: empty response from Claude Agent SDK");
     }
@@ -381,14 +386,20 @@ export class ChatClaudeCodeProvider {
     stopReason?: string;
     sessionId?: string;
   }> {
-    return withClaudeLimitFallback(opts.model || this.defaultModel, (model) => this.streamOnce(userText, sink, opts, model));
+    // Every turn picks its account afresh: a conversation is not tied to the
+    // account its first turn ran on, its session follows it (ensureSessionOnAccount).
+    return withClaudeAccountRotation(
+      opts.model || this.defaultModel,
+      (route) => this.streamOnce(userText, sink, opts, route),
+      { pinnedAccount: this.cfg.accountId },
+    );
   }
 
   private async streamOnce(
     userText: string | ContentBlock[],
     sink: ChatStreamSink,
     opts: ChatStreamCallOptions,
-    model: string,
+    route: ClaudeRoute,
   ): Promise<{
     finalText: string;
     tokensUsed: number;
@@ -402,7 +413,11 @@ export class ChatClaudeCodeProvider {
       );
     }
 
-    const childEnv = this.buildChildEnv();
+    const model = route.model;
+    const childEnv = this.buildChildEnv(route.accountId);
+    // The conversation may have been written under another account's config
+    // dir (an earlier turn ran there); resume only finds it under this one's.
+    if (opts.sessionId) ensureSessionOnAccount(opts.sessionId, route.accountId);
     const cwd = opts.cwd ?? process.cwd();
     const allowed = opts.allowedTools ?? DEFAULT_BUILTIN_TOOLS;
 
@@ -604,7 +619,8 @@ export class ChatClaudeCodeProvider {
     } catch (err) {
       if (!limit.hit) {
         recordStreamFailure(model, caller, startedAt, err instanceof Error ? err.message : String(err));
-        throw err;
+        // Another account may take the turn only while nothing was shown.
+        throw produced ? err : asSessionError(err, route.accountId);
       }
     } finally {
       opts.signal?.removeEventListener("abort", onAbort);
@@ -618,9 +634,8 @@ export class ChatClaudeCodeProvider {
       throw err;
     }
     if (authFailed) {
-      const message = "claude_code: OAuth authentication failed. Run `claude login` to refresh credentials.";
-      recordStreamFailure(model, caller, startedAt, message);
-      throw new Error(message);
+      recordStreamFailure(model, caller, startedAt, AUTH_FAILED_MESSAGE);
+      throw produced ? new Error(AUTH_FAILED_MESSAGE) : new ClaudeAccountSessionError(AUTH_FAILED_MESSAGE, route.accountId);
     }
 
     // One row per model: a turn on Opus can still spend Haiku tokens.
@@ -698,7 +713,7 @@ export class ChatClaudeCodeProvider {
   }
 
   /** Strip API keys + redirect HOME for OAuth, same as agent executor. */
-  private buildChildEnv(): Record<string, string | undefined> {
+  private buildChildEnv(accountId: string | undefined = this.cfg.accountId): Record<string, string | undefined> {
     const childEnv: Record<string, string | undefined> = {
       ...process.env,
       CLAUDE_AGENT_SDK_CLIENT_APP: "kernl-chat/0.1",
@@ -710,7 +725,13 @@ export class ChatClaudeCodeProvider {
     // $HOME is the image layer, so a `--force-recreate` threw the login away and
     // every LLM feature started failing with "Not logged in". Assigned last so
     // it also wins over the HOST_HOME redirect above.
-    Object.assign(childEnv, claudeAuthEnv({ oauthToken: this.cfg.oauthToken, accountId: this.cfg.accountId }));
+    Object.assign(childEnv, claudeAuthEnv({ oauthToken: this.cfg.oauthToken, accountId }));
+    // A token inherited from the environment is the primary's subscription:
+    // left in place it would run a "rotated" turn on the primary anyway.
+    const pasted = (this.cfg.oauthToken ?? "").trim().length > 0;
+    if (accountId !== undefined && accountId !== primaryClaudeAccountId(process.env, pasted)) {
+      childEnv.CLAUDE_CODE_OAUTH_TOKEN = undefined;
+    }
     return childEnv;
   }
 
@@ -751,6 +772,15 @@ function logToolIgnoredOnce(): void {
   log.warn(
     `claude_code provider: kernel tools are ignored in single-shot mode. Use chatCompletionStream() for full SDK loop.`,
   );
+}
+
+const AUTH_FAILED_MESSAGE = "claude_code: OAuth authentication failed. Run `claude login` to refresh credentials.";
+const DEAD_SESSION = /failed to authenticate|oauth session expired|could not be refreshed|not logged in/i;
+
+/** A thrown dead-session error becomes one the account rotation can move past. */
+function asSessionError(err: unknown, accountId: string): unknown {
+  const message = err instanceof Error ? err.message : String(err);
+  return DEAD_SESSION.test(message) ? new ClaudeAccountSessionError(message, accountId) : err;
 }
 
 function recordStreamFailure(model: string, caller: string, startedAt: number, message: string): void {

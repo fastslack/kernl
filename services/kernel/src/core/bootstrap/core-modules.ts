@@ -36,6 +36,11 @@ import { createMcpPlansModule } from "../../modules/mcp-plans/index.js";
 import { createToolMemoryModule, type ToolMemoryModule } from "../../modules/tool-memory/index.js";
 import { createBenchModule } from "../../modules/bench/index.js";
 import { createBrainModule } from "../../modules/brain/index.js";
+import { createProvenanceModule } from "../../modules/provenance/index.js";
+import { createGraphQueryModule } from "../../modules/graph-query/index.js";
+import { createPlacesModule } from "../../modules/places/index.js";
+import { createGraphAnalyticsModule } from "../../modules/graph-analytics/index.js";
+import { createOfficePacksModule } from "../../modules/office-packs/index.js";
 import { createStorageModule } from "../../modules/storage/index.js";
 import { createExtensionsModule, type ExtensionsModuleHandle } from "../../modules/extensions/index.js";
 import { createStoreModule } from "../../modules/store/index.js";
@@ -169,6 +174,14 @@ export async function initCoreModules(args: {
   // backfill never runs unsupervised; tools work regardless.
   registry.register(createBrainModule(() => embeddingsPromise));
 
+  // ── Provenance (who changed what: every writing tool call and the ids it touched) ──
+  registry.register(createProvenanceModule());
+
+  // ── Graph query (agents read the graph: schema, checked read-only Cypher, plain-word questions) ──
+  registry.register(createGraphQueryModule());
+  registry.register(createPlacesModule());
+  registry.register(createGraphAnalyticsModule());
+
   // ── MCP Plans (mesh-aware dispatcher) ──
   registry.register(createMcpPlansModule({
     getCatalog: () => metaCatalogSlot.value(),
@@ -254,6 +267,11 @@ export async function initCoreModules(args: {
   // Office panels: declared views and actions of an office, shown in the 3D world.
   const panelsModule = createPanelsModule();
   registry.register(panelsModule);
+  // Office knowledge packs: export an office's lessons, import others' through review.
+  registry.register(createOfficePacksModule(() => {
+    const svc = agentsModule.getService();
+    return svc ? (input) => svc.addLearning({ ...input, source: "office-pack" }) : null;
+  }));
   // Office environments moved to the paid DevOps extension. The shared
   // container an office's agents run commands in is a DevOps capability, not a
   // base-install one; that extension registers it behind `pro:devops`, so an
@@ -340,7 +358,7 @@ export async function initCoreModules(args: {
       const e = p as { agent_id: string; project_id: string | null; note: string };
       if (!e.agent_id) return;
       agentsModule.getService()?.addLearning({
-        agent_id: e.agent_id, type: "avoid", content: `Rejected draft: ${e.note}`, confidence: 0.7, project_id: e.project_id ?? undefined,
+        agent_id: e.agent_id, type: "avoid", content: `Rejected draft: ${e.note}`, confidence: 0.7, project_id: e.project_id ?? undefined, source: "outbox",
       });
     });
     // A bundle reinstall replaces an office agent's schedules → re-clone.

@@ -38,6 +38,7 @@ export function createTasksModule(): TasksModule {
 
     tools: (s) => taskTools(s.service),
     rpc: (s) => tasksRpcActions(s.service, s.events),
+    graphBackfill: (s) => ({ name: "tasks", version: 1, order: 10, run: (g) => s.service.graphBackfill(g) }),
 
     dashboard: (s) => ({
       channels: [{ name: "tasks", query: (db) => queryTasks(db) }],

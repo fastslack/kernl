@@ -18,12 +18,15 @@ import { workspaceSpecTools } from "./workspace-spec-tools.js";
 import { QuestionTriager } from "./question-triager.js";
 import { UnattendedAskWatcher } from "./unattended-asks.js";
 import { llm } from "../../core/llm/client.js";
-import { AnswerQueue } from "./question-delivery.js";
+import { AnswerQueue, answerByPrecedent } from "./question-delivery.js";
 import { KernlBugService } from "./kernl-bugs-service.js";
 import { kernlBugTools } from "./kernl-bugs-tools.js";
 import { commentOnRepeat } from "./kernl-bugs-github.js";
 import { auditHostPaths } from "./host-path-audit.js";
 import { agentsTools } from "./tools.js";
+import { AgentExperienceGraph } from "./services/experience-graph.js";
+import { DecisionGraph } from "./services/decision-graph.js";
+import type { GraphDriver } from "../../core/db-drivers/graph-driver.js";
 import { auditTools } from "./audit-tools.js";
 import { createAnalysisResourceProvider, createSkillResourceProvider } from "./resources.js";
 import { log } from "../../core/logger.js";
@@ -106,6 +109,13 @@ export function createAgentsModule(): AgentsModule {
   let answerSweepTimer: ReturnType<typeof setTimeout> | null = null;
   let kernlBugs: KernlBugService | null = null;
   let hostPathAuditTimer: ReturnType<typeof setTimeout> | null = null;
+  let experienceSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  let experienceSyncHandler: ((payload: unknown) => void) | null = null;
+  let evalFailingHandler: ((payload: unknown) => void) | null = null;
+  let eventsRef: ModuleContext["events"] | null = null;
+  let decisionGraph: DecisionGraph | null = null;
+  let decisionSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  const decisionSyncHandlers: Array<[string, (p: unknown) => void]> = [];
 
   // Advanced-capability slots — populated when `ext:agent-advanced` registers.
   const altExecutors = new Map<string, AltExecutorLike>();
@@ -133,6 +143,63 @@ export function createAgentsModule(): AgentsModule {
       runMigrations(ctx.sqlite, "agents", agentsMigrations);
 
       agentService = new AgentService(ctx.sqlite, ctx.events, ctx.config);
+
+      // Shared experience graph: runs, tools and learnings projected into the
+      // active graph driver so one agent's learnings can reach the others. The
+      // db drivers start after core modules initialize, so the first sync is
+      // deferred; after that, every finished run brings the graph up to date
+      // (coalesced, since offices finish runs in bursts).
+      if (ctx.config.agents?.sharedLearnings !== false) {
+        const service = agentService;
+        const experience = new AgentExperienceGraph(
+          ctx.sqlite,
+          () => ctx.graph,
+          () => service.getEmbeddingsClient()?.model ?? null,
+        );
+        service.setExperienceGraph(experience);
+        const scheduleSync = (delayMs: number) => {
+          if (experienceSyncTimer) return;
+          experienceSyncTimer = setTimeout(() => {
+            experienceSyncTimer = null;
+            experience
+              .sync()
+              .then(() => {
+                // An embedded graph loading a large store can still be coming
+                // up; try again rather than wait for the next finished run.
+                if (!experience.available) scheduleSync(30_000);
+              })
+              .catch((err) =>
+                log.warn(`Agent experience graph: sync failed — ${err instanceof Error ? err.message : String(err)}`),
+              );
+          }, delayMs);
+          experienceSyncTimer.unref?.();
+        };
+        experienceSyncHandler = () => scheduleSync(5_000);
+        eventsRef = ctx.events;
+        ctx.events.on("agent:flow:run_completed", experienceSyncHandler);
+        scheduleSync(15_000);
+      }
+
+      // Self-evaluation is where learnings come from; when it keeps failing,
+      // agents silently stop learning. Tell the user on their channels.
+      evalFailingHandler = (payload: unknown) => {
+        const p = (payload ?? {}) as { streak?: number; last_error?: string };
+        const es = ctx.config.language !== "en";
+        ctx.notifier
+          .send({
+            title: es
+              ? "Kernl: la autoevaluación de agentes está fallando"
+              : "Kernl: agent self-evaluation is failing",
+            body: es
+              ? `${p.streak ?? "Varios"} intentos seguidos fallaron, así que los agentes no están aprendiendo. Último error: ${p.last_error ?? "desconocido"}. Revisá el proveedor de AGENTS_EVAL_PROVIDER.`
+              : `${p.streak ?? "Several"} attempts in a row failed, so agents are not learning. Last error: ${p.last_error ?? "unknown"}. Check the AGENTS_EVAL_PROVIDER provider.`,
+            priority: "high",
+            source: "agents",
+          })
+          .catch((err: unknown) => log.warn(`Eval-failing notification not sent: ${String(err)}`));
+      };
+      eventsRef = ctx.events;
+      ctx.events.on("agent:eval:failing", evalFailingHandler);
       // Offices that predate lots (migration 50) get theirs now, biggest first.
       try {
         agentService.syncLots();
@@ -178,6 +245,39 @@ export function createAgentsModule(): AgentsModule {
       // Office agents' questions reach the chief in batches; see question-triager.ts.
       questionTriager = new QuestionTriager(agentService, agentExecutor, ctx.events);
       questionTriager.start();
+
+      // A category the office put on `auto` is answered by its precedent while
+      // the precedent's measured precision holds (decisions-service.ts).
+      {
+        const service = agentService;
+        const executor = agentExecutor;
+        service.setAutoAnswer((q, s) => answerByPrecedent(service, executor, ctx.events, q, s));
+      }
+
+      // Questions, decisions, subjects and environment facts in the graph
+      // (decision-graph.ts): brought up to date a few seconds after each change.
+      {
+        const dg = new DecisionGraph(ctx.sqlite, () => ctx.graph);
+        decisionGraph = dg;
+        agentService.setDecisionGraph(dg);
+        const schedule = (delayMs: number) => {
+          if (decisionSyncTimer) return;
+          decisionSyncTimer = setTimeout(() => {
+            decisionSyncTimer = null;
+            dg.sync()
+              .then((n) => { if (n >= 2000) schedule(1_000); })
+              .catch((err) => log.debug(`decision graph: sync failed — ${err instanceof Error ? err.message : String(err)}`));
+          }, delayMs);
+          decisionSyncTimer.unref?.();
+        };
+        for (const name of ["agent:question_asked", "agent:question_triage", "agent:question_resolved", "agent:question_owed", "agent:env_fact_closed"]) {
+          const fn = () => schedule(3_000);
+          decisionSyncHandlers.push([name, fn]);
+          ctx.events.on(name as never, fn as never);
+        }
+        eventsRef = ctx.events;
+        schedule(20_000);
+      }
 
       // Answers filed while the asker was busy: relaunch it once its run ends,
       // with all of them. The sweep picks up the ones already waiting, after
@@ -364,8 +464,18 @@ export function createAgentsModule(): AgentsModule {
       };
     },
 
+    getGraphBackfill() {
+      const dg = decisionGraph;
+      return dg ? { name: "decisions", version: 1, order: 60, run: (g: GraphDriver) => dg.backfill(g) } : undefined;
+    },
+
     async shutdown() {
+      if (decisionSyncTimer) clearTimeout(decisionSyncTimer);
+      for (const [name, fn] of decisionSyncHandlers) eventsRef?.off(name as never, fn as never);
       if (hostPathAuditTimer) clearTimeout(hostPathAuditTimer);
+      if (experienceSyncTimer) clearTimeout(experienceSyncTimer);
+      if (experienceSyncHandler) eventsRef?.off("agent:flow:run_completed", experienceSyncHandler);
+      if (evalFailingHandler) eventsRef?.off("agent:eval:failing", evalFailingHandler);
       agentScheduler?.stop();
       questionTriager?.stop();
       answerQueue?.stop();

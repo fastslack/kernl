@@ -106,6 +106,11 @@ export interface OutboxChannelHandler {
   refHint?: string;
   /** false: an internal channel (a task the operator applies by hand) — no linked account is needed. */
   needsAccount?: boolean;
+  /**
+   * What makes two drafts the same request (a publish: its repo and branch). While one with the same key waits in the
+   * same project, proposing another is refused with the id of the one that waits. null/absent: never deduplicated.
+   */
+  dedupeKey?(payload: unknown): string | null;
 }
 
 /** What an extension's policy says about a fresh draft. `auto` approves it on the normal path. */

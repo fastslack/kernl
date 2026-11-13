@@ -63,6 +63,22 @@ process.on("SIGINT", () => {
   // Let the bootstrap shutdown handlers take over
 });
 
+// ── One-off internal tasks ────────────────────────────────────
+//
+// The kernel can re-run itself as a short-lived child for work that must not
+// share its process — today, moving a single-file graph store into a
+// directory store (core/db-drivers/builtins/relate-graph-driver.ts), and
+// copying a Neo4j graph into Relate on upgrade.
+if (process.env.KERNL_INTERNAL_TASK === "relate-store-migration") {
+  const { runStoreMigrationTask } = await import("../src/core/db-drivers/builtins/relate-graph-driver.js");
+  await runStoreMigrationTask();
+}
+// Copying a Neo4j graph into a new Relate store (the 0.5.0 upgrade, core/graph-upgrade.ts).
+if (process.env.KERNL_INTERNAL_TASK === "neo4j-import") {
+  const { runNeo4jImportTask } = await import("../src/core/db-drivers/builtins/neo4j-to-relate.js");
+  await runNeo4jImportTask();
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────
 
 bootstrap().catch((err) => {

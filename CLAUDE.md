@@ -4,7 +4,7 @@
 <stack>
 - **Runtime**: Node.js >=20, ESM (`"type": "module"`)
 - **Language**: TypeScript (strict), target ES2022, moduleResolution Node16
-- **Databases**: better-sqlite3 (primary), Neo4j 5.x + GDS (graph, graceful degradation) — via Docker Compose
+- **Databases**: SQLite (primary), graph built in via Relate (embedded Cypher, a `data/graph` directory store); Neo4j 5.x + GDS optional (`docker-compose.neo4j.yml`)
 - **Protocol**: MCP (Model Context Protocol) via `@modelcontextprotocol/sdk` — dual transport: stdio + Streamable HTTP
 - **Validation**: Zod schemas (converted to JSON Schema for MCP via `zodToJsonSchema()`)
 - **Testing**: vitest (in-memory SQLite, Neo4j unavailable by default)
@@ -76,23 +76,45 @@ Same pattern used in many other tables (communications, events, etc.)
 **Google sync source column:**
 `source` column lives in `google_sync_map` table, NOT in `contacts` — join via `local_id = contacts.id`.
 
-**Neo4j is Kernl's own, and it starts empty:**
-The stack brings up a dedicated Neo4j (`kernl-public-neo4j`) that holds nothing
-but Kernl's data. It is *not* shared with any other dataset — an earlier version
-of this file claimed it shared a database with a SNOMED CT medical ontology and
-that every query had to filter Kernl nodes; that belonged to a different
-project's stack and never applied here.
+**The graph is built in; Neo4j is optional:**
+A fresh install starts on the `relate` driver (embedded, a file next to the
+SQLite database) whenever the Relate client is present — the desktop payload and
+the Docker image ship it. The default compose has no Neo4j; add
+`docker-compose.neo4j.yml` for Graph Data Science (scripts/kernl.sh adds it on
+its own when a `neo4j-data` volume already exists). The kernel dials no Neo4j
+unless `NEO4J_URI` is set. Either graph holds only Kernl's data — it is not
+shared with any other dataset.
 
 Still label your queries (`MATCH (c:CinemaTitle)`, not `MATCH (n)`) — that is
 ordinary hygiene on a graph that grows, not a workaround for foreign data.
 
 **Graph capabilities are probed, not assumed:**
-GDS ships via `NEO4J_PLUGINS` in the compose file, and vector similarity comes
+GDS ships via `NEO4J_PLUGINS` in docker-compose.neo4j.yml, and vector similarity comes
 from the core product (`vector.similarity.cosine`, native since 5.13) — the two
 are independent, so check the capability you actually need. If no graph driver
 config is stored, the Neo4j driver falls back to `NEO4J_URI`/`NEO4J_USER`/
 `NEO4J_PASSWORD`. Exactly one graph driver carries `status='active'`; if it is
 `noop`, `capabilities.cypher` is false and every graph write silently no-ops.
+
+**Relate, the default graph (driver `relate`):**
+`core/db-drivers/builtins/relate-graph-driver.ts` runs the same Cypher in-process
+against a directory store (`data/graph` by default, `RELATE_DATABASE` to override;
+an older default `graph.rl` file is moved there once, in a child process). The
+graph lives in memory, uncapped unless a limit is chosen: `RELATE_LOGICAL_GRAPH_SIZE_LIMIT`
+(the operator's, wins) or the driver's `memoryLimit` setting. The engine reads the
+real environment, which a Bun `process.env` assignment does not reach — the driver
+sets it through libc (`setProcessEnv`).
+It has no GDS, so `gds`
+and `mlPipelines` stay false — gate GDS work on those, never on `cypher`. The
+client `@relate/relate` is a kernel dependency (pinned in package.json and both
+lockfiles); `RELATE_CLIENT_MODULE` points at another copy. Every Cypher statement
+is planned against it in tests/cypher-corpus.test.ts — keep that green. Modules
+that project rows into the graph offer `getGraphBackfill()` so existing data
+reaches a new store (core/graph-backfill.ts). Write Cypher that runs on both: no
+`apoc.*`, no options map on `db.index.fulltext.queryNodes` (use `LIMIT`), and
+read counts with `Number(v)` or `.toNumber()` — the driver returns
+neo4j-style integers. `scripts/relate-migrate.sh` copies a Neo4j graph into a
+store; vector and full-text indexes are recreated by the kernel on start.
 
 **LifeService created in bootstrap:**
 `LifeService` is created in `bootstrap()` (services/kernel/src/index.ts), not inside a module — passed to `registerDashboardRoutes()`.
@@ -125,8 +147,8 @@ Use `/arch` to discover modules, tools, API routes, and project structure.
 <docker-compose>
 | Service | Host Port | URL |
 |---------|-----------|-----|
-| Neo4j Browser | **17474** | `http://localhost:17474` |
-| Neo4j Bolt | **17687** | `bolt://localhost:17687` |
+| Neo4j Browser (optional, docker-compose.neo4j.yml) | **17474** | `http://localhost:17474` |
+| Neo4j Bolt (optional) | **17687** | `bolt://localhost:17687` |
 | Dashboard/MCP HTTP | **3086** | `http://localhost:3086` |
 
 **Restarting the kernel: one door only.** Restart or recreate the live kernel with `scripts/kernl.sh restart` /

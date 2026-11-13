@@ -17,3 +17,4 @@ export { coinTrail, type CoinTrailOpts } from './coin-trail.js';
 export { priceLine, type PriceLineOpts } from './price-line.js';
 export { chyronLabel, type ChyronLabelOpts } from './chyron-label.js';
 export { createNoteStack, type NoteStack, type NoteStackOpts } from './desk-note.js';
+export { lessonThread, lessonArcPoint, type LessonThreadOpts } from './lesson-thread.js';

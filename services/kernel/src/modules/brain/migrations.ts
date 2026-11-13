@@ -46,4 +46,45 @@ export const brainMigrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_brain_signals_item ON brain_signals(item_id);
     `,
   },
+  {
+    // Facts with two timelines: when each was true in the world (valid_from,
+    // valid_to) and when Kernl knew it (recorded_at, superseded_at). See facts.ts.
+    version: 2,
+    sql: `
+      CREATE TABLE IF NOT EXISTS facts (
+        id             TEXT PRIMARY KEY,
+        subject        TEXT NOT NULL,
+        subject_name   TEXT NOT NULL DEFAULT '',
+        predicate      TEXT NOT NULL,
+        object         TEXT NOT NULL,
+        multi          INTEGER NOT NULL DEFAULT 0,
+        confidence     REAL NOT NULL DEFAULT 0.8,
+        source         TEXT NOT NULL DEFAULT '',
+        source_ref     TEXT NOT NULL DEFAULT '',
+        valid_from     TEXT NOT NULL,
+        valid_to       TEXT,
+        ended_by       TEXT,
+        recorded_at    TEXT NOT NULL,
+        superseded_at  TEXT,
+        superseded_by  TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_facts_subject ON facts(subject, predicate);
+      CREATE INDEX IF NOT EXISTS idx_facts_current ON facts(subject, predicate) WHERE valid_to IS NULL AND superseded_at IS NULL;
+    `,
+  },
+  {
+    // When Kernl learned that a fact had ended. valid_to is world time and is
+    // set after the fact; without this, "what did Kernl believe on date K"
+    // already saw endings it only learned later. Rows ended before this
+    // column existed: the recording of the value that ended them, else the
+    // end itself (the best that is known).
+    version: 3,
+    sql: `
+      ALTER TABLE facts ADD COLUMN ended_at TEXT;
+      UPDATE facts SET ended_at = COALESCE(
+        (SELECT n.recorded_at FROM facts n WHERE n.id = facts.ended_by),
+        valid_to
+      ) WHERE valid_to IS NOT NULL;
+    `,
+  },
 ];

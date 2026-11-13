@@ -55,7 +55,7 @@ describe("detectOperatorAsk", () => {
   });
 });
 
-function fakeService(opts: { run?: AgentRun; agent?: Agent; steps?: string[]; open?: Partial<AgentQuestion>[] } = {}) {
+function fakeService(opts: { run?: AgentRun; agent?: Agent; steps?: string[]; open?: Partial<AgentQuestion>[]; drafts?: string[] } = {}) {
   const created: Array<{ question: string; run_id?: string; from_agent_id: string; options: Array<{ label: string }> }> = [];
   const svc: UnattendedAskService = {
     getRun: () => opts.run ?? run(),
@@ -63,6 +63,7 @@ function fakeService(opts: { run?: AgentRun; agent?: Agent; steps?: string[]; op
     getSteps: () => (opts.steps ?? []).map((tool_name) => ({ tool_name })),
     listQuestions: (o) => (opts.open ?? []).filter((q) => q.status === o?.status) as AgentQuestion[],
     createQuestion: (q) => { created.push(q); return { id: `q${created.length}`, status: "triage" }; },
+    pendingDrafts: () => opts.drafts ?? [],
   };
   return { svc, created };
 }
@@ -94,6 +95,24 @@ describe("UnattendedAskWatcher", () => {
       expect(created).toEqual([]);
     }
     expect(calls).toBe(0);
+  });
+
+  // 08/11: a Lead's report said «waits for the click in Publicar» and the watcher asked the operator «do you publish
+  // draft 7c1bca49?» — a draft in Approvals already is the question.
+  it("a run that proposed a draft for approval already put it before the operator", async () => {
+    let calls = 0;
+    const { svc, created } = fakeService({ steps: ["mcp__mtw-kernel__kernel_outbox_propose"] });
+    expect(await new UnattendedAskWatcher(svc, new EventBus(), async () => { calls++; return YES; }).check("r1")).toBeNull();
+    expect(created).toEqual([]);
+    expect(calls).toBe(0);
+  });
+
+  it("the model is told which of the agent's drafts already wait in Approvals", async () => {
+    let seen = "";
+    const { svc } = fakeService({ drafts: ["Publicar office/search-console-sitemap"] });
+    await new UnattendedAskWatcher(svc, new EventBus(), async (o: { user: string; system: string }) => { seen = o.system + o.user; return { needs_operator: false }; }).check("r1");
+    expect(seen).toContain("- Publicar office/search-console-sitemap");
+    expect(seen).toMatch(/WAITING IN APPROVALS/);
   });
 
   it("does not file what the model says needs nothing, nor the same open question twice", async () => {

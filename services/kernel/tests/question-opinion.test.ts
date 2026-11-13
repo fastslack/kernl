@@ -13,6 +13,7 @@ const q: AgentQuestion = {
   status: "pending", selected_option: "", selected_index: -1, answered_note: "", answered_at: null,
   answered_by: "", chief_note: "Es una decisión de privacidad", triage_started_at: null, created_at: "2026-10-14T03:00:00Z",
   opinion_status: "", opinion_run_id: "", opinion: null, opinion_error: "", opinion_at: null, owed_at: null, reminded_at: null, for_operator: false,
+  subject_key: "web#2595", category: "", answered_via: "", answered_actor: "",
 };
 
 describe("buildInvestigationGoal", () => {

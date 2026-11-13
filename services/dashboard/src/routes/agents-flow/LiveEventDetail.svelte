@@ -8,6 +8,7 @@
   import CopyTextBtn from '$lib/components/CopyTextBtn.svelte';
   import { formatRunOutput } from '$lib/run-format.js';
   import type { LiveEventDetail, DetailTone } from '$lib/live-event-detail.js';
+  import LessonImpact from './LessonImpact.svelte';
 
   export let detail: LiveEventDetail;
   /** UUID chips inside rendered markdown open the entity preview. */
@@ -89,6 +90,9 @@
         <span>{s.body}</span>
       </p>
     {/if}
+  {/each}
+  {#each detail.lessonIds ?? [] as lid (lid)}
+    <LessonImpact id={lid} />
   {/each}
 </div>
 

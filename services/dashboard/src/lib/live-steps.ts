@@ -39,6 +39,8 @@ export function liveStepIcon(type: string): string {
     case 'auto_eval': return '📝';
     case 'learning_created': return '💡';
     case 'learning_deactivated': return '🗑️';
+    case 'learning_recalled': return '🧵';
+    case 'learning_reinforced': return '📈';
     case 'chain_triggered': return '🔗';
     case 'run_started': return '▶';
     case 'run_completed': return '✅';
@@ -61,6 +63,8 @@ export function liveStepLabel(type: string): string {
     case 'auto_eval': return 'self-eval';
     case 'learning_created': return 'lesson learned';
     case 'learning_deactivated': return 'lesson dropped';
+    case 'learning_recalled': return 'lessons recalled';
+    case 'learning_reinforced': return 'lessons reinforced';
     case 'chain_triggered': return 'handoff';
     case 'run_started': return 'run started';
     case 'run_completed': return 'run completed';
@@ -125,6 +129,18 @@ export function liveEventSummary(e: AgentFlowEvent): string {
     return `Self-graded ${score}/5 — ${String(e.data.outcome ?? '')}`;
   }
   if (t === 'learning_created') return `Lesson learned: ${String(e.data.content ?? '')}`;
+  if (t === 'learning_recalled') {
+    const items = Array.isArray(e.data.items) ? (e.data.items as Array<{ source_agent_name?: unknown }>) : [];
+    const from = [...new Set(items.map((i) => String(i.source_agent_name ?? '')).filter(Boolean))].join(', ');
+    return `Recalled ${items.length} ${items.length === 1 ? 'lesson' : 'lessons'}${from ? ` from ${from}` : ''}`;
+  }
+  if (t === 'learning_reinforced') {
+    const items = Array.isArray(e.data.items) ? (e.data.items as Array<{ delta?: unknown }>) : [];
+    const up = items.filter((i) => Number(i.delta ?? 0) > 0).length;
+    const down = items.filter((i) => Number(i.delta ?? 0) < 0).length;
+    return [up ? `${up} ${up === 1 ? 'lesson' : 'lessons'} gained confidence` : '', down ? `${down} lost confidence` : '']
+      .filter(Boolean).join(' · ') || 'Lessons unchanged';
+  }
   if (t === 'learning_deactivated') {
     const retired = Array.isArray(e.data.learnings) ? (e.data.learnings as Array<{ content?: unknown }>) : [];
     const n = Number(e.data.count ?? retired.length) || retired.length;

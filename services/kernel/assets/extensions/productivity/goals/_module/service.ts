@@ -1,4 +1,4 @@
-import { type SqliteDb, type GraphDriver, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, type GraphDriver, unwindInBatches, newId, isoNow } from "@kernl/extension-sdk";
 import type { Goal, KeyResult, GoalType, GoalStatus } from "./types.js";
 
 export class GoalsService {
@@ -6,6 +6,31 @@ export class GoalsService {
     private db: SqliteDb,
     private getGraph: () => GraphDriver | null,
   ) {}
+
+  /** Graph backfill: Goal nodes and the ACHIEVED_BY edges key results draw to their tasks. */
+  async graphBackfill(graph: GraphDriver): Promise<{ nodes: number; relationships: number }> {
+    const goals = this.db
+      .prepare("SELECT id, title, type, status FROM goals")
+      .all() as Array<Record<string, unknown>>;
+    const nodes = await unwindInBatches(
+      graph,
+      `UNWIND $rows AS row
+       MERGE (g:Goal {id: row.id})
+       SET g.title = row.title, g.type = row.type, g.status = row.status`,
+      goals,
+    );
+    const links = this.db
+      .prepare("SELECT DISTINCT goal_id, task_id FROM key_results WHERE task_id IS NOT NULL AND task_id <> ''")
+      .all() as Array<Record<string, unknown>>;
+    const relationships = await unwindInBatches(
+      graph,
+      `UNWIND $rows AS row
+       MATCH (g:Goal {id: row.goal_id}), (t:Task {id: row.task_id})
+       MERGE (g)-[:ACHIEVED_BY]->(t)`,
+      links,
+    );
+    return { nodes, relationships };
+  }
 
   // ── Goals ────────────────────────────────────────
 

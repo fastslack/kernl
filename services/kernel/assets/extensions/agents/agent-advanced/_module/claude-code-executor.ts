@@ -263,12 +263,17 @@ function isLocalMcpUrl(raw: string): boolean {
   }
 }
 
-function resolveKernelMcpUrl(port?: number): string {
+export function resolveKernelMcpUrl(port?: number): string {
   // The kernel serves /mcp on its own HTTP port (config.dashboard.port), which
   // is 3086 in the native packages — the old hard-coded 3087 only matched the
   // container. 127.0.0.1 rather than localhost: on Windows localhost can
   // resolve to ::1 first while the kernel listens on IPv4.
-  const fallback = `http://127.0.0.1:${port ?? 3087}/mcp`;
+  // Without an explicit port, the one this kernel listens on: DASHBOARD_PORT,
+  // else 3086, as config.dashboard.port reads it (Docker sets DASHBOARD_PORT).
+  // A bare 3087 sent the agents of a kernel on 3086 (or a demo on 3187) to
+  // whatever else held 3087 — on one machine, an SSH tunnel to another Kernl.
+  const own = Number.parseInt(process.env.DASHBOARD_PORT ?? "", 10);
+  const fallback = `http://127.0.0.1:${port ?? (Number.isFinite(own) && own > 0 ? own : 3086)}/mcp`;
   const raw = process.env.KERNEL_MCP_URL ?? fallback;
   if (!isLocalMcpUrl(raw)) {
     log.error(`SECURITY: KERNEL_MCP_URL "${raw}" is not a local kernel endpoint. Falling back to ${fallback}.`);

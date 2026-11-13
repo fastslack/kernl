@@ -79,6 +79,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-cer
     && rm /tmp/glab.deb \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Relate (the built-in graph) arrives with the kernel's node_modules: it is a
+# regular dependency (@relate/relate) with a native package per platform.
+
 # Copy built kernel bundle (--chown avoids slow recursive chown)
 COPY --chown=bun:bun --from=kernel-build /build/dist/ ./dist/
 COPY --chown=bun:bun --from=kernel-build /build/node_modules/ ./node_modules/
@@ -107,8 +110,6 @@ ENV MCP_TRANSPORT=http \
     DASHBOARD_ENABLED=true \
     DASHBOARD_PORT=3086 \
     SQLITE_PATH=/app/data/kernel.db \
-    NEO4J_URI=bolt://neo4j:7687 \
-    NEO4J_USER=neo4j \
     LOG_LEVEL=info \
     TIMEZONE=UTC
 

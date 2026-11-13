@@ -14,7 +14,8 @@ description of today.
 
 Kernl is an **MCP server**. It exposes ~290 tools (`kernel_{module}_{action}`)
 over two transports — stdio and Streamable HTTP — backed by SQLite (primary) and
-an optional Neo4j graph. Everything else is a **module** or an **extension** that
+a built-in graph (Relate, an embedded Cypher engine on a file next to the SQLite
+database; Neo4j is an optional alternative). Everything else is a **module** or an **extension** that
 plugs into that core. You almost never touch the core to add a feature; you add a
 module or an extension.
 
@@ -26,7 +27,7 @@ services/kernel/src/core/                → framework: config, logger, DB clien
 services/kernel/src/modules/{name}/      → built-in feature modules (self-contained)
 services/kernel/assets/extensions/{cat}/ → marketplace extensions (loaded at runtime from prebuilt bundles)
 services/dashboard/                      → SvelteKit SPA (separate build, served by nginx)
-services/kernel/tests/                   → bun tests (in-memory SQLite, Neo4j unavailable)
+services/kernel/tests/                   → bun tests (in-memory SQLite; graph via a fake or an in-memory Relate store)
 ```
 
 ## Runtime conventions
@@ -37,8 +38,11 @@ services/kernel/tests/                   → bun tests (in-memory SQLite, Neo4j 
   always integer cents; booleans are `INTEGER 0/1`; deletes are soft
   (`deleted_at`). Several columns are `NOT NULL DEFAULT ''` — check presence with
   `<> ''`, not `IS NOT NULL`.
-- **Neo4j** is optional and degrades gracefully — always guard with
-  `neo4j.available` before graph calls.
+- **The graph** comes from the active graph driver (`ctx.graph`): `relate`
+  (built in, the default), `neo4j` (optional server) or `noop` (graph off).
+  Always guard with `graph?.capabilities.cypher` before graph calls, and gate
+  Graph Data Science work on `capabilities.gds` — only Neo4j has it.
+  `ctx.neo4j` is the deprecated legacy client. See [The graph layer](#the-graph-layer).
 
 ## Extensions vs. modules
 
@@ -106,8 +110,9 @@ Claude Desktop / API clients
   │  │ tasks    │  └──────────┘  │  Slack,...) │ │
   │  │ crm      │                └────────────┘ │
   │  │ reminders│  ┌──────────┐  ┌────────────┐ │
-  │  │ shopping │  │ SQLite   │  │ Neo4j      │ │
-  │  │ home     │  │ (primary)│  │ (optional) │ │
+  │  │ shopping │  │ SQLite   │  │ Graph      │ │
+  │  │ home     │  │ (primary)│  │ (Relate,   │ │
+  │  │          │  │          │  │  built in) │ │
   │  │ events   │  └──────────┘  └────────────┘ │
   │  │ ...      │                               │
   │  └─────────┘  ┌──────────────────────────┐  │
@@ -121,6 +126,116 @@ Claude Desktop / API clients
         v
   Dashboard (SvelteKit SPA on Nginx)
 ```
+
+## The graph layer
+
+Kernl keeps rows in SQLite and relationships in a graph. The graph comes from a
+pluggable **graph driver** (`core/db-drivers/`); exactly one is active, chosen
+in `/extensions`:
+
+| Driver | What it is | Capabilities |
+|---|---|---|
+| `relate` (default) | [Relate](https://relatedb.ai), an embedded Cypher 25 engine running inside the kernel on `data/graph`. No server, no port, no password. | Cypher, vector + full-text indexes. No GDS. |
+| `neo4j` (optional) | A Neo4j 5.x server — `docker-compose.neo4j.yml` adds one. | Cypher, vectors, Graph Data Science. |
+| `noop` | Graph off; graph writes are skipped. | None. |
+
+A fresh install starts on `relate` whenever its client is present (the desktop
+app and the Docker image ship it), or on `neo4j` when `NEO4J_URI` points at a
+server. Seeding never overrides a driver already chosen. The kernel dials no
+Neo4j unless `NEO4J_URI` is set. `scripts/relate-migrate.sh` copies a Neo4j
+graph into a Relate store.
+
+Rules for graph code:
+
+- Write Cypher that runs on both engines: no `apoc.*`, no options map on
+  `db.index.fulltext.queryNodes` (use `LIMIT`), read counts with `Number(v)` or
+  `.toNumber()`.
+- Large vector collections do not belong in the graph: Relate keeps the whole
+  graph in memory. Cinema's 165k title vectors live in SQLite and are searched
+  in-process (`cinema/_module/vector-store.ts`).
+- SQLite stays the source of truth. Graph projections rebuild from it: a module
+  that writes graph nodes offers `getGraphBackfill()`, run once per store
+  (`core/graph-backfill.ts`), and every Cypher statement is planned against
+  Relate in `tests/cypher-corpus.test.ts`.
+- The graph lives in memory; `RELATE_LOGICAL_GRAPH_SIZE_LIMIT` (default 2gib,
+  or "Memory limit" in /extensions) refuses growth past it instead of letting
+  the kernel run out of memory.
+
+### How agents learn
+
+1. Before a run, the system prompt carries the agent's own learnings and —
+   from the **shared experience graph** — learnings of *other* agents that fit
+   the goal: found by vector similarity (full-text when vectors are not
+   comparable), ranked by relevance, confidence, shared tools and shared office.
+   Another agent's learning is third-party text: it reaches the prompt inside
+   `<external trust="untrusted">`, as data rather than instruction, and one the
+   prompt-injection detector flags is left out.
+2. The prompt records which learnings it carried (`agent_run_learnings`).
+3. After the run, an LLM grades it (`AGENTS_EVAL_PROVIDER`) and may extract a
+   new learning. Three failed gradings in a row notify the user.
+4. Grading credits or blames exactly the learnings that run carried; a failure
+   never weakens an `avoid` learning.
+5. The graph syncs incrementally: `(Agent)-[:RAN]->(AgentRun)-[:USED]->(AgentTool)`,
+   `(Agent)-[:LEARNED]->(AgentLearning)-[:DERIVED_FROM]->(AgentRun)`.
+   `USED.errors` counts failed tool results.
+6. The prompt also names the tools the agent is about to use that failed in a
+   good share of recent runs across the fleet, with the last error as external
+   data (`toolFailureWarnings` in `executor/system-prompt.ts`).
+
+### Memory, facts, people and provenance
+
+- **`kernel_brain_ask`** (`modules/brain/ask.ts`) — one question over every
+  memory: brain items, chat messages and memories, agent learnings, current
+  facts and graph entities (full-text index `kernl_entity_text`), each searched
+  by meaning and by words, fused with Reciprocal Rank Fusion and expanded one
+  hop in the graph. Each leg queries vectors with the model that wrote them.
+- **Facts** (`modules/brain/facts.ts`, table `facts`) — subject, predicate,
+  value with two timelines: when it was true (`valid_from`/`valid_to`) and when
+  Kernl believed it (`recorded_at`/`superseded_at`). A new value ends the old
+  one (change) or replaces it (correction); nothing is deleted. Projected as
+  `(:Fact)-[:ABOUT]->(subject)` with `REPLACES` links.
+- **People** (`crm/_module/people.ts`) — `contact_identities` holds every email,
+  phone and handle of a contact; `kernel_crm_duplicates`, `kernel_crm_merge`
+  (repoints every `contact_id` column, facts and graph relationships, keeps a
+  snapshot in `contact_merges`) and `kernel_crm_person_360`.
+- **Provenance** (`modules/provenance/`, table `tool_provenance`) — every tool
+  call that writes, from MCP or a native agent run, with who made it and the
+  ids it touched; `kernel_audit_who_changed`. A run is linked to what it
+  touched: `(:AgentRun)-[:TOUCHED]->(n)`.
+- **Graph queries for agents** (`modules/graph-query/`) — `kernel_graph_schema`,
+  `kernel_graph_query` (read-only, checked by text, by the planner's EXPLAIN and
+  against the schema) and `kernel_graph_ask` (a question → Cypher through the
+  LLM driver, corrected from those errors). The embedded engine cannot cancel a
+  query: one that runs out of time blocks new ones until it ends.
+- **Who sees the graph** (`graph-query/privacy.ts`) — Kernl's agents read all of
+  it. An outside MCP client gets `GRAPH_MCP_ACCESS` (`off`, `schema`, `read`;
+  default `read`) and never the `GRAPH_PRIVATE_LABELS` (default: Email,
+  EmailThread, Memory, Fact, ChatMessage, AgentMemory): hidden from the schema,
+  refused when named, unreachable through unlabeled patterns or the search
+  indexes that cover them, stubbed if they reach a row. The dashboard explorer
+  is the owner's and sees everything.
+- **Scratch graphs and slices** (`graph-query/scratch.ts`) — `kernel_graph_scratch`
+  gives each run a private in-memory graph it may write to; `kernel_graph_slice`
+  copies a checked read of the main graph into it, or returns it as JSON. At
+  most four exist (Relate cannot close a database), wiped when the run ends.
+- **Graph analytics** (`modules/graph-analytics/`) — `kernel_graph_analyze`:
+  PageRank, Louvain communities, components and betweenness, written back as
+  `pageRank`, `communityId`, `componentId`, `betweenness`. On GDS when the graph
+  has it, on a remote GDS when `GDS_REMOTE_URI` is set (only numbered nodes and
+  edges go there), otherwise in TypeScript.
+- **Code graph** (`repos/_module/code-graph.ts`) — a registered repo's git
+  history as `CodeFile`/`CodeAuthor` with `AUTHORED` and `CO_CHANGED`, rebuilt
+  when HEAD moves: `kernel_repos_code_hotspots`, `_code_owners`,
+  `kernel_repos_change_impact`.
+- **Places** (`modules/places/`, table `places`) — where events, trips, hotels
+  and activities are, from map links, by hand, or geocoded when
+  `PLACES_GEOCODER=nominatim` (off by default: it sends addresses out);
+  `(:Place {loc: point})`, `kernel_places_near`.
+- **Office knowledge packs** (`modules/office-packs/`) — an office's lessons as
+  sorted, redacted JSON or Markdown; importing one only stages it, and
+  `kernel_office_pack_review` accepts lessons into `agent_learnings` (confidence
+  capped at 0.6).
+- **Graph explorer** — the dashboard's `/graph`, served by `/api/graph/*`.
 
 ## Module Pattern
 
@@ -172,7 +287,8 @@ Every module receives:
 ```typescript
 interface ModuleContext {
   sqlite: SqliteDb;          // SQLite database
-  neo4j: Neo4jClient;        // Neo4j (check neo4j.available before use)
+  graph: GraphDriver | null; // Active graph driver (live) — guard with graph?.capabilities.cypher
+  neo4j: Neo4jClient;        // @deprecated legacy Neo4j client
   events: EventBus;          // Pub/sub event system
   config: KernelConfig;      // Full configuration
   systemRegistry: SystemRegistry;  // Process/worker tracking
@@ -398,5 +514,9 @@ Run: `bun test` or `npx vitest run`
 | `services/kernel/src/core/http-server.ts` | HTTP server with auth + rate limiting |
 | `services/kernel/src/core/event-bus.ts` | Pub/sub event system |
 | `services/kernel/src/core/db/sqlite.ts` | SQLite connection |
-| `services/kernel/src/core/db/neo4j.ts` | Neo4j client (graceful degradation) |
+| `services/kernel/src/core/db-drivers/graph-driver.ts` | Graph driver contract + capabilities |
+| `services/kernel/src/core/db-drivers/builtins/relate-graph-driver.ts` | Built-in graph (Relate, embedded) |
+| `services/kernel/src/core/db-drivers/builtins/neo4j-graph-driver.ts` | Optional Neo4j server driver |
+| `services/kernel/src/modules/agents/services/experience-graph.ts` | Shared experience graph for agents |
+| `services/kernel/src/core/db/neo4j.ts` | Legacy Neo4j client (deprecated) |
 | `services/kernel/src/core/db/query-helpers.ts` | Shared query utilities (safeGet, safeAll, tableExists) |

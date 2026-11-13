@@ -3,7 +3,7 @@
 #  preflight.sh — check the host BEFORE `docker compose up`.
 #
 #  The public stack's #1 first-impression failure is a silent `docker compose`
-#  abort: a port is already taken, or Neo4j gets OOM-killed on a small host.
+#  abort: a port is already taken, or the host runs out of memory.
 #  This prints clear, actionable guidance up front instead.
 #
 #  Usage:  bash scripts/preflight.sh
@@ -31,8 +31,8 @@ port_in_use() {
 }
 
 hdr "Ports (the public stack needs these free)"
-# 3086 = dashboard (loopback), 7474 = Neo4j HTTP, 7687 = Neo4j Bolt.
-for entry in "3086:dashboard" "7474:Neo4j HTTP" "7687:Neo4j Bolt"; do
+# 3086 = dashboard (loopback). Neo4j is optional (docker-compose.neo4j.yml).
+for entry in "3086:dashboard"; do
   p="${entry%%:*}"; label="${entry#*:}"
   if port_in_use "$p"; then
     bad "port $p ($label) is already in use — stop the other service, or override the mapping in a compose override file."
@@ -42,7 +42,7 @@ for entry in "3086:dashboard" "7474:Neo4j HTTP" "7687:Neo4j Bolt"; do
   fi
 done
 
-hdr "Memory (Neo4j is the heaviest service)"
+hdr "Memory"
 mem_kb=0
 if [ -r /proc/meminfo ]; then
   mem_kb="$(awk '/MemTotal/{print $2}' /proc/meminfo)"
@@ -51,9 +51,9 @@ elif command -v sysctl >/dev/null 2>&1; then
 fi
 mem_gb=$(( mem_kb / 1024 / 1024 ))
 if [ "$mem_kb" -eq 0 ]; then
-  warn "could not detect total RAM — ensure you have ~3 GB free for Neo4j + embeddings."
+  warn "could not detect total RAM — ensure you have ~2 GB free for the kernel + embeddings."
 elif [ "$mem_gb" -lt 3 ]; then
-  warn "only ~${mem_gb} GB RAM detected. Neo4j may be OOM-killed. On a small host, drop the 'neo4j' service from docker-compose.yml (graph features degrade gracefully)."
+  warn "only ~${mem_gb} GB RAM detected. The kernel may be tight on memory; leave docker-compose.neo4j.yml out on a small host."
 else
   ok "~${mem_gb} GB RAM — enough for the full stack."
 fi

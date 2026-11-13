@@ -1,4 +1,4 @@
-import { type SqliteDb, type GraphDriver, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, type GraphDriver, unwindInBatches, newId, isoNow } from "@kernl/extension-sdk";
 import type {
   Category,
   Store,
@@ -13,6 +13,42 @@ export class ShoppingService {
     private db: SqliteDb,
     private getGraph: () => GraphDriver | null,
   ) {}
+
+  /**
+   * Project every category, store and product into the graph, with the
+   * BOUGHT_AT summary the purchases imply — what a store that missed the
+   * live writes would otherwise never see.
+   */
+  async graphBackfill(graph: GraphDriver): Promise<{ nodes: number; relationships: number }> {
+    const rows = (sql: string) => this.db.prepare(sql).all() as Array<Record<string, unknown>>;
+    let nodes = 0;
+    let relationships = 0;
+    nodes += await unwindInBatches(graph, "UNWIND $rows AS row MERGE (c:Category {id: row.id}) SET c.name = row.name",
+      rows("SELECT id, name FROM categories"));
+    nodes += await unwindInBatches(graph, "UNWIND $rows AS row MERGE (s:Store {id: row.id}) SET s.name = row.name, s.location = row.location",
+      rows("SELECT id, name, location FROM stores"));
+    nodes += await unwindInBatches(graph, "UNWIND $rows AS row MERGE (p:Product {id: row.id}) SET p.name = row.name, p.unit = row.unit",
+      rows("SELECT id, name, unit FROM products"));
+    relationships += await unwindInBatches(graph,
+      `UNWIND $rows AS row MATCH (child:Category {id: row.id}), (parent:Category {id: row.parent_id})
+       MERGE (child)-[:CHILD_OF]->(parent)`,
+      rows("SELECT id, parent_id FROM categories WHERE parent_id IS NOT NULL"));
+    relationships += await unwindInBatches(graph,
+      `UNWIND $rows AS row MATCH (p:Product {id: row.id}), (c:Category {id: row.category_id})
+       MERGE (p)-[:IN_CATEGORY]->(c)`,
+      rows("SELECT id, category_id FROM products WHERE category_id IS NOT NULL"));
+    // The latest price and date per product and store, and how often it was bought there.
+    relationships += await unwindInBatches(graph,
+      `UNWIND $rows AS row MATCH (p:Product {id: row.product_id}), (s:Store {id: row.store_id})
+       MERGE (p)-[r:BOUGHT_AT]->(s)
+       SET r.last_price = row.last_price, r.last_date = row.last_date, r.purchase_count = row.purchase_count`,
+      rows(`SELECT product_id, store_id, COUNT(*) AS purchase_count,
+                   (SELECT unit_price FROM purchases q WHERE q.product_id = p.product_id AND q.store_id = p.store_id
+                    ORDER BY purchased_at DESC, created_at DESC LIMIT 1) AS last_price,
+                   MAX(purchased_at) AS last_date
+            FROM purchases p WHERE store_id IS NOT NULL GROUP BY product_id, store_id`));
+    return { nodes, relationships };
+  }
 
   // ── Categories ─────────────────────────────────────────
 

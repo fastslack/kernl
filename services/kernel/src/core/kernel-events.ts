@@ -332,11 +332,34 @@ export interface KernelEvents {
   "agent:flow:learning_created": {
     agent_id: string; agent_name: string; run_id: string;
     learning_id: string; learning_type: string; content: string; confidence: number;
+    /** auto (grading), feedback, tool, outbox, manual. Packs and installs are not announced. */
+    source?: string;
   };
   "agent:flow:learning_deactivated": {
     agent_id: string; agent_name: string; run_id: string; count: number;
-    /** The lessons retired by this run's cleanup. */
+    /** The lessons retired: by this run's grading, by another agent's run, or by the scheduled sweep. */
     learnings: Array<{ id: string; type: string; content: string; confidence: number }>;
+    /** run (default), shared (another agent's run retired it), sweep. */
+    cause?: "run" | "shared" | "sweep";
+    /** For cause=shared: the agent whose run retired it. */
+    by_agent_id?: string;
+  };
+  /** Lessons from other agents put into this run's prompt (shared experience). */
+  "agent:flow:learning_recalled": {
+    agent_id: string; agent_name: string; run_id: string; mode: "vector" | "fulltext";
+    items: Array<{
+      learning_id: string; source_agent_id: string; source_agent_name: string;
+      learning_type: string; content: string; confidence: number;
+      score: number; relevance: number; tool_overlap: number; same_office: boolean;
+    }>;
+  };
+  /** A finished run moved the confidence of the lessons it was given. */
+  "agent:flow:learning_reinforced": {
+    agent_id: string; agent_name: string; run_id: string; outcome: string;
+    items: Array<{
+      learning_id: string; owner_agent_id: string; owner_agent_name: string; shared: boolean;
+      learning_type: string; before: number; after: number; delta: number; deactivated: boolean;
+    }>;
   };
 
   // Chat module

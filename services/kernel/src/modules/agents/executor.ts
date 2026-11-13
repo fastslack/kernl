@@ -217,6 +217,9 @@ function claudeAccessChain(
   return [...own, ...same];
 }
 
+/** Failed grading attempts in a row before the user is told (once per streak). */
+export const EVAL_FAILURE_ALERT_STREAK = 3;
+
 export class AgentExecutor {
   private allTools: ToolDefinition[] = [];
 
@@ -1107,6 +1110,17 @@ export class AgentExecutor {
           agent_name: agent.name,
           run_id: run.id,
         });
+        // Grading that keeps failing means no feedback and no learnings — for
+        // weeks once, behind a warning nobody read. Say so once per streak.
+        const failing = this.evalService.getFailureState?.();
+        if (failing && failing.streak === EVAL_FAILURE_ALERT_STREAK) {
+          events?.emit("agent:eval:failing", {
+            streak: failing.streak,
+            last_error: failing.lastError,
+            agent_id: agent.id,
+            agent_name: agent.name,
+          });
+        }
         return;
       }
 
@@ -1153,18 +1167,11 @@ export class AgentExecutor {
           // A lesson from a project run is that project's until proven
           // general (spec: when in doubt, scope to the project).
           project_id: run.project_id ?? null,
+          // The memory service announces it (agent:flow:learning_created).
+          source: "auto",
+          run_id: run.id,
         });
         learningCreated = { id: l.id, type: l.type, content: evalResult.lesson, confidence: l.confidence };
-
-        events?.emit("agent:flow:learning_created", {
-          agent_id: agent.id,
-          agent_name: agent.name,
-          run_id: run.id,
-          learning_id: l.id,
-          learning_type: l.type,
-          content: evalResult.lesson,
-          confidence: l.confidence,
-        });
       }
 
       // Learnings the cleanup retired (fell below the confidence floor): the

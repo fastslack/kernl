@@ -30,6 +30,7 @@ import type { EventBus } from "../event-bus.js";
 import type { ToolDefinition } from "../types.js";
 import type { ModuleRegistry } from "../module-registry.js";
 import type { DbDriverRegistry } from "../db-drivers/db-driver-registry.js";
+import { scheduleGraphBackfills } from "../graph-backfill.js";
 import type { Notifier } from "../notify/notifier.js";
 import type { EmbeddingsClient } from "../embeddings/index.js";
 import type { NostrRelayPool } from "../nostr/nostr-relay-pool.js";
@@ -330,6 +331,11 @@ export async function wireServices(args: {
         licenseJwt: () => license.jwt(),
       },
     });
+
+    // ── Graph backfill ──────────────────────────────────────────────
+    // Modules project their rows into the graph as they change; whatever
+    // predates the graph (or a fresh store) is filled in once per store.
+    scheduleGraphBackfills(() => registry.allModules(), () => dbRegistry.getGraph());
 
     // ── Agent drivers (plugin-style) ────────────────────────────────
     // Each module/extension publishes complete drivers (handler id +

@@ -1,4 +1,4 @@
-import { type SqliteDb, type GraphDriver, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, type GraphDriver, unwindInBatches, newId, isoNow } from "@kernl/extension-sdk";
 import type { Note } from "./types.js";
 
 /**
@@ -24,6 +24,37 @@ export class NotesService {
     private db: SqliteDb,
     private getGraph: () => GraphDriver | null,
   ) {}
+
+  /** Graph backfill: Note nodes and their RELATES_TO edges to a contact and a task. */
+  async graphBackfill(graph: GraphDriver): Promise<{ nodes: number; relationships: number }> {
+    const notes = this.db
+      .prepare("SELECT id, title, tags, contact_id, task_id FROM notes")
+      .all() as Array<Record<string, unknown>>;
+    const nodes = await unwindInBatches(
+      graph,
+      `UNWIND $rows AS row
+       MERGE (n:Note {id: row.id})
+       SET n.title = row.title, n.tags = row.tags`,
+      notes,
+    );
+    const toPerson = notes.filter((n) => n.contact_id);
+    const toTask = notes.filter((n) => n.task_id);
+    let relationships = await unwindInBatches(
+      graph,
+      `UNWIND $rows AS row
+       MATCH (n:Note {id: row.id}), (p:Person {id: row.contact_id})
+       MERGE (n)-[:RELATES_TO]->(p)`,
+      toPerson,
+    );
+    relationships += await unwindInBatches(
+      graph,
+      `UNWIND $rows AS row
+       MATCH (n:Note {id: row.id}), (t:Task {id: row.task_id})
+       MERGE (n)-[:RELATES_TO]->(t)`,
+      toTask,
+    );
+    return { nodes, relationships };
+  }
 
   create(input: {
     title: string;

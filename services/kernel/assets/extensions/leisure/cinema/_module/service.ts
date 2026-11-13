@@ -17,7 +17,7 @@
 import { cinemaCatalogCap } from "./catalog-cap.js";
 import { type SqliteDb, type PatchColumn, newId, isoNow, buildPatch, jsonArray } from "@kernl/extension-sdk";
 import { rebuildWorks, type RebuildWorksResult } from "./works.js";
-import { isGraphFrozen } from "./graph-state.js";
+import { cinemaVectorStore, type CinemaVectorStore } from "./vector-store.js";
 import type {
   ArchiveScrapeRow,
   CinemaCanonical,
@@ -557,9 +557,9 @@ function posterUrlFor(identifier: string): string {
 export class CinemaService {
   constructor(private db: SqliteDb) {}
 
-  /** Over the graph size ceiling: write nothing new to the graph. */
-  graphFrozen(): boolean {
-    return isGraphFrozen(this.db);
+  /** Where title vectors live (SQLite, searched in-process — see vector-store.ts). */
+  vectorStore(): CinemaVectorStore {
+    return cinemaVectorStore(this.db);
   }
 
   /** Titles the ingester may hold before it parks itself; 0 = no limit. */

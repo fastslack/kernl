@@ -35,6 +35,18 @@ export interface GraphCapabilities {
    * these in the core product, so a server without GDS can still satisfy it.
    */
   vectorSimilarity: boolean;
+  /**
+   * Native `VECTOR` values, vector indexes with filter properties
+   * (`… ON n.embedding WITH [n.x]`) and the `SEARCH` clause — Cypher 25.
+   * Optional: absent means false. Write through `sdk/graph-vectors.ts`.
+   */
+  vectorSearch?: boolean;
+  /**
+   * `SEARCH n IN (FULLTEXT INDEX …)` — Relate's native full-text search, the
+   * successor of `db.index.fulltext.queryNodes` (deprecated there). Optional:
+   * absent means false. Write through `fulltextSearchClause` (sdk/graph-vectors.ts).
+   */
+  fulltextSearch?: boolean;
   /** GDS ML pipelines (nodeClassification, linkPrediction, …). */
   mlPipelines: boolean;
   /** Driver runs in-process — no external server, no separate port. */
@@ -81,6 +93,16 @@ export interface GraphResultSummary {
   counters?: GraphCounters;
   /** Optional execution-time hint (ms). */
   resultAvailableAfterMs?: number;
+  /** The engine's split of that time, when it reports one (Relate: parse, plan, execute). */
+  phasesMs?: { parse: number; plan: number; execute: number };
+  /**
+   * The plan of an EXPLAIN/PROFILE, as the backend gives it: Relate's
+   * `{root: {operator, children, warnings}}` or neo4j-driver's
+   * `{operatorType, children}`. Read it through graph-query/plan.ts.
+   */
+  plan?: unknown;
+  /** Planner notifications (warnings with a code and a description). */
+  notifications?: unknown[];
 }
 
 export interface GraphResult {
@@ -130,6 +152,14 @@ export interface GraphDriver extends BaseDbDriver {
    * that proxies `run()` to the driver and no-ops on `close`.
    */
   withSession<T>(fn: (session: GraphSession) => Promise<T>): Promise<T>;
+
+  /**
+   * Several statements as one transaction: all commit, or none does. `fn`
+   * talks to the graph only through `tx`, and must be safe to run again —
+   * a backend may retry the whole of it after a transient conflict.
+   * Optional: callers fall back to plain `run()` when a driver lacks it.
+   */
+  withTransaction?<T>(fn: (tx: GraphSession) => Promise<T>): Promise<T>;
 
   /** Health snapshot — extends BaseDbDriverStatus with graph capabilities. */
   getStatus(): GraphDriverStatus;

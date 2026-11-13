@@ -49,12 +49,12 @@ const repoSelectorSchema = {
  *
  * An empty string means a human at the dashboard or a kernel-internal call.
  */
-function callerAgentId(args: Record<string, unknown>): string {
+export function callerAgentId(args: Record<string, unknown>): string {
   const injected = typeof args.__caller_agent_id === "string" ? args.__caller_agent_id : "";
   return injected || getRequestContext().callerAgentId || "";
 }
 
-function resolveRepoOrError(
+export function resolveRepoOrError(
   service: RepoService,
   args: { id?: string; name?: string },
   caller = "",

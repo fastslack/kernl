@@ -19,7 +19,7 @@ Open an issue using the [feature request template](https://github.com/fastslack/
 ### Prerequisites
 
 - **Node.js >= 20** or **Bun >= 1.2**
-- **Docker** (optional, for Neo4j graph analytics)
+- **Docker** (optional — for the container stack, or an optional Neo4j for graph analytics)
 - **Git**
 
 ### Setup
@@ -44,15 +44,18 @@ npm run dev        # Start MCP server (stdio mode)
 npm run build      # Compile TypeScript
 ```
 
-### Optional: Neo4j
+### Graph
+
+The graph is built in (Relate, embedded). To work against an optional Neo4j:
 
 ```bash
-docker compose up -d   # Starts Neo4j on bolt://localhost:17687
+docker compose -f docker-compose.yml -f docker-compose.neo4j.yml up -d   # bolt://localhost:17687
 ```
 
 ## Running Tests
 
-Tests use in-memory SQLite and do not require Neo4j.
+Tests use in-memory SQLite and do not require a graph server. Tests that exercise the
+real Relate engine run when `RELATE_CLIENT_MODULE` points at an installed client.
 
 ```bash
 npm test           # or: bun test

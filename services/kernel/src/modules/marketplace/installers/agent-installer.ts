@@ -21,6 +21,7 @@ interface AgentServiceLike {
     type: string;
     content: string;
     confidence?: number;
+    source?: string;
   }): unknown;
   addEventTrigger?(input: {
     agent_id: string;
@@ -67,6 +68,7 @@ export function installAgent(
           type: l.type,
           content: l.content,
           confidence: l.confidence,
+          source: "marketplace",
         });
       }
     }

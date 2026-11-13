@@ -38,8 +38,11 @@ const MUST_BE_OUTBOUND = [
   "kernel_mesh_call_peer_tool", "kernel_mesh_pair_peer",
   "kernel_federation_connect", "kernel_federation_add_peer", "kernel_federation_sync", "kernel_federation_sync_peer",
 ];
-/** Names the regex matches that only talk to the operator, never to the outside. */
-const NOT_OUTBOUND = ["kernel_digest_send_now"];
+/**
+ * Names the regex matches that never reach the outside: they only talk to the
+ * operator, or only write a draft that is published later through the outbox.
+ */
+const NOT_OUTBOUND = ["kernel_digest_send_now", "kernel_growth_community_draft_reply"];
 
 function* tsFiles(dir: string): Generator<string> {
   for (const e of readdirSync(dir)) {

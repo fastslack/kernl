@@ -53,6 +53,11 @@ export interface EvalOutcome {
 
 export interface EvalServiceLike {
   isEnabled(): boolean;
+  /**
+   * Consecutive grading attempts that failed (provider down, auth expired,
+   * unparseable answer) and the last error. Optional for older services.
+   */
+  getFailureState?(): { streak: number; lastError: string };
   evaluate(input: {
     goal: string;
     result: string;

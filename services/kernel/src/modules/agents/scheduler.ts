@@ -57,6 +57,14 @@ export class AgentScheduler {
   start(): void {
     if (this.timer) return;
 
+    // A demo or test kernel that should only do what it is asked: no scheduled
+    // runs (the extensions' pollers, digests, watchers). Manual runs, chains
+    // and triggers still work.
+    if (process.env.AGENTS_SCHEDULER?.trim().toLowerCase() === "off") {
+      log.info("Agent scheduler off (AGENTS_SCHEDULER=off): scheduled runs will not fire");
+      return;
+    }
+
     log.info(`Agent scheduler started (poll every ${this.pollIntervalMs}ms)`);
 
     if (this.systemRegistry) {

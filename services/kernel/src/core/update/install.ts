@@ -242,7 +242,7 @@ async function describe(): Promise<InstallInfo> {
       target: null,
       canApply: false,
       reason: "Kernl is running in a container. The image is what gets updated, not the files inside it.",
-      hint: dockerUpdateHint(await ownComposeLabels()),
+      hint: dockerUpdateHint(await ownComposeLabels(), { neo4j: !!process.env.NEO4J_URI }),
     };
   }
   if (kind === "unknown") {

@@ -32,6 +32,7 @@ import { AgentPromptVersionsService } from "./services/prompt-versions-service.j
 import { AgentSubscriptionsService } from "./services/subscriptions-service.js";
 import { AgentConversationsService } from "./services/conversations-service.js";
 import { AgentMemoryService } from "./services/memory-service.js";
+import type { AgentExperienceGraph } from "./services/experience-graph.js";
 import { AgentFlowsService } from "./services/flows-service.js";
 import { AgentRanksService } from "./services/ranks-service.js";
 import { AgentRunsService } from "./services/runs-service.js";
@@ -39,6 +40,9 @@ import { AgentFeedbackService } from "./services/feedback-service.js";
 import { OfficeTeamError, DISTRIBUTE_CHAIN_LABEL, TOP_RANK_IDS_SQL } from "./office-team.js";
 import { protectedReason, ProtectedAgentError } from "./protected-agents.js";
 import { CLAUDE_ACCESS_WAITING, CLAUDE_LIMIT_WAITING } from "../../sdk/claude-access.js";
+import { DecisionService, type Suggestion } from "./services/decisions-service.js";
+import { EnvFactsService, type EnvFact } from "./services/env-facts-service.js";
+import type { DecisionGraph } from "./services/decision-graph.js";
 
 export type QuestionStatus = "triage" | "pending" | "owed" | "answered" | "dismissed";
 /** task: picking it leaves the operator a task — the question goes to 'owed', not 'answered'. */
@@ -50,7 +54,8 @@ export interface AgentQuestion {
   question: string; context: string; options: QuestionOption[];
   status: QuestionStatus; selected_option: string; selected_index: number;
   answered_note: string; answered_at: string | null;
-  answered_by: "" | "chief" | "human"; chief_note: string; triage_started_at: string | null;
+  /** rule: answered by a precedent, under the office's decision policy (decisions-service.ts). */
+  answered_by: "" | "chief" | "human" | "rule"; chief_note: string; triage_started_at: string | null;
   created_at: string;
   opinion_status: OpinionStatus; opinion_run_id: string;
   /** The parsed QuestionOpinion as stored (question-opinion.ts), or null. */
@@ -58,6 +63,24 @@ export interface AgentQuestion {
   /** When failed: "no_answer" | "unavailable", then ": " and the detail. */
   opinion_error: string; opinion_at: string | null;
   owed_at: string | null; reminded_at: string | null; for_operator: boolean;
+  /** What the question is about, e.g. `web#2653:a-b` (an issue and its part); '' when unknown. */
+  subject_key: string;
+  /** The asker's kind of question, e.g. `approve-mr`, `closer-blocked`; '' when not given. */
+  category: string;
+  /** Channel the answer (or the dismissal) came through, and who sent it — see AnswerSource. */
+  answered_via: string;
+  answered_actor: string;
+}
+
+/** The subject a question names first: `web#2653:a-b`, `api#12`, or '' — the key decisions are filed under. */
+export function subjectKeyOf(text: string): string {
+  const m = /(?<![\w/!#])([a-z][a-z0-9_-]{0,40}#\d{1,7}(?::[\w-]{1,40})?)/i.exec(text);
+  return m ? m[1].toLowerCase() : "";
+}
+
+/** A category is a short slug: lower case, digits and dashes. */
+export function normalizeCategory(c: string | undefined): string {
+  return (c ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
 }
 
 /** Fallback for `config.agents.autoPauseThreshold` when no config is injected. */
@@ -106,13 +129,13 @@ const AGENT_PATCH: Record<string, PatchColumn> = {
  * logic of its own stays written out in the class.
  */
 const DELEGATED = {
-  memory: ["setEmbeddingsClient", "getEmbeddingsClient", "addLearning", "getLearnings", "addMemory", "getMemory", "clearMemory", "getRelevantMemory", "getRelevantMemoryByEmbedding", "findSimilarPastRuns", "findSimilarPastRunsByEmbedding", "getRelevantLearnings", "getRelevantLearningsByEmbedding", "updateLearningConfidence", "deactivateLearning", "getLearningsActiveAt", "reinforceLearningsForRun", "cleanupLowConfidenceLearnings"],
+  memory: ["setEmbeddingsClient", "getEmbeddingsClient", "addLearning", "getLearnings", "addMemory", "getMemory", "clearMemory", "getRelevantMemory", "getRelevantMemoryByEmbedding", "findSimilarPastRuns", "findSimilarPastRunsByEmbedding", "getRelevantLearnings", "getRelevantLearningsByEmbedding", "updateLearningConfidence", "deactivateLearning", "getLearningsActiveAt", "reinforceLearningsForRun", "cleanupLowConfidenceLearnings", "recordInjectedLearnings", "getInjectedLearnings", "getConfidenceHistory", "getConfidenceTimelines"],
   flows: ["createFlow", "ensureOfficeHome", "resolveFlowHome", "getFlowWorkspace", "setFlowWorkspaceSpec", "prepareFlowWorkspace", "setFlowRepo", "listFlows", "getFlow", "updateFlow", "deleteFlow", "setFlowPaused", "isFlowPaused", "isAgentOfficePaused", "assignAgentToFlow", "syncLots"],
   ranks: ["createRank", "listRanks", "getRank", "getTopAgent", "updateRank", "deleteRank", "assignRankToAgent"],
   runs: ["createRun", "getRun", "listRuns", "cancelRun", "cleanupStaleRuns", "recoverStaleRuns", "addStep", "getSteps", "getRunEvents", "saveCheckpoint", "getCheckpoint", "reopenRun", "markCheckpointResumed", "deleteCheckpoint", "getRunConditions", "setRunCondition"],
   triggers: ["addEventTrigger", "listEventTriggers", "getActiveEventTriggers", "removeEventTrigger", "updateTriggerLastFired"],
   schedules: ["addSchedule", "listSchedules", "getDueSchedules", "removeSchedule", "getSchedule", "updateSchedule", "updateScheduleNextRun", "setRunnableSchedulesActive"],
-  feedback: ["addFeedback", "getFeedback"],
+  feedback: ["addFeedback", "getFeedback", "getToolFailures", "getRecentToolsUsed"],
   conversations: ["createConversation", "getConversation", "findOrCreateChatConversation", "listConversations", "closeConversation", "archiveConversation", "archiveClosedConversations", "parseParticipants", "addParticipant", "postMessage", "getMessage", "listMessages", "getDebateCooldown", "recordDebateCooldown", "countRecentAutoDebates"],
   chains: ["addChain", "listChains", "getChainsBySource", "removeChain"],
   eventLog: ["logEvent", "getEventLog", "getEventLogCount", "clearEventLog"],
@@ -161,6 +184,11 @@ export class AgentService {
   setProjectGate(gate: ProjectGateLike | null): void { this.projectGate = gate; }
   getProjectGate(): ProjectGateLike | null { return this.projectGate; }
 
+  /** Shared experience graph (services/experience-graph.ts) — null until the agents module wires it. */
+  private experienceGraph: AgentExperienceGraph | null = null;
+  setExperienceGraph(graph: AgentExperienceGraph | null): void { this.experienceGraph = graph; }
+  getExperienceGraph(): AgentExperienceGraph | null { return this.experienceGraph; }
+
   /** Per-flow say on scheduled slots (SchedulePrecheck). Extensions register theirs on init. */
   private schedulePrechecks = new Map<string, SchedulePrecheck>();
 
@@ -182,6 +210,23 @@ export class AgentService {
     }
   }
 
+  /** Suggestions from past decisions of the same kind, and the policy that may let them answer. */
+  readonly decisions: DecisionService;
+  /** What is broken in each office's environment, and who is waiting on it. */
+  readonly envFacts: EnvFactsService;
+
+  /**
+   * Answers a question by its precedent when the office's policy allows it
+   * (wired by the module: delivering an answer needs the executor). Returns
+   * true when it answered — the operator is then not asked.
+   */
+  private autoAnswer: ((q: AgentQuestion, s: Suggestion) => boolean) | null = null;
+
+  /** The decisions' graph projection (decision-graph.ts), when the module wired one. */
+  decisionGraph: DecisionGraph | null = null;
+  setDecisionGraph(dg: DecisionGraph | null): void { this.decisionGraph = dg; }
+  setAutoAnswer(fn: ((q: AgentQuestion, s: Suggestion) => boolean) | null): void { this.autoAnswer = fn; }
+
   /** Judge for kernel_agents_ask_supervisor: is a new question one already open or recently answered? */
   private questionJudge: QuestionJudge | null = null;
   setQuestionJudge(judge: QuestionJudge | null): void { this.questionJudge = judge; }
@@ -192,6 +237,20 @@ export class AgentService {
    * Looks across the whole office: the same blocker gets asked by every agent
    * it stops, not only by one.
    */
+  /** Titles of an agent's drafts still waiting in Approvals; [] when the outbox is not installed. */
+  pendingDrafts(agentId: string): string[] {
+    try {
+      const rows = this.db.prepare("SELECT channel, payload FROM outbox_items WHERE agent_id = ? AND status = 'draft' ORDER BY created_at DESC LIMIT 20")
+        .all(agentId) as Array<{ channel: string; payload: string }>;
+      return rows.map((r) => {
+        let p: Record<string, unknown> = {};
+        try { p = JSON.parse(r.payload) as Record<string, unknown>; } catch { /* unreadable payload: channel only */ }
+        const what = [p.title, p.subject, p.branch, p.summary, p.text].find((v) => typeof v === "string" && v.trim()) as string | undefined;
+        return `${r.channel}: ${(what ?? "").slice(0, 160)}`;
+      });
+    } catch { return []; }
+  }
+
   async findDuplicateQuestion(input: { from_agent_id: string; flow_id: string; question: string; context?: string }): Promise<AgentQuestion | null> {
     const candidates = this.duplicateCandidates(input.from_agent_id, input.flow_id);
     return findDuplicateQuestion({ question: input.question, context: input.context ?? "" }, candidates, this.questionJudge);
@@ -221,6 +280,8 @@ export class AgentService {
     private config?: KernelConfig,
   ) {
     this.chains = new AgentChainsService(db, events);
+    this.decisions = new DecisionService(db);
+    this.envFacts = new EnvFactsService(db);
     this.eventLog = new AgentEventLogService(db);
     this.evolution = new AgentEvolutionService(db, events);
     this.triggers = new AgentTriggersService(db, events);
@@ -232,7 +293,9 @@ export class AgentService {
       (id) => this.getConversation(id),
     );
     this.conversations = new AgentConversationsService(db, events);
-    this.memory = new AgentMemoryService(db);
+    // Learning events go out on the agents.flow stream (the 3D office, the live log).
+    this.memory = new AgentMemoryService(db, (name, payload) =>
+      (events as unknown as { emit(n: string, p: unknown): void }).emit(name, payload));
     this.flows = new AgentFlowsService(db, events, (id) => this.getAgent(id));
     this.ranks = new AgentRanksService(
       db,
@@ -252,8 +315,8 @@ export class AgentService {
       db,
       events,
       (id) => this.getRun(id),
-      (agentId, runCreatedAt, outcome) =>
-        this.reinforceLearningsForRun(agentId, runCreatedAt, outcome),
+      (agentId, runCreatedAt, outcome, runId) =>
+        this.reinforceLearningsForRun(agentId, runCreatedAt, outcome, runId),
     );
 
     // Bind the pass-through methods listed in DELEGATED (see above).
@@ -1358,9 +1421,14 @@ export class AgentService {
     direct_to_human?: boolean;
     /** Alias of direct_to_human; also stored as for_operator=1. */
     for_operator?: boolean;
+    /** What it is about (`web#2653:a-b`). Taken from the question text when not given. */
+    subject_key?: string;
+    /** The asker's kind of question (`approve-mr`); precedents are matched within one. */
+    category?: string;
   }): { id: string; status: "triage" | "pending" } {
     const id = newId();
     const askedAt = isoNow();
+    const subject = (input.subject_key ?? "").trim().toLowerCase() || subjectKeyOf(input.question);
     // The chief triages everyone else's questions; its own (or any question
     // when there is no active chief, or one the caller addresses to the human
     // explicitly) goes straight to the human.
@@ -1370,17 +1438,40 @@ export class AgentService {
     this.db
       .prepare(
         `INSERT INTO agent_questions
-          (id, from_agent_id, flow_id, meeting_id, run_id, question, context, options, status, created_at, for_operator)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (id, from_agent_id, flow_id, meeting_id, run_id, question, context, options, status, created_at, for_operator,
+           subject_key, category)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id, input.from_agent_id, input.flow_id ?? "", input.meeting_id ?? "", input.run_id ?? "",
         input.question, input.context ?? "", JSON.stringify(input.options), status, askedAt, toOperator ? 1 : 0,
+        subject, normalizeCategory(input.category),
       );
     this.events.emit("data.changed", { module: "agents", action: "question_asked" });
-    if (status === "pending") this.emitQuestionForHuman(id);
+    if (status === "pending") this.toHuman(id);
     else this.events.emit("agent:question_triage", { question_id: id, agent_id: input.from_agent_id });
     return { id, status };
+  }
+
+  /**
+   * A question reaching the operator: first what past decisions of its kind
+   * suggest (recorded, so its precision is measured when the operator
+   * answers). When the office lets that kind be answered by its precedent and
+   * the precedent qualifies, it is answered and the operator is not asked.
+   */
+  private toHuman(id: string): void {
+    const q = this.getQuestion(id);
+    if (!q) return;
+    try {
+      const s = this.decisions.suggest(q);
+      if (s) {
+        this.decisions.record(q, s);
+        if (this.autoAnswer && this.decisions.shouldAuto(q, s, this.envFacts.listOpen(q.flow_id).length) && this.autoAnswer(q, s)) return;
+      }
+    } catch (err) {
+      log.warn(`decisions: suggestion for ${id} failed — asking the operator: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    this.emitQuestionForHuman(id);
   }
 
   /** Ring the operator's bell and send the asker's walker to My Office. Only
@@ -1444,6 +1535,10 @@ export class AgentService {
       owed_at: r.owed_at == null ? null : String(r.owed_at),
       reminded_at: r.reminded_at == null ? null : String(r.reminded_at),
       for_operator: Number(r.for_operator ?? 0) === 1,
+      subject_key: String(r.subject_key ?? ""),
+      category: String(r.category ?? ""),
+      answered_via: String(r.answered_via ?? ""),
+      answered_actor: String(r.answered_actor ?? ""),
     };
   }
 
@@ -1533,23 +1628,74 @@ export class AgentService {
    *  pending ones. Getting the answer to the asker is `answerAndDeliver`'s job. */
   answerQuestion(
     id: string,
-    input: { selected_index: number; selected_option: string; note?: string; answered_by: "chief" | "human" },
+    input: {
+      selected_index: number; selected_option: string; note?: string; answered_by: "chief" | "human" | "rule";
+      source?: { via: string; actor?: string };
+    },
   ): { from_agent_id: string; question: string } | null {
     const q = this.getQuestion(id);
     if (!q) return null;
-    const allowed = input.answered_by === "chief" ? ["triage"] : ["pending", "owed"];
+    const allowed = input.answered_by === "chief" ? ["triage"] : input.answered_by === "rule" ? ["pending"] : ["pending", "owed"];
     if (!allowed.includes(q.status)) return null;
     const r = this.db
       .prepare(
         `UPDATE agent_questions
-         SET status='answered', selected_option=?, selected_index=?, answered_note=?, answered_at=?, answered_by=?
+         SET status='answered', selected_option=?, selected_index=?, answered_note=?, answered_at=?, answered_by=?,
+             answered_via=?, answered_actor=?
          WHERE id=? AND status=?`,
       )
-      .run(input.selected_option, input.selected_index, input.note ?? "", isoNow(), input.answered_by, id, q.status);
+      .run(
+        input.selected_option, input.selected_index, input.note ?? "", isoNow(), input.answered_by,
+        input.source?.via ?? "", input.source?.actor ?? "", id, q.status,
+      );
     if (r.changes === 0) return null;
     this.events.emit("data.changed", { module: "agents", action: "question_answered" });
+    this.measureSuggestion(id);
     this.events.emit("agent:question_resolved", { question_id: id, status: "answered" });
     return { from_agent_id: q.from_agent_id, question: q.question };
+  }
+
+  /**
+   * Close an environment fact and wake everyone who was waiting on it: one
+   * letter each, from the headquarters, naming the subjects they parked.
+   */
+  closeEnvFact(input: { flow_id: string; key: string; by: string; note?: string }): { closed: boolean; woken: number; fact?: EnvFact } {
+    const r = this.envFacts.close(input);
+    if (!r) return { closed: false, woken: 0 };
+    const byAgent = new Map<string, string[]>();
+    for (const b of r.wake) byAgent.set(b.agent_id, [...(byAgent.get(b.agent_id) ?? []), b.subject_key].filter(Boolean));
+    let woken = 0;
+    for (const [agentId, subjects] of byAgent) {
+      const agent = this.getAgent(agentId);
+      if (!agent) continue;
+      const id = newId();
+      const subject = `ENV-OK: ${r.fact.key}`;
+      const body =
+        `The environment problem «${r.fact.key}» you were waiting on is closed (${r.fact.valid_from} → ${r.fact.valid_to}).` +
+        (input.note ? `\n\n**Note:** ${input.note}` : "") +
+        (subjects.length ? `\n\nResume what you parked on it: ${[...new Set(subjects)].join(", ")}.` : "\n\nResume what you parked on it.");
+      this.db
+        .prepare(
+          `INSERT INTO agent_office_inbox (id, flow_id, from_agent_id, to_agent_id, subject, body, status, related_run_id, created_at, read_at)
+           VALUES (?, ?, '__top_agent__', ?, ?, ?, 'unread', '', ?, NULL)`,
+        )
+        .run(id, agent.flow_id ?? "", agentId, subject, body, isoNow());
+      this.events.emit("agent:inbox:posted", { message_id: id, flow_id: agent.flow_id ?? "", from_agent_id: "__top_agent__", to_agent_id: agentId, subject });
+      woken++;
+    }
+    this.events.emit("data.changed", { module: "agents", action: "env_fact_closed" });
+    this.events.emit("agent:env_fact_closed", { flow_id: input.flow_id, key: r.fact.key, woken });
+    return { closed: true, woken, fact: r.fact };
+  }
+
+  /** Did the operator choose what past decisions suggested? Feeds the category's measured precision. */
+  private measureSuggestion(id: string): void {
+    try {
+      const q = this.getQuestion(id);
+      if (q) this.decisions.resolve(q);
+    } catch (err) {
+      log.warn(`decisions: measuring the suggestion for ${id} failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /**
@@ -1591,7 +1737,7 @@ export class AgentService {
     if (!q || q.status !== "answered") return false;
     const asker = this.getAgent(q.from_agent_id);
     if (!asker) return false;
-    const who = q.answered_by === "chief" ? "The chief" : "Your supervisor";
+    const who = q.answered_by === "chief" ? "The chief" : q.answered_by === "rule" ? "A standing decision (the office's precedent)" : "Your supervisor";
     // The answer belongs to the project of the run that asked: the relaunch that reads it works for that project
     // (03/11: Growth runs relaunched with no project showed up in every project's panel).
     const project = q.run_id
@@ -1636,7 +1782,7 @@ export class AgentService {
       .run(reason, id);
     if (r.changes === 0) return false;
     this.events.emit("data.changed", { module: "agents", action: "question_escalated" });
-    this.emitQuestionForHuman(id);
+    this.toHuman(id);
     return true;
   }
 
@@ -1663,13 +1809,17 @@ export class AgentService {
   }
 
   /** The operator chose a task option: the question stays open ('owed') until "Listo". */
-  markOwed(id: string, input: { selected_index: number; selected_option: string; note?: string }): AgentQuestion | null {
+  markOwed(
+    id: string,
+    input: { selected_index: number; selected_option: string; note?: string; source?: { via: string; actor?: string } },
+  ): AgentQuestion | null {
     const r = this.db
       .prepare(
-        `UPDATE agent_questions SET status='owed', selected_option=?, selected_index=?, answered_note=?, owed_at=?, answered_by='human'
+        `UPDATE agent_questions SET status='owed', selected_option=?, selected_index=?, answered_note=?, owed_at=?, answered_by='human',
+                answered_via=?, answered_actor=?
          WHERE id=? AND status='pending'`,
       )
-      .run(input.selected_option, input.selected_index, input.note ?? "", isoNow(), id);
+      .run(input.selected_option, input.selected_index, input.note ?? "", isoNow(), input.source?.via ?? "", input.source?.actor ?? "", id);
     if (r.changes === 0) return null;
     this.events.emit("data.changed", { module: "agents", action: "question_owed" });
     this.events.emit("agent:question_owed", { question_id: id });
@@ -1677,12 +1827,14 @@ export class AgentService {
   }
 
   /** Dismiss a question waiting on the operator. Returns it as it was, or null. */
-  dismissQuestion(id: string): AgentQuestion | null {
+  dismissQuestion(id: string, source?: { via: string; actor?: string }): AgentQuestion | null {
     const before = this.getQuestion(id);
     if (!before || (before.status !== "pending" && before.status !== "owed")) return null;
-    const r = this.db.prepare("UPDATE agent_questions SET status='dismissed', answered_at=? WHERE id=? AND status=?")
-      .run(isoNow(), id, before.status);
+    const r = this.db
+      .prepare("UPDATE agent_questions SET status='dismissed', answered_at=?, answered_via=?, answered_actor=? WHERE id=? AND status=?")
+      .run(isoNow(), source?.via ?? "", source?.actor ?? "", id, before.status);
     if (r.changes === 0) return null;
+    this.measureSuggestion(id);
     this.events.emit("data.changed", { module: "agents", action: "question_dismissed" });
     this.events.emit("agent:question_resolved", { question_id: id, status: "dismissed" });
     return before;

@@ -1,4 +1,4 @@
-import { type SqliteDb, type GraphDriver, newId, isoNow, localDate } from "@kernl/extension-sdk";
+import { type SqliteDb, type GraphDriver, unwindInBatches, newId, isoNow, localDate } from "@kernl/extension-sdk";
 import type { Task, Tag, TaskProject } from "./types.js";
 
 export class TaskService {
@@ -6,6 +6,34 @@ export class TaskService {
     private db: SqliteDb,
     private getGraph: () => GraphDriver | null,
   ) {}
+
+  /**
+   * Graph backfill: the same Task nodes and DEPENDS_ON edges create(),
+   * update() and addDependency() write, for every row that predates the graph.
+   */
+  async graphBackfill(graph: GraphDriver): Promise<{ nodes: number; relationships: number }> {
+    const tasks = this.db
+      .prepare("SELECT id, title, status, priority FROM tasks WHERE deleted_at IS NULL")
+      .all() as Array<Record<string, unknown>>;
+    const nodes = await unwindInBatches(
+      graph,
+      `UNWIND $rows AS row
+       MERGE (t:Task {id: row.id})
+       SET t.title = row.title, t.status = row.status, t.priority = row.priority`,
+      tasks,
+    );
+    const deps = this.db
+      .prepare("SELECT task_id, depends_on_id FROM task_dependencies")
+      .all() as Array<Record<string, unknown>>;
+    const relationships = await unwindInBatches(
+      graph,
+      `UNWIND $rows AS row
+       MATCH (a:Task {id: row.task_id}), (b:Task {id: row.depends_on_id})
+       MERGE (a)-[:DEPENDS_ON]->(b)`,
+      deps,
+    );
+    return { nodes, relationships };
+  }
 
   create(input: {
     title: string;

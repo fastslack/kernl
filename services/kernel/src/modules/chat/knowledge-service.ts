@@ -2,6 +2,7 @@ import type { GraphDriver } from "../../core/db-drivers/graph-driver.js";
 import { log } from "../../core/logger.js";
 import { newId, isoNow } from "../../core/helpers.js";
 import { computeStrength, daysBetween } from "./memory-decay.js";
+import { asVector, ensureVectorIndex, runVectorSearch } from "../../sdk/graph-vectors.js";
 
 const MEMORY_INDEX = "memory-embeddings";
 const CONCEPT_INDEX = "concept-embeddings";
@@ -66,8 +67,33 @@ export class KnowledgeService {
 
   // ── Initialization ────────────────────────────────
 
+  /** The driver instance whose schema is in place, and an in-flight attempt. */
+  private schemaFor: GraphDriver | null = null;
+  private schemaPending: Promise<void> | null = null;
+
+  /**
+   * Make sure the constraints and vector indexes exist on the active driver.
+   *
+   * The chat module initializes before bootstrap starts the db drivers, so the
+   * call in `initialize()` meets the no-op driver and creates nothing; a
+   * backend switched on later from /extensions is a new driver instance with
+   * an empty schema too. Every entry point that writes or searches therefore
+   * calls this first: it runs once per driver instance and is cheap after.
+   */
+  private async ensureSchema(): Promise<void> {
+    const g = this.getReadyGraph();
+    if (!g || this.schemaFor === g) return;
+    if (!this.schemaPending) {
+      this.schemaPending = this.createConstraintsAndIndexes().finally(() => {
+        this.schemaPending = null;
+      });
+    }
+    await this.schemaPending;
+  }
+
   async createConstraintsAndIndexes(): Promise<void> {
-    if (!this.available) return;
+    const graph = this.getReadyGraph();
+    if (!graph) return;
 
     const statements = [
       "CREATE CONSTRAINT episode_id IF NOT EXISTS FOR (e:Episode) REQUIRE e.id IS UNIQUE",
@@ -83,26 +109,20 @@ export class KnowledgeService {
     }
 
     // Vector indexes
+    // `module` filters inside the index where the engine can (SEARCH).
     const vectorIndexes = [
-      { name: MEMORY_INDEX, label: "Memory" },
-      { name: CONCEPT_INDEX, label: "Concept" },
+      { name: MEMORY_INDEX, label: "Memory", filters: ["module"] },
+      { name: CONCEPT_INDEX, label: "Concept", filters: ["module"] },
       { name: EPISODE_INDEX, label: "Episode" },
     ];
 
     for (const idx of vectorIndexes) {
-      await this.getReadyGraph()!
-        .run(
-          `CREATE VECTOR INDEX \`${idx.name}\` IF NOT EXISTS
-           FOR (n:${idx.label}) ON (n.embedding)
-           OPTIONS { indexConfig: {
-             \`vector.dimensions\`: ${EMBEDDING_DIM},
-             \`vector.similarity_function\`: 'cosine'
-           }}`,
-        )
-        .catch((err) => {
-          log.warn(`Vector index ${idx.name} creation skipped: ${err}`);
-        });
+      await ensureVectorIndex(graph, { ...idx, dimensions: EMBEDDING_DIM }).catch((err) => {
+        log.warn(`Vector index ${idx.name} creation skipped: ${err}`);
+      });
     }
+    this.schemaFor = graph;
+    log.info(`Chat knowledge graph: constraints and vector indexes ensured on "${graph.slug}"`);
   }
 
   // ── Memory CRUD ───────────────────────────────────
@@ -116,20 +136,22 @@ export class KnowledgeService {
     created_at: string;
   }): Promise<void> {
     if (!this.available) return;
+    await this.ensureSchema();
 
-    await this.getReadyGraph()!.run(
+    const g = this.getReadyGraph()!;
+    await g.run(
       `CREATE (m:Memory {
         id: $id,
         module: 'chat',
         episode_id: $episodeId,
         role: $role,
         content: $content,
-        embedding: $embedding,
         strength: 1.0,
         reinforcements: 0,
         last_recalled_at: $createdAt,
         created_at: $createdAt
-      })`,
+      })
+      SET m.embedding = ${asVector(g, "$embedding")}`,
       {
         id: input.id,
         episodeId: input.episode_id,
@@ -183,6 +205,7 @@ export class KnowledgeService {
     started_at: string;
   }): Promise<void> {
     if (!this.available) return;
+    await this.ensureSchema();
 
     await this.getReadyGraph()!
       .run(
@@ -213,7 +236,7 @@ export class KnowledgeService {
       params.summary = updates.summary;
     }
     if (updates.embedding) {
-      setClauses.push("e.embedding = $embedding");
+      setClauses.push(`e.embedding = ${asVector(this.getReadyGraph()!, "$embedding")}`);
       params.embedding = updates.embedding;
     }
     if (updates.message_count !== undefined) {
@@ -239,17 +262,20 @@ export class KnowledgeService {
     excludeEpisodeId?: string,
   ): Promise<MemoryNode[]> {
     if (!this.available) return [];
+    await this.ensureSchema();
 
     try {
-      const result = await this.getReadyGraph()!.run(
-        `CALL db.index.vector.queryNodes($indexName, $k, $vector)
-         YIELD node, score
-         WHERE node.module = 'chat'
+      const g = this.getReadyGraph()!;
+      const result = await runVectorSearch(g, {
+          index: MEMORY_INDEX, label: "Memory", alias: "node", k: "$k", vector: "$vector",
+          filters: { module: "'chat'" },
+          where: "$excludeEpisodeId IS NULL OR node.episode_id <> $excludeEpisodeId",
+        }, (clause) => `${clause}
          RETURN node.id AS id, node.role AS role, node.content AS content,
                 node.strength AS strength, node.reinforcements AS reinforcements,
                 node.last_recalled_at AS last_recalled_at, node.episode_id AS episode_id,
                 score`,
-        { indexName: MEMORY_INDEX, k, vector },
+        { k, vector, excludeEpisodeId: excludeEpisodeId ?? null },
       );
 
       return result.records.map((r) => ({
@@ -288,6 +314,7 @@ export class KnowledgeService {
                 target.email AS email,
                 target.company AS company,
                 target.status AS status,
+                target.label AS conceptLabel,
                 type(r) AS relType`,
         { ids: memoryIds },
       );
@@ -322,7 +349,8 @@ export class KnowledgeService {
         } else if (label === "Concept") {
           concepts.push({
             id,
-            label: (r.get("name") as string) ?? "",
+            // Concepts keep their text in `label` (see upsertConcept), not `name`.
+            label: (r.get("conceptLabel") as string) ?? "",
             description: "",
             gravity: 0,
             mention_count: 0,
@@ -376,6 +404,7 @@ export class KnowledgeService {
     memoryId?: string;
   }): Promise<string> {
     if (!this.available) return "";
+    await this.ensureSchema();
 
     const id = newId();
     const now = isoNow();
@@ -411,7 +440,7 @@ export class KnowledgeService {
       if (input.embedding && conceptId) {
         await this.getReadyGraph()!
           .run(
-            `MATCH (c:Concept {id: $id}) SET c.embedding = $embedding`,
+            `MATCH (c:Concept {id: $id}) SET c.embedding = ${asVector(this.getReadyGraph()!, "$embedding")}`,
             { id: conceptId, embedding: input.embedding },
           )
           .catch(() => {});
@@ -539,17 +568,20 @@ export class KnowledgeService {
     k: number = 10,
   ): Promise<ConceptNode[]> {
     if (!this.available) return [];
+    await this.ensureSchema();
 
     try {
-      const result = await this.getReadyGraph()!.run(
-        `CALL db.index.vector.queryNodes($indexName, $k, $vector)
-         YIELD node, score
-         WHERE node.module = 'chat' AND node.gravity > 0.1
+      const g = this.getReadyGraph()!;
+      const result = await runVectorSearch(g, {
+          index: CONCEPT_INDEX, label: "Concept", alias: "node", k: "$k", vector: "$vector",
+          filters: { module: "'chat'" },
+          where: "node.gravity > 0.1",
+        }, (clause) => `${clause}
          RETURN node.id AS id, node.label AS label, node.description AS description,
                 node.gravity AS gravity, node.mention_count AS mention_count,
                 node.first_seen AS first_seen, node.last_seen AS last_seen,
                 score`,
-        { indexName: CONCEPT_INDEX, k, vector },
+        { k, vector },
       );
 
       return result.records.map((r) => ({
@@ -626,6 +658,7 @@ export class KnowledgeService {
     conceptIds?: string[];
   }): Promise<string> {
     if (!this.available) return "";
+    await this.ensureSchema();
 
     const id = newId();
 

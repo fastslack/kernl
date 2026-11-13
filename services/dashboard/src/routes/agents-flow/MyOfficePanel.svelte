@@ -231,7 +231,7 @@
     try {
       const res = await fetch(`/api/agents/questions/${q.id}/answer`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Kernl-Via': 'dashboard' },
         body: JSON.stringify({ choice }),
       });
       if (!res.ok && res.status !== 409) return false;
@@ -265,7 +265,7 @@
     questionSubmitting = { ...questionSubmitting, [q.id]: true };
     questionsRev++;
     try {
-      const res = await fetch(`/api/agents/questions/${q.id}/dismiss`, { method: 'POST' });
+      const res = await fetch(`/api/agents/questions/${q.id}/dismiss`, { method: 'POST', headers: { 'X-Kernl-Via': 'dashboard' } });
       // Gone for good (done, or already closed elsewhere): drop it. Anything else keeps the card.
       if (res.ok || res.status === 404 || res.status === 409) {
         pendingQuestions = pendingQuestions.filter(x => x.id !== q.id);
@@ -296,7 +296,7 @@
     try {
       // Fire all dismissals in parallel — server-side they're independent.
       await Promise.all(snapshot.map(q =>
-        fetch(`/api/agents/questions/${q.id}/dismiss`, { method: 'POST' }).catch(() => null)
+        fetch(`/api/agents/questions/${q.id}/dismiss`, { method: 'POST', headers: { 'X-Kernl-Via': 'dashboard' } }).catch(() => null)
       ));
       pendingQuestions = [];
     } finally {

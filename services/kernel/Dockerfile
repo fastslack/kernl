@@ -137,7 +137,11 @@ ENV PATH=/usr/local/cuda/bin:$PATH
 
 RUN git clone --depth 1 --branch ${WHISPER_REF} \
       https://github.com/ggml-org/whisper.cpp /src
-RUN cmake -B /build -S /src \
+# Every CPU variant only on x86: on arm64 the list includes armv9.2+SME, which
+# bookworm's gcc 12 does not know ("unknown value 'armv9.2-a+…' for -march"),
+# so the image did not build on any ARM host (Graviton, a Pi, Docker on a Mac).
+RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then VARIANTS=ON; else VARIANTS=OFF; fi \
+    && cmake -B /build -S /src \
       -DCMAKE_BUILD_TYPE=Release \
       -DBUILD_SHARED_LIBS=ON \
       -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
@@ -145,7 +149,7 @@ RUN cmake -B /build -S /src \
       -DVulkan_INCLUDE_DIR=/usr/local/include \
       -DGGML_BACKEND_DL=ON \
       -DGGML_NATIVE=OFF \
-      -DGGML_CPU_ALL_VARIANTS=ON \
+      -DGGML_CPU_ALL_VARIANTS=${VARIANTS} \
       -DGGML_VULKAN=ON \
       -DGGML_CUDA=${WHISPER_CUDA} \
       -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS}" \
@@ -276,6 +280,9 @@ RUN groupadd -g ${HOST_DOCKER_GID} hostdocker 2>/dev/null || true \
 
 USER bun
 
+# Sin NEO4J_*: el grafo viene incluido (Relate, en /app/data/graph). Con
+# NEO4J_URI fijo en la imagen, una instalación nueva no elegía Relate y quedaba
+# sin grafo. docker-compose.neo4j.yml los pone cuando hay un Neo4j.
 # KERNEL_MCP_BRIDGE: el SDK de Claude spawnea este script como MCP server
 # stdio para hablar con el kernel vía unix socket. El default del código es
 # /app/bin/mcp-stdio-bridge.ts, pero acá /app/bin es un symlink a
@@ -285,8 +292,6 @@ ENV MCP_TRANSPORT=http \
     DASHBOARD_ENABLED=false \
     DASHBOARD_PORT=3087 \
     SQLITE_PATH=/app/data/kernel.db \
-    NEO4J_URI=bolt://neo4j:7687 \
-    NEO4J_USER=neo4j \
     LOG_LEVEL=info \
     TIMEZONE=UTC \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
