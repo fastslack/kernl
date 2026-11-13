@@ -63,6 +63,19 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 ### Agregado
 
+- **Una máquina del tiempo sobre lo que Kernl sabía.** Elegís una persona,
+  empresa o agente y un momento: Kernl rearma lo que sabía entonces, quién
+  escribió cada hecho, cuáles se reemplazaron después y qué corridas de agentes
+  actuaron sobre un hecho que ya estaba viejo. En la oficina 3D el grafo se
+  levanta como un holograma sobre su oficina.
+- **La sala de máquinas.** El grafo trabajando: las últimas consultas con los
+  tiempos del propio motor, el esquema como plano, el uso de índices y el
+  camino entre dos nombres. Una sala propia en la oficina 3D.
+- **Lo que aprendieron las oficinas.** El impacto de cada lección (las corridas
+  que la recordaron, qué cambió, cómo se movió su confianza), una biblioteca con
+  todas las lecciones por semana y su linaje entre agentes, y una constelación
+  que ubica las lecciones por significado; una lección recordada brilla y manda
+  un haz al escritorio que la recibió.
 - **Las decisiones de los agentes se recuerdan y se miden.** Cada respuesta a
   una pregunta de un agente guarda quién la dio y por qué canal (dashboard,
   WhatsApp, Telegram, API, el Chief). Cuando el mismo tipo de pregunta recibe

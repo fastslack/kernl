@@ -63,6 +63,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A time machine over what Kernl knew.** Pick a person, company or agent and
+  a moment: Kernl rebuilds what it knew then, who wrote each fact, which ones
+  were replaced later, and the agent runs that acted on a fact while it was
+  already stale. In the 3D office the graph rises as a hologram over its office.
+- **The engine room.** The graph at work: the latest statements with the
+  engine's own timing, the schema as a blueprint, index use, and the path
+  between two names. A room of its own in the 3D office.
+- **What the offices learned.** Each lesson's impact (the runs that recalled
+  it, what changed, how its confidence moved), a library of every lesson by
+  week with its lineage across agents, and a constellation that places lessons
+  by meaning; a recalled lesson flares and sends a beam to the desk that got it.
 - **Agents' decisions are remembered and measured.** Every answer to an
   agent's question records who gave it and through which channel (dashboard,
   WhatsApp, Telegram, API, the Chief). When the same kind of question keeps
