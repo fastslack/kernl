@@ -343,6 +343,21 @@ export function defaultTimezone(): string {
   return process.env.TIMEZONE || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }
 
+/**
+ * The embeddings settings from the environment. Called again once the stored
+ * settings are restored (bootstrap/stored-settings.ts): a provider picked in
+ * Settings → AI lives in app_settings, which opens after loadConfig runs.
+ */
+export function embeddingsConfigFromEnv(env: NodeJS.ProcessEnv = process.env): KernelConfig["embeddings"] {
+  const v = (env.EMBEDDINGS_PROVIDER ?? "local").trim().toLowerCase();
+  return {
+    provider: v === "lmstudio" || v === "auto" ? v : "local",
+    baseUrl: env.EMBEDDINGS_BASE_URL ?? "http://127.0.0.1:1234/v1",
+    model: env.EMBEDDINGS_MODEL ?? "text-embedding-bge-m3",
+    dim: parseInt(env.EMBEDDINGS_DIM ?? "1024", 10),
+  };
+}
+
 export function loadConfig(): KernelConfig {
   dotenv.config();
 
@@ -567,15 +582,7 @@ export function loadConfig(): KernelConfig {
       socketPath: process.env.RUST_BRIDGE_SOCKET
         ?? (process.platform === "win32" ? "\\\\.\\pipe\\mtw-rust" : "/tmp/mtw-rust.sock"),
     },
-    embeddings: {
-      provider: (() => {
-        const v = (process.env.EMBEDDINGS_PROVIDER ?? "local").trim().toLowerCase();
-        return v === "lmstudio" || v === "auto" ? v : "local";
-      })(),
-      baseUrl: process.env.EMBEDDINGS_BASE_URL ?? "http://127.0.0.1:1234/v1",
-      model: process.env.EMBEDDINGS_MODEL ?? "text-embedding-bge-m3",
-      dim: parseInt(process.env.EMBEDDINGS_DIM ?? "1024", 10),
-    },
+    embeddings: embeddingsConfigFromEnv(),
     fsCommander: {
       allowedRoots: (process.env.FS_COMMANDER_ALLOWED_ROOTS ?? "")
         .split(",")

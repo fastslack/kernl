@@ -14,6 +14,7 @@
 import type { SqliteDb } from "../db/sqlite.js";
 import type { KernelConfig } from "../config.js";
 import { legacyCredentialTarget } from "../llm/credentials-legacy.js";
+import { embeddingsConfigFromEnv } from "../config.js";
 
 /** Fill unset environment keys from stored settings; returns how many were restored. */
 export function rehydrateStoredSettings(sqlite: SqliteDb, config: KernelConfig): number {
@@ -37,6 +38,10 @@ export function rehydrateStoredSettings(sqlite: SqliteDb, config: KernelConfig):
   // Config fields read once from the environment, which modules copy at init.
   if (!config.google.clientId) config.google.clientId = process.env.GOOGLE_CLIENT_ID ?? "";
   if (!config.google.clientSecret) config.google.clientSecret = process.env.GOOGLE_CLIENT_SECRET ?? "";
+  // The embeddings provider picked in Settings → AI: config read it before the
+  // database opened, so a stored "auto" came back as the "local" default on
+  // every restart, and switching providers re-embeds everything.
+  if (config.embeddings) Object.assign(config.embeddings, embeddingsConfigFromEnv());
   // The model last picked in a chat, saved by the chat itself.
   if (config.chat) {
     if (!config.chat.preferredProvider) config.chat.preferredProvider = process.env.CHAT_PREFERRED_PROVIDER ?? "";

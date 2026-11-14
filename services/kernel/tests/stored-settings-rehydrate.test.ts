@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { rehydrateStoredSettings } from "../src/core/bootstrap/stored-settings.js";
 import type { KernelConfig } from "../src/core/config.js";
 
-const KEYS = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "SOME_SETTING", "CHAT_PREFERRED_PROVIDER", "CHAT_PREFERRED_MODEL"];
+const KEYS = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "SOME_SETTING", "CHAT_PREFERRED_PROVIDER", "CHAT_PREFERRED_MODEL", "EMBEDDINGS_PROVIDER"];
 let saved: Record<string, string | undefined>;
 let db: InstanceType<typeof Database>;
 
@@ -27,6 +27,20 @@ afterEach(() => {
 });
 
 describe("rehydrateStoredSettings", () => {
+  it("keeps the embeddings provider picked in Settings across a restart", () => {
+    // The config is built from the environment before the database opens: without
+    // a stored value the default is the in-process model.
+    const cfg = { ...config(), embeddings: { provider: "local", baseUrl: "", model: "", dim: 0 } } as unknown as KernelConfig;
+    db.run("INSERT INTO app_settings VALUES ('EMBEDDINGS_PROVIDER', 'auto')");
+    rehydrateStoredSettings(db, cfg);
+    expect(cfg.embeddings.provider).toBe("auto");
+    // A real environment variable still wins.
+    process.env.EMBEDDINGS_PROVIDER = "lmstudio";
+    const other = { ...config(), embeddings: { provider: "lmstudio", baseUrl: "", model: "", dim: 0 } } as unknown as KernelConfig;
+    rehydrateStoredSettings(db, other);
+    expect(other.embeddings.provider).toBe("lmstudio");
+  });
+
   it("brings Google OAuth credentials saved from the dashboard into the config at boot", () => {
     db.run("INSERT INTO app_settings VALUES ('GOOGLE_CLIENT_ID', 'id.apps.googleusercontent.com'), ('GOOGLE_CLIENT_SECRET', 'GOCSPX-x'), ('SOME_SETTING', 'v')");
     const cfg = config();
