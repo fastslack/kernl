@@ -3,6 +3,7 @@ import { log } from "../../core/logger.js";
 import { newId, isoNow } from "../../core/helpers.js";
 import { computeStrength, daysBetween } from "./memory-decay.js";
 import { asVector, ensureVectorIndex, runVectorSearch } from "../../sdk/graph-vectors.js";
+import type { EmbeddingsClient } from "../../core/embeddings/client.js";
 
 const MEMORY_INDEX = "memory-embeddings";
 const CONCEPT_INDEX = "concept-embeddings";
@@ -133,6 +134,8 @@ export class KnowledgeService {
     role: string;
     content: string;
     embedding: number[];
+    /** The model that made `embedding`: searches compare only vectors of one model. */
+    embedding_model: string;
     created_at: string;
   }): Promise<void> {
     if (!this.available) return;
@@ -149,7 +152,8 @@ export class KnowledgeService {
         strength: 1.0,
         reinforcements: 0,
         last_recalled_at: $createdAt,
-        created_at: $createdAt
+        created_at: $createdAt,
+        embedding_model: $model
       })
       SET m.embedding = ${asVector(g, "$embedding")}`,
       {
@@ -158,6 +162,7 @@ export class KnowledgeService {
         role: input.role,
         content: input.content.slice(0, 500),
         embedding: input.embedding,
+        model: input.embedding_model,
         createdAt: input.created_at,
       },
     );
@@ -260,6 +265,8 @@ export class KnowledgeService {
     vector: number[],
     k: number = 30,
     excludeEpisodeId?: string,
+    /** Only memories embedded by this model (the one that made `vector`). */
+    model?: string,
   ): Promise<MemoryNode[]> {
     if (!this.available) return [];
     await this.ensureSchema();
@@ -269,13 +276,14 @@ export class KnowledgeService {
       const result = await runVectorSearch(g, {
           index: MEMORY_INDEX, label: "Memory", alias: "node", k: "$k", vector: "$vector",
           filters: { module: "'chat'" },
-          where: "$excludeEpisodeId IS NULL OR node.episode_id <> $excludeEpisodeId",
+          where: "($excludeEpisodeId IS NULL OR node.episode_id <> $excludeEpisodeId)" +
+            " AND ($model IS NULL OR node.embedding_model = $model)",
         }, (clause) => `${clause}
          RETURN node.id AS id, node.role AS role, node.content AS content,
                 node.strength AS strength, node.reinforcements AS reinforcements,
                 node.last_recalled_at AS last_recalled_at, node.episode_id AS episode_id,
                 score`,
-        { k, vector, excludeEpisodeId: excludeEpisodeId ?? null },
+        { k, vector, excludeEpisodeId: excludeEpisodeId ?? null, model: model ?? null },
       );
 
       return result.records.map((r) => ({
@@ -292,6 +300,58 @@ export class KnowledgeService {
       log.warn(`Memory vector search failed: ${err}`);
       return [];
     }
+  }
+
+  /**
+   * Re-embed chat memories whose vector was made by another model than
+   * `client`'s — including the ones written before memories recorded their
+   * model (all-MiniLM-L6-v2). Batches until none is left, the model changes
+   * under it, or the encoder fails. Returns how many were re-embedded.
+   */
+  async reembedMemories(client: EmbeddingsClient, batchSize = 64): Promise<number> {
+    if (!this.available) return 0;
+    await this.ensureSchema();
+    const model = client.model;
+    const failed = new Set<string>();
+    let done = 0;
+    for (;;) {
+      if (client.model !== model) break;
+      const g = this.getReadyGraph();
+      if (!g) break;
+      const r = await g.run(
+        `MATCH (m:Memory) WHERE m.embedding IS NOT NULL AND coalesce(m.embedding_model, '') <> $model
+         RETURN m.id AS id, m.content AS content LIMIT $n`,
+        { model, n: batchSize + failed.size },
+      );
+      const rows = r.records
+        .map((x) => ({ id: String(x.get("id")), content: String(x.get("content") ?? "") }))
+        .filter((x) => !failed.has(x.id))
+        .slice(0, batchSize);
+      if (rows.length === 0) break;
+      let vecs: number[][];
+      try {
+        vecs = await client.embed(rows.map((x) => x.content || " "), { inputType: "passage" });
+      } catch (err) {
+        log.warn(`Chat memory re-embed paused: ${err instanceof Error ? err.message : String(err)}`);
+        break;
+      }
+      if (client.model !== model) break;
+      const ok = rows
+        .map((x, i) => ({ id: x.id, embedding: vecs[i] }))
+        .filter((x) => x.embedding?.length === EMBEDDING_DIM);
+      for (const x of rows) if (!ok.some((o) => o.id === x.id)) failed.add(x.id);
+      if (ok.length) {
+        await g.run(
+          `UNWIND $rows AS row
+           MATCH (m:Memory {id: row.id})
+           SET m.embedding = ${asVector(g, "row.embedding")}, m.embedding_model = $model`,
+          { rows: ok, model },
+        );
+      }
+      done += ok.length;
+    }
+    if (done > 0) log.info(`Chat knowledge graph: re-embedded ${done} memory node(s) with ${model}`);
+    return done;
   }
 
   // ── Graph Traversal ───────────────────────────────

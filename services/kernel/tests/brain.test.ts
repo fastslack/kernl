@@ -253,3 +253,19 @@ describe("BrainIndexer (cross-module 'one' recall)", () => {
     expect(hits[0].item.text).toBe("viaje a hotel");
   });
 });
+
+describe("brain_items embedding_model", () => {
+  test("upsert records the client's model; another model's vector is matched by words only", async () => {
+    const [v] = await mockEmbeddings.embed(["mudanza embalar"]);
+    svc.upsert({ kind: "note", sourceTable: "notes", sourceId: "n1", text: "zzz", embedding: v });
+    svc.upsert({ kind: "note", sourceTable: "notes", sourceId: "n2", text: "zzz", embedding: v, embeddingModel: "other-model" });
+    const rows = db.prepare("SELECT source_id, embedding_model FROM brain_items ORDER BY source_id").all();
+    expect(rows).toEqual([
+      { source_id: "n1", embedding_model: "mock" },
+      { source_id: "n2", embedding_model: "other-model" },
+    ]);
+    const hits = await svc.recall({ query: "mudanza", minSimilarity: 0.3 });
+    expect(hits.map((h) => h.item.source_id)).toEqual(["n1"]);
+    expect("embedding_model" in hits[0].item).toBe(false);
+  });
+});

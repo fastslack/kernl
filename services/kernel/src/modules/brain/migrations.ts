@@ -87,4 +87,11 @@ export const brainMigrations: Migration[] = [
       ) WHERE valid_to IS NOT NULL;
     `,
   },
+  {
+    // The model that made each item's vector. Recall compares only vectors of
+    // the active model, and core/embeddings/reembed.ts converts the rest in
+    // the background; '' marks rows indexed before the column existed.
+    version: 4,
+    sql: `ALTER TABLE brain_items ADD COLUMN embedding_model TEXT NOT NULL DEFAULT '';`,
+  },
 ];

@@ -15,6 +15,8 @@ import { MemoryDistiller } from "./memory-distiller.js";
 import { ChatTitler } from "./titler.js";
 import { llm as getLlmClient } from "../../core/llm/client.js";
 import { log } from "../../core/logger.js";
+import { registerReembedPass } from "../../core/embeddings/reembed.js";
+import { embeddingsForChat } from "../../core/embeddings/manager.js";
 import type { EventBus } from "../../core/event-bus.js";
 import type { SqliteDb } from "../../core/db/sqlite.js";
 
@@ -35,6 +37,7 @@ export function createChatModule(): ChatModule {
   let chatService: ChatService | null = null;
   let distiller: MemoryDistiller | null = null;
   let eventsRef: EventBus | null = null;
+  let unregisterReembed: (() => void) | null = null;
   let sqliteRef: SqliteDb | null = null;
   let titleModel = "";
 
@@ -56,6 +59,15 @@ export function createChatModule(): ChatModule {
 
       // Create Neo4j constraints and vector indexes
       await chatService.getKnowledgeService().createConstraintsAndIndexes();
+
+      // Chat memory nodes made by another model (or before nodes recorded
+      // theirs) are re-embedded by every re-embed run (core/embeddings/reembed.ts).
+      const knowledge = chatService.getKnowledgeService();
+      unregisterReembed?.();
+      unregisterReembed = registerReembedPass({
+        name: "chat_memory_nodes",
+        run: () => knowledge.reembedMemories(embeddingsForChat()),
+      });
 
       // Distiller cannot be created here: it needs `globalThis.__llm` which
       // bootstrap() sets AFTER initializeAll(). Bootstrap calls
@@ -154,6 +166,9 @@ export function createChatModule(): ChatModule {
       };
     },
 
-    async shutdown() {},
+    async shutdown() {
+      unregisterReembed?.();
+      unregisterReembed = null;
+    },
   };
 }

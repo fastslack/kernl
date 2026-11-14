@@ -302,7 +302,7 @@ describe.skipIf(!relateClientInstalled())("RelateGraphDriver against the real en
       role: "user",
       content: "replace neo4j with relate",
       embedding: vec(7),
-      created_at: "2026-11-11T10:01:00Z",
+      embedding_model: "test-model", created_at: "2026-11-11T10:01:00Z",
     });
     await ks.createMemoryNode({
       id: "m2",
@@ -310,7 +310,7 @@ describe.skipIf(!relateClientInstalled())("RelateGraphDriver against the real en
       role: "assistant",
       content: "relate is embedded",
       embedding: vec(99),
-      created_at: "2026-11-11T10:02:00Z",
+      embedding_model: "test-model", created_at: "2026-11-11T10:02:00Z",
     });
     const hits = await ks.findSimilarMemories(vec(7), 2);
     expect(hits[0]?.id).toBe("m1");
@@ -333,7 +333,7 @@ describe.skipIf(!relateClientInstalled())("RelateGraphDriver against the real en
       role: "user",
       content: "buy milk",
       embedding: vec(1234),
-      created_at: "2026-11-10T10:01:00Z",
+      embedding_model: "test-model", created_at: "2026-11-10T10:01:00Z",
     });
     const others = await ks.findSimilarMemories(vec(7), 3, "ep1");
     expect(others.map((m) => m.id)).toEqual(["m3"]);

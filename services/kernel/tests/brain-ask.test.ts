@@ -71,7 +71,7 @@ describe.skipIf(!relateClientInstalled())("askMemory on Relate", () => {
     db.prepare("INSERT INTO chat_episodes (id, created_at, updated_at) VALUES ('ep1', 'x', 'x')").run();
     db.prepare("INSERT INTO chat_messages (id, episode_id, role, content, created_at) VALUES ('m1', 'ep1', 'user', 'Ada asked about the engine schedule', '2026-11-10')").run();
     db.prepare("INSERT INTO chat_messages_fts (message_id, content) VALUES ('m1', 'Ada asked about the engine schedule')").run();
-    await g.run("CREATE (:Memory {id: 'm1', module: 'chat', episode_id: 'ep1', role: 'user', content: 'Ada asked about the engine schedule', embedding: $v})", { v: vec("engine") });
+    await g.run("CREATE (:Memory {id: 'm1', module: 'chat', episode_id: 'ep1', role: 'user', content: 'Ada asked about the engine schedule', embedding: $v, embedding_model: 'local'})", { v: vec("engine") });
 
     // Agent learnings: one in the configured model, one written by another model.
     await g.run(`CREATE (a:Agent {id: 'ag1', name: 'Builder'})-[:LEARNED]->(:AgentLearning {id: 'l1', type: 'insight', active: true,

@@ -115,9 +115,9 @@ describe.skipIf(!relateClientInstalled())("vectors on the built-in graph", () =>
     const ks = new KnowledgeService(() => g);
     const near = (i: number) => [1, 0.001 * i, 0, 0, ...Array(380).fill(0)];
     for (let i = 0; i < 40; i++) {
-      await ks.createMemoryNode({ id: `cur-${i}`, episode_id: "current", role: "user", content: `now ${i}`, embedding: near(i), created_at: "2026-11-12T10:00:00Z" });
+      await ks.createMemoryNode({ id: `cur-${i}`, episode_id: "current", role: "user", content: `now ${i}`, embedding: near(i), embedding_model: "test-model", created_at: "2026-11-12T10:00:00Z" });
     }
-    await ks.createMemoryNode({ id: "old", episode_id: "last-week", role: "user", content: "the earlier talk", embedding: [0.8, 0.6, 0, 0, ...Array(380).fill(0)], created_at: "2026-11-05T10:00:00Z" });
+    await ks.createMemoryNode({ id: "old", episode_id: "last-week", role: "user", content: "the earlier talk", embedding: [0.8, 0.6, 0, 0, ...Array(380).fill(0)], embedding_model: "test-model", created_at: "2026-11-05T10:00:00Z" });
 
     expect(await count(g, "MATCH (m:Memory) WHERE m.embedding IS :: VECTOR RETURN count(m) AS c")).toBe(41);
     const all = await ks.findSimilarMemories(near(0), 5);
@@ -125,6 +125,28 @@ describe.skipIf(!relateClientInstalled())("vectors on the built-in graph", () =>
     // Excluding the current episode still applies after the k nearest are taken.
     const other = await ks.findSimilarMemories(near(0), 50, "current");
     expect(other.map((m) => m.id)).toEqual(["old"]);
+  });
+
+  it("chat memories are searched within one model, and re-embedded when it changes", async () => {
+    const g = await start();
+    const ks = new KnowledgeService(() => g);
+    const v = (a: number, b: number) => [a, b, 0, 0, ...Array(380).fill(0)];
+    await ks.createMemoryNode({ id: "tagged", episode_id: "e", role: "user", content: "hola", embedding: v(1, 0), embedding_model: "old-model", created_at: "2026-11-12T10:00:00Z" });
+    // A memory written before nodes recorded their model.
+    await g.run(`CREATE (m:Memory {id: 'legacy', module: 'chat', episode_id: 'e', role: 'user', content: 'chau', strength: 1.0, reinforcements: 0, last_recalled_at: '', created_at: ''}) SET m.embedding = ${asVector(g, "$e")}`, { e: v(1, 0.01) });
+
+    expect((await ks.findSimilarMemories(v(1, 0), 10, undefined, "old-model")).map((m) => m.id)).toEqual(["tagged"]);
+    expect(await ks.findSimilarMemories(v(1, 0), 10, undefined, "new-model")).toEqual([]);
+
+    const client = {
+      provider: "local" as const, model: "new-model", dim: 384,
+      available: async () => true,
+      embed: async (texts: string[]) => texts.map((t) => (t === "hola" ? v(0, 1) : v(0.1, 1))),
+    };
+    expect(await ks.reembedMemories(client)).toBe(2);
+    expect(await ks.reembedMemories(client)).toBe(0);
+    const hits = await ks.findSimilarMemories(v(0, 1), 10, undefined, "new-model");
+    expect(hits.map((m) => m.id).sort()).toEqual(["legacy", "tagged"]);
   });
 });
 

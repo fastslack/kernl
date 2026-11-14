@@ -37,7 +37,8 @@ import type {
 } from "../../core/types.js";
 import { structuredResult, errorResult, fireAndForget } from "../../core/helpers.js";
 import { log } from "../../core/logger.js";
-import { LocalEmbeddings, type EmbeddingsClient } from "../../core/embeddings/index.js";
+import type { EmbeddingsClient } from "../../core/embeddings/index.js";
+import { embeddingsForChat } from "../../core/embeddings/manager.js";
 import type { DataChangedPayload } from "../../core/kernel-events.js";
 import { runMigrations } from "../../core/db/migrations.js";
 import { brainMigrations } from "./migrations.js";
@@ -63,8 +64,6 @@ export function createBrainModule(
   let indexer: BrainIndexer | null = null;
   let tools: ToolDefinition[] = [];
   let embeddingsClient: EmbeddingsClient | null = null;
-  // Chat memories are written with the bundled local model (chat/service.ts).
-  let chatEmbeddings: EmbeddingsClient | null = null;
   let askDeps: AskDeps | null = null;
   let facts: FactStore | null = null;
   let timeMachine: TimeMachine | null = null;
@@ -117,7 +116,7 @@ export function createBrainModule(
         db: ctx.sqlite,
         brain: () => service,
         embeddings: () => embeddingsClient,
-        chatEmbeddings: () => (chatEmbeddings ??= new LocalEmbeddings()),
+        chatEmbeddings: () => embeddingsForChat(),
         graph: () => ctx.graph,
       };
       facts = new FactStore(ctx.sqlite, () => ctx.graph);

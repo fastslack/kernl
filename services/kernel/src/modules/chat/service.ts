@@ -23,7 +23,7 @@ import {
 import { runWithFallbackChain } from "../../core/llm/fallback-chain.js";
 import { KnowledgeService } from "./knowledge-service.js";
 import { ContextEngine, type RetrievedContext } from "./context-engine.js";
-import { LocalEmbeddings } from "../../core/embeddings/local.js";
+import { embeddingsForChat } from "../../core/embeddings/manager.js";
 import { ExtractionPipeline } from "./extraction.js";
 import type { MemoryDistiller } from "./memory-distiller.js";
 import { TITLE_AT, type ChatTitler } from "./titler.js";
@@ -181,7 +181,8 @@ export class ChatService {
   private knowledge: KnowledgeService;
   private contextEngine: ContextEngine;
   private extractionPipeline: ExtractionPipeline;
-  private embedder = new LocalEmbeddings();
+  /** The active embeddings client when it fits the chat index (core/embeddings/manager.ts). */
+  private get embedder() { return embeddingsForChat(); }
   private lastMemoryId: Map<string, string> = new Map(); // episodeId → last memory id
   private llmTools: ToolDefinitionForLlm[] = [];
   private toolExecutor: Map<string, (args: unknown) => Promise<ToolResult>> = new Map();
@@ -1581,9 +1582,11 @@ export class ChatService {
     if (!this.knowledge.available) return;
 
     try {
-      // Embed both messages (LocalEmbeddings uses the same model as graph-intel)
+      // Embed both messages with the client chat memory follows (manager.ts).
+      const embedder = this.embedder;
+      const model = embedder.model;
       const texts = [userMsg.content, assistantMsg.content];
-      const vectors: number[][] = await this.embedder.embed(texts);
+      const vectors: number[][] = await embedder.embed(texts);
 
       // Create user memory
       await this.knowledge.createMemoryNode({
@@ -1592,6 +1595,7 @@ export class ChatService {
         role: userMsg.role,
         content: userMsg.content,
         embedding: vectors[0],
+        embedding_model: model,
         created_at: userMsg.created_at,
       });
 
@@ -1602,6 +1606,7 @@ export class ChatService {
         role: assistantMsg.role,
         content: assistantMsg.content,
         embedding: vectors[1],
+        embedding_model: model,
         created_at: assistantMsg.created_at,
       });
 
