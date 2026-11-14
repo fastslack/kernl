@@ -35,6 +35,7 @@ import { blobToVector } from "../../../core/ranking/relevance.js";
 import { type GraphRunner, inGraphTransaction } from "../../../sdk/graph-batch.js";
 import { asVector, ensureVectorIndex, fulltextSearchClause, runVectorSearch } from "../../../sdk/graph-vectors.js";
 import { buildConstellation, type Constellation } from "./learning-constellation.js";
+import { subjectKeyOf, subjectRootOf } from "../subject-key.js";
 
 export const LEARNING_VECTOR_INDEX = "agent-learning-embeddings";
 export const LEARNING_TEXT_INDEX = "agent-learning-text";
@@ -45,8 +46,9 @@ const BATCH = 500;
  * 2: USED.errors counts failed tool results (they are tool_result steps
  * flagged is_error, not error steps).
  * 3: RECALLED edges, from agent_run_learnings.
+ * 4: ON edges to the work item a run's goal names (web#2653, web#2653:a-b).
  */
-const RUNS_SYNC_VERSION = 3;
+const RUNS_SYNC_VERSION = 4;
 /** 2: learnings carry created_at (when they were learned), for the time machine. */
 const LEARNINGS_SYNC_VERSION = 2;
 /** Below this final score a shared learning is noise in the prompt, not help. */
@@ -147,6 +149,48 @@ export interface LearningImpact {
   agents: Array<{ id: string; name: string; runs: number; ok: number; shared: boolean }>;
   query_ms: number | null;
   cypher: string;
+}
+
+/** One finished run on an issue, for the "earlier attempts" block. */
+export interface EarlierAttempt {
+  id: string; agent: string; status: string; at: string; key: string; outcome: string;
+}
+
+/** Finished runs on an issue or its parts (ON → WorkItem, keyed `web#2653` or `web#2653:…`), newest first. */
+export const EARLIER_ATTEMPTS_CYPHER = `
+MATCH (w:WorkItem) WHERE w.key = $root OR w.key STARTS WITH $prefix
+MATCH (a:Agent)-[:RAN]->(r:AgentRun)-[:ON]->(w)
+WHERE r.id <> $exclude
+RETURN r.id AS id, a.name AS agent, r.status AS status, r.done_at AS at, w.key AS key
+ORDER BY r.done_at DESC
+LIMIT toInteger($limit)`;
+
+/**
+ * Where a lesson came from and where it went: who learned it, from which run;
+ * every run that carried it since (newest first, with its outcome); and the
+ * lessons those runs produced in turn. When a lesson turns out wrong, this is
+ * the list of what it may have touched.
+ */
+export const LEARNING_AUDIT_CYPHER = `
+MATCH (l:AgentLearning {id: $id})
+OPTIONAL MATCH (owner:Agent)-[:LEARNED]->(l)
+OPTIONAL MATCH (l)-[:DERIVED_FROM]->(src:AgentRun)
+WITH l, owner, src
+OPTIONAL MATCH (ra:Agent)-[:RAN]->(r:AgentRun)-[c:RECALLED]->(l)
+WITH l, owner, src, r, ra, c ORDER BY r.done_at DESC
+WITH l, owner, src,
+     collect(CASE WHEN r IS NULL THEN null ELSE {run: r.id, agent: ra.name, status: r.status, at: r.done_at, shared: c.shared} END) AS readers
+OPTIONAL MATCH (child:AgentLearning)-[:DERIVED_FROM]->(:AgentRun)-[:RECALLED]->(l)
+RETURN l.content AS content, l.type AS type, l.confidence AS confidence, l.active AS active,
+       toString(l.created_at) AS created, owner.name AS owner,
+       src.id AS srcRun, src.status AS srcStatus, src.goal AS srcGoal, readers,
+       collect(DISTINCT CASE WHEN child IS NULL THEN null ELSE {id: child.id, content: child.content, active: child.active} END) AS children`;
+
+export interface LearningAudit {
+  learning_id: string; type: string; content: string; confidence: number; active: boolean; created: string;
+  owner: string; source: { run: string; status: string; goal: string } | null;
+  readers: Array<{ run: string; agent: string; status: string; at: string; shared: boolean }>;
+  children: Array<{ id: string; content: string; active: boolean }>;
 }
 
 /**
@@ -422,6 +466,32 @@ export class AgentExperienceGraph {
             { rows: tools },
           );
         }
+        // The work item each run was about, as the decision graph files it:
+        // (run)-[:ON]->(web#2653:a-b)-[:PART_OF]->(web#2653). What any agent
+        // already tried on an issue is then one traversal (earlierAttempts).
+        const subjects = rows
+          .map((r) => ({ run_id: r.id, key: subjectKeyOf(r.goal ?? "") }))
+          .filter((x) => x.key)
+          .map((x) => ({ ...x, parent: x.key.includes(":") ? subjectRootOf(x.key) : null }));
+        if (subjects.length > 0) {
+          await tx.run(
+            `UNWIND $rows AS row
+             MATCH (r:AgentRun {id: row.run_id})
+             MERGE (w:WorkItem {key: row.key})
+             MERGE (r)-[:ON]->(w)`,
+            { rows: subjects },
+          );
+          const parts = subjects.filter((x) => x.parent);
+          if (parts.length > 0) {
+            await tx.run(
+              `UNWIND $rows AS row
+               MATCH (w:WorkItem {key: row.key})
+               MERGE (p:WorkItem {key: row.parent})
+               MERGE (w)-[:PART_OF]->(p)`,
+              { rows: parts },
+            );
+          }
+        }
         if (recalled.length > 0) {
           // The learning may reach the graph later in this same pass (a first
           // sync writes runs before learnings): MERGE by id, its properties follow.
@@ -540,6 +610,53 @@ export class AgentExperienceGraph {
    * Learnings of other agents that fit this goal, best first. Empty when the
    * graph is unavailable, the query fails, or nothing clears the bar.
    */
+  /**
+   * What the office already tried on an issue: the latest finished runs on it
+   * or any of its parts, by any agent, newest first. The runs come from the
+   * graph (run → work item → issue); their outcome text from SQLite, which
+   * keeps it. Before acting, an agent sees that the same step was taken twice
+   * an hour ago and why it stopped — instead of taking it a third time.
+   */
+  async earlierAttempts(key: string, excludeRunId: string, limit = 6): Promise<EarlierAttempt[]> {
+    const g = this.ready();
+    if (!g || !key) return [];
+    const root = subjectRootOf(key);
+    const r = await g.run(EARLIER_ATTEMPTS_CYPHER, { root, prefix: `${root}:`, exclude: excludeRunId, limit });
+    const found = r.records.map((rec) => ({
+      id: str(rec.get("id")), agent: str(rec.get("agent")), status: str(rec.get("status")),
+      at: str(rec.get("at")), key: str(rec.get("key")),
+    }));
+    if (found.length === 0) return [];
+    const text = new Map(
+      (this.db
+        .prepare(`SELECT id, COALESCE(NULLIF(result, ''), error, '') AS out FROM agent_runs WHERE id IN (${found.map(() => "?").join(",")})`)
+        .all(...found.map((f) => f.id)) as Array<{ id: string; out: string }>).map((x) => [x.id, x.out]),
+    );
+    return found.map((f) => ({ ...f, outcome: (text.get(f.id) ?? "").replace(/\s+/g, " ").trim() }));
+  }
+
+  /** A lesson's provenance and reach (LEARNING_AUDIT_CYPHER); null without a graph or when it is not in it. */
+  async learningAudit(id: string): Promise<LearningAudit | null> {
+    const g = this.ready();
+    if (!g) return null;
+    const rec = (await g.run(LEARNING_AUDIT_CYPHER, { id })).records[0];
+    if (!rec) return null;
+    const readers = ((rec.get("readers") as Array<Record<string, unknown>> | null) ?? [])
+      .filter(Boolean)
+      .map((x) => ({ run: str(x.run), agent: str(x.agent), status: str(x.status), at: str(x.at), shared: x.shared === true }));
+    const children = ((rec.get("children") as Array<Record<string, unknown> | null> | null) ?? [])
+      .filter((x): x is Record<string, unknown> => !!x)
+      .map((x) => ({ id: str(x.id), content: str(x.content), active: x.active === true }));
+    const srcRun = str(rec.get("srcRun"));
+    return {
+      learning_id: id, type: str(rec.get("type")), content: str(rec.get("content")),
+      confidence: num(rec.get("confidence")), active: rec.get("active") === true, created: str(rec.get("created")),
+      owner: str(rec.get("owner")),
+      source: srcRun ? { run: srcRun, status: str(rec.get("srcStatus")), goal: str(rec.get("srcGoal")) } : null,
+      readers, children,
+    };
+  }
+
   /**
    * Did this lesson help? The runs that carried it (RECALLED) against the runs
    * the same agents made without it since it exists — one traversal, the

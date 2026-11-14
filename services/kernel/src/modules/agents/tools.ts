@@ -818,6 +818,45 @@ export function agentsTools(
       },
     }),
 
+    // ── kernel_agents_learning_audit ──────────────
+    defineTool({
+      name: "kernel_agents_learning_audit",
+      description:
+        "Where a lesson came from and how far it went: who learned it and from which run, every run that carried it " +
+        "since (agent, outcome, own or shared), and the lessons those runs produced. Use it when a lesson looks wrong, " +
+        "to see what it may have influenced before deactivating or correcting it.",
+      schema: z.object({
+        learning_id: z.string().describe("Lesson id (agent_learnings)"),
+        limit: z.number().int().min(1).max(100).optional().describe("Runs to list (default 20)"),
+      }),
+      handler: async (input) => {
+        const graph = service.getExperienceGraph();
+        if (!graph?.available) return errorResult("The experience graph is not available (no graph driver).");
+        const a = await graph.learningAudit(input.learning_id);
+        if (!a) return errorResult("No lesson with that id in the experience graph (it syncs a few minutes after it is learned).");
+        const limit = input.limit ?? 20;
+        const ok = a.readers.filter((r) => r.status === "completed").length;
+        const lines = [
+          `## Lesson ${a.learning_id} — ${a.active ? "active" : "inactive"}, confidence ${a.confidence.toFixed(2)}`,
+          `[${a.type}] ${a.content}`,
+          "",
+          `**Learned by** ${a.owner || "?"}${a.created ? ` on ${a.created.slice(0, 16).replace("T", " ")}` : ""}` +
+            (a.source ? `, from run ${a.source.run} (${a.source.status}): ${a.source.goal.slice(0, 160).replace(/\s+/g, " ")}` : ", source run unknown"),
+          "",
+          `**Carried by ${a.readers.length} run(s)** — ${ok} completed, ${a.readers.length - ok} failed` +
+            (a.readers.length > limit ? ` (newest ${limit} shown)` : ""),
+          ...a.readers.slice(0, limit).map((r) =>
+            `- ${r.at.slice(0, 16).replace("T", " ")} · ${r.agent} · ${r.status}${r.shared ? " · shared" : ""} · run ${r.run}`),
+          "",
+          a.children.length
+            ? `**Lessons born from runs that carried it (${a.children.length})** — review them too if this one is wrong:`
+            : "**No lesson came out of the runs that carried it.**",
+          ...a.children.map((c) => `- ${c.id} ${c.active ? "" : "(inactive) "}${c.content.slice(0, 160).replace(/\s+/g, " ")}`),
+        ];
+        return textResult(lines.join("\n"));
+      },
+    }),
+
     // ── kernel_agents_list_triggers ──────────────────
     defineTool({
       name: "kernel_agents_list_triggers",

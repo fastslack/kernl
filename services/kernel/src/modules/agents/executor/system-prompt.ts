@@ -24,6 +24,7 @@ import type { SkillBodyResolver } from "../skill-resolver.js";
 import { agentAllowedTools, agentSkills } from "../agent-fields.js";
 import type { RunRecorder } from "./run-recorder.js";
 import { getAttachmentService } from "../../attachments/index.js";
+import { subjectKeyOf } from "../subject-key.js";
 import { attachmentNote } from "../../attachments/blocks.js";
 import {
   promptTodayDate,
@@ -35,6 +36,7 @@ import {
   promptPerformanceBlock,
   promptToolFailuresBlock,
   promptSimilarRunsBlock,
+  promptEarlierAttemptsBlock,
   promptMemorySummaryBlock,
   promptMemoryGoalSuffix,
   promptWorkspaceMandate,
@@ -325,6 +327,42 @@ const similarRuns: SystemPromptStep = (ctx) => {
   );
 };
 
+// What the office already tried on the issue this run is about — by any of its
+// agents, newest first (experience graph: run → work item → issue). An office
+// re-dispatched web#2653 every few minutes, each run finding the same blocker
+// and ending the same way; with the earlier attempts in front of it, the next
+// run sees that nothing changed and says so instead of trying again. Never
+// blocks a run: any failure contributes nothing.
+const earlierAttempts: SystemPromptStep = (ctx) => {
+  if (ctx.config?.agents?.earlierAttempts === false) return null;
+  const key = subjectKeyOf(ctx.effectiveGoal);
+  if (!key) return null;
+  const graph = ctx.service.getExperienceGraph();
+  if (!graph?.available) return null;
+  return (async () => {
+    try {
+      const found = await graph.earlierAttempts(key, ctx.recorder.runId, 6);
+      if (found.length === 0) return null;
+      ctx.recorder.logEvent({
+        event_type: "run", event_subtype: "earlier_attempts_injected",
+        detail: `${found.length} earlier run(s) on ${key}`,
+        raw_data: { key, runs: found.map((f) => f.id) },
+      });
+      return promptEarlierAttemptsBlock(ctx.lang, key, found.map((f) => ({
+        agent: f.agent,
+        ok: f.status === "completed",
+        when: f.at.slice(0, 16).replace("T", " "),
+        key: f.key,
+        // Earlier runs quote issues and mails: third-party text, kept short.
+        outcome: f.outcome.slice(0, 350),
+      }))) || null;
+    } catch (err) {
+      log.debug(`Earlier attempts skipped: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+  })();
+};
+
 // Inject conversational memory — ranked by goal relevance, not pure recency
 const conversationalMemory: SystemPromptStep = (ctx) => {
   const { service, agent, effectiveGoal, goalVector, cosW, minS, lang } = ctx;
@@ -392,6 +430,7 @@ export const SYSTEM_PROMPT_STEPS: ReadonlyArray<SystemPromptStep> = [
   performanceStats,
   toolFailureWarnings,
   similarRuns,
+  earlierAttempts,
   conversationalMemory,
   workspaceMandate,
   styleDirective,

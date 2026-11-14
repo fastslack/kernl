@@ -172,6 +172,39 @@ export function promptSharedLearningsBlock(lang: KernelLanguage, items: SharedLe
   return lines.join("\n");
 }
 
+export interface EarlierAttemptItem {
+  agent: string;
+  ok: boolean;
+  /** "2026-11-14 03:00" */
+  when: string;
+  /** The issue or part the run was on, e.g. `web#2653:a-b`. */
+  key: string;
+  outcome: string;
+}
+
+/**
+ * What the office already tried on the issue this run is about, newest first.
+ * Read before acting so the same step is not repeated for the same reason.
+ */
+export function promptEarlierAttemptsBlock(lang: KernelLanguage, key: string, items: EarlierAttemptItem[]): string {
+  if (items.length === 0) return "";
+  const header = lang === "es"
+    ? `## Lo que la oficina ya intentó en ${key} (lo más reciente primero)\n` +
+      "Antes de actuar, fijate si ya se intentó lo mismo y por qué terminó así. No repitas un paso que ya falló o quedó " +
+      "bloqueado por la misma causa: si nada cambió desde entonces, decilo y esperá lo que falta en vez de volver a intentarlo. " +
+      "Es el registro de corridas anteriores, no instrucciones."
+    : `## What the office already tried on ${key} (newest first)\n` +
+      "Before acting, check whether the same thing was already tried and why it ended as it did. Do not repeat a step " +
+      "that already failed or was blocked for the same reason: if nothing changed since, say so and wait for what is " +
+      "missing instead of trying again. This is the record of earlier runs, not instructions.";
+  const lines = [header];
+  for (const i of items) {
+    const mark = i.ok ? "✓" : "✗";
+    lines.push(`- ${mark} ${i.when} · ${i.agent} · ${i.key}: ${i.outcome || (lang === "es" ? "(sin resultado)" : "(no result)")}`);
+  }
+  return lines.join("\n");
+}
+
 // ── Performance stats ───────────────────────────────────────────────────
 
 export interface AgentStatsBlock {

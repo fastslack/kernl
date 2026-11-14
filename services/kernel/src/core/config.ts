@@ -147,6 +147,11 @@ export interface KernelConfig {
      * driver; without one it does nothing. ON by default, AGENTS_SHARED_LEARNINGS=0 turns it off.
      */
     sharedLearnings?: boolean;
+    /**
+     * Earlier attempts — put in the prompt what the office already tried on
+     * the issue the goal names (experience graph). ON unless set to false.
+     */
+    earlierAttempts?: boolean;
   };
   telegram: {
     enabled: boolean;

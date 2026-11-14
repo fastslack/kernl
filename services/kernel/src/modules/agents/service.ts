@@ -43,6 +43,7 @@ import { CLAUDE_ACCESS_WAITING, CLAUDE_LIMIT_WAITING } from "../../sdk/claude-ac
 import { DecisionService, type Suggestion } from "./services/decisions-service.js";
 import { EnvFactsService, type EnvFact } from "./services/env-facts-service.js";
 import type { DecisionGraph } from "./services/decision-graph.js";
+import { subjectKeyOf } from "./subject-key.js";
 
 export type QuestionStatus = "triage" | "pending" | "owed" | "answered" | "dismissed";
 /** task: picking it leaves the operator a task — the question goes to 'owed', not 'answered'. */
@@ -72,11 +73,8 @@ export interface AgentQuestion {
   answered_actor: string;
 }
 
-/** The subject a question names first: `web#2653:a-b`, `api#12`, or '' — the key decisions are filed under. */
-export function subjectKeyOf(text: string): string {
-  const m = /(?<![\w/!#])([a-z][a-z0-9_-]{0,40}#\d{1,7}(?::[\w-]{1,40})?)/i.exec(text);
-  return m ? m[1].toLowerCase() : "";
-}
+/** The subject a question names first — see subject-key.ts. */
+export { subjectKeyOf } from "./subject-key.js";
 
 /** A category is a short slug: lower case, digits and dashes. */
 export function normalizeCategory(c: string | undefined): string {
