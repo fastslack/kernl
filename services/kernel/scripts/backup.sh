@@ -139,6 +139,42 @@ docker_stack_running() {
 }
 
 NATIVE_DATA_DIR="${KERNEL_BACKUP_DATA_DIR:-$PROJECT_DIR/data}"
+# A packaged install keeps its data in the user's profile, not next to this
+# script: look there when the source tree's data dir has no database.
+if [ -z "${KERNEL_BACKUP_DATA_DIR:-}" ] && [ ! -f "$NATIVE_DATA_DIR/kernel.db" ]; then
+  for d in "${KERNL_DATA_DIR:-}" "$HOME/Library/Application Support/Kernl/data" \
+           "${XDG_DATA_HOME:-$HOME/.local/share}/kernl/data"; do
+    if [ -n "$d" ] && [ -f "$d/kernel.db" ]; then NATIVE_DATA_DIR="$d"; break; fi
+  done
+fi
+
+# The runtime for native mode. A source checkout has bun on PATH and its
+# kernel at bin/mcp-server.ts; a packaged install ships both inside the app
+# (macOS: Kernl.app/Contents/Resources; deb/rpm: /opt/kernl/bin), where PATH
+# does not reach. KERNL_BUN / KERNL_APP_DIR point at another copy.
+BUN=""
+KERNEL_ENTRY=""
+KERNEL_DIR=""
+resolve_native_runtime() {
+  [ -n "$BUN" ] && return 0
+  local dir
+  if [ -f "$PROJECT_DIR/bin/mcp-server.ts" ] && command -v bun >/dev/null 2>&1; then
+    BUN="$(command -v bun)"; KERNEL_ENTRY="bin/mcp-server.ts"; KERNEL_DIR="$PROJECT_DIR"
+    return 0
+  fi
+  for dir in "${KERNL_APP_DIR:-}" "/Applications/Kernl.app/Contents/Resources" \
+             "$HOME/Applications/Kernl.app/Contents/Resources" "/opt/kernl/bin"; do
+    if [ -n "$dir" ] && [ -x "$dir/bun" ] && [ -f "$dir/mcp-server.js" ]; then
+      BUN="${KERNL_BUN:-$dir/bun}"; KERNEL_ENTRY="mcp-server.js"; KERNEL_DIR="$dir"
+      return 0
+    fi
+  done
+  if [ -n "${KERNL_BUN:-}" ] || command -v bun >/dev/null 2>&1; then
+    BUN="${KERNL_BUN:-$(command -v bun)}"; KERNEL_ENTRY="bin/mcp-server.ts"; KERNEL_DIR="$PROJECT_DIR"
+    return 0
+  fi
+  die "bun not found — neither on PATH nor inside a Kernl app. Point at it with KERNL_BUN=/path/to/bun (and KERNL_APP_DIR for a packaged install)."
+}
 
 if [ "$MODE" = "auto" ]; then
   if docker_stack_running; then
@@ -167,11 +203,11 @@ note "[1/6] Snapshotting the database (VACUUM INTO)…"
 
 vacuum_locally() {
   local src="$1" dest="$2"
-  command -v bun >/dev/null 2>&1 || die "bun not found — needed to snapshot SQLite consistently."
+  resolve_native_runtime
   # VACUUM INTO refuses to overwrite an existing file.
   rm -f "$dest"
   KERNL_SNAPSHOT_SRC="$src" KERNL_SNAPSHOT_DEST="$dest" \
-    bun -e "$SNAPSHOT_JS" || die "VACUUM INTO failed for $src"
+    "$BUN" -e "$SNAPSHOT_JS" || die "VACUUM INTO failed for $src"
 }
 
 case "$MODE" in
@@ -236,8 +272,8 @@ esac
 [ -s "$BACKUP/data/kernel.db" ] || die "the snapshot is empty."
 if [ "$MODE" = "native" ]; then
   note "[2/6] Verifying the snapshot…"
-  command -v bun >/dev/null 2>&1 || die "bun not found — needed to verify the snapshot."
-  KERNL_VERIFY_DB="$BACKUP/data/kernel.db" bun -e "$VERIFY_JS" \
+  resolve_native_runtime
+  KERNL_VERIFY_DB="$BACKUP/data/kernel.db" "$BUN" -e "$VERIFY_JS" \
     || die "the snapshot did not verify — NOT a usable backup."
 fi
 
@@ -305,18 +341,19 @@ elif [ "$MODE" = "native" ]; then
   GRAPH_SRC="${KERNEL_BACKUP_GRAPH_DIR:-$NATIVE_DATA_DIR/graph}"
   if [ -d "$GRAPH_SRC" ]; then
     note "[4/6] Copying the graph store (read-only snapshot; the kernel keeps running)…"
-    [ -f "$PROJECT_DIR/bin/mcp-server.ts" ] \
-      || die "the kernel entry point $PROJECT_DIR/bin/mcp-server.ts is missing — it does the graph copy."
+    resolve_native_runtime
+    [ -f "$KERNEL_DIR/$KERNEL_ENTRY" ] \
+      || die "the kernel entry point $KERNEL_DIR/$KERNEL_ENTRY is missing — it does the graph copy."
     # The copier opens a fresh store and refuses an existing one.
     [ ! -e "$BACKUP/data/graph" ] || die "internal: $BACKUP/data/graph already exists."
-    COPY_OUT="$(cd "$PROJECT_DIR" && KERNL_INTERNAL_TASK=relate-store-migration \
+    COPY_OUT="$(cd "$KERNEL_DIR" && KERNL_INTERNAL_TASK=relate-store-migration \
       KERNL_RELATE_MIGRATE_FROM="$GRAPH_SRC" KERNL_RELATE_MIGRATE_TO="$BACKUP/data/graph" \
-      bun bin/mcp-server.ts 2>&1)" \
+      "$BUN" "$KERNEL_ENTRY" 2>&1)" \
       || die "the graph copy failed:
 $(last_lines "$COPY_OUT")
 $GRAPH_SKIP_HINT"
-    GOT="$(KERNL_VERIFY_GRAPH="$BACKUP/data/graph" KERNL_GRAPH_RESOLVE_FROM="$PROJECT_DIR" \
-      bun -e "$VERIFY_GRAPH_JS" 2>"$GRAPH_VERIFY_ERR")" \
+    GOT="$(KERNL_VERIFY_GRAPH="$BACKUP/data/graph" KERNL_GRAPH_RESOLVE_FROM="$KERNEL_DIR" \
+      "$BUN" -e "$VERIFY_GRAPH_JS" 2>"$GRAPH_VERIFY_ERR")" \
       || die "the graph copy does not open:
 $(tail -5 "$GRAPH_VERIFY_ERR")
 NOT a usable backup."
@@ -390,13 +427,13 @@ if [ "$MODE" = "docker" ] && [ "$SKIP_NEO4J" != "1" ] \
      && [ -s "$BACKUP/neo4j/neo4j.dump" ]; then
     note "      graph: $(du -h "$BACKUP/neo4j/neo4j.dump" | cut -f1)"
   else
-    die "the Neo4j dump failed or came out empty. The graph rebuilds from SQLite, so re-run with KERNEL_BACKUP_SKIP_NEO4J=1 to accept that and continue."
+    die "the Neo4j dump failed or came out empty. Re-run with KERNEL_BACKUP_SKIP_NEO4J=1 to back up without it: what lives only in Neo4j (chat memory, contact links, news) is then not in this backup."
   fi
 
   restart_neo4j
   trap 'cleanup_tree "$TMPDIR_BACKUP"' EXIT
 else
-  note "[5/6] Skipping Neo4j (rebuildable from SQLite)"
+  note "[5/6] Skipping Neo4j (not running, or skipped; the built-in graph was copied above)"
 fi
 
 # ── 6. Restore script + archive ──────────────────────────────────────
@@ -533,7 +570,7 @@ if [ -f "$RESTORE_DIR/neo4j/neo4j.dump" ]; then
   echo ""
   echo "A Neo4j dump is included but NOT restored automatically."
   echo "Load it with:  neo4j-admin database load neo4j --from-stdin < neo4j/neo4j.dump"
-  echo "(Or skip it — the graph rebuilds from SQLite.)"
+  echo "(Only needed to go back to Neo4j: the built-in graph is restored from data/graph.)"
 fi
 
 echo ""
