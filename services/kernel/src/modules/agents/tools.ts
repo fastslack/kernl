@@ -1703,13 +1703,22 @@ export function agentsTools(
         "Acknowledge office-inbox letters you have finished handling. Unacknowledged letters are " +
         "handed to you again by the inbox sweeper (up to 3 times), so ack every letter you completed.",
       schema: z.object({
-        message_ids: z.array(z.string()).min(1).describe("Inbox message ids (from kernel_agents_inbox)"),
+        // A list written as one string ("a, b") is read as the list it means:
+        // agents send it that way often enough to fail the run's last step.
+        message_ids: z
+          .preprocess((v) => (typeof v === "string" ? v.split(/[\s,]+/).filter(Boolean) : v), z.array(z.string()))
+          .optional()
+          .describe("Inbox message ids (from kernel_agents_inbox)"),
+        message_id: z.string().optional().describe("A single inbox message id — the same as message_ids: [id]"),
         ...CALLER_AGENT_ID_FIELD,
       }),
       handler: async (input) => {
         const callerId = resolveCallerAgentId(input);
         if (!callerId) return errorResult("Caller agent context missing — kernel_agents_inbox_ack is only usable from an agent run.");
-        const acked = service.ackInboxFor(callerId, input.message_ids);
+        const ids = [...(input.message_ids ?? []), ...(input.message_id ? [input.message_id] : [])];
+        // An answer the agent can act on, not a schema error in the kernel's log.
+        if (ids.length === 0) return errorResult("Pass message_ids: the ids of the letters you handled, as kernel_agents_inbox lists them.");
+        const acked = service.ackInboxFor(callerId, ids);
         if (acked === 0) return errorResult("None of those ids are open letters addressed to you (wrong ids, someone else's letters, or already archived).");
         return textResult(`Acknowledged ${acked} letter(s).`);
       },
