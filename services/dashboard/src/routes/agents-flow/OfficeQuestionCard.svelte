@@ -167,6 +167,7 @@
   <div class="bq-head">
     <span class="bq-from-dot" style="background:{color}"></span>
     <span class="bq-from">{agentName}</span>
+    {#if q.project?.name}<span class="bq-project" title={q.project.name}>· {q.project.name}</span>{/if}
     <span class="bq-time">{fmtRelTime(owed && q.owed_at ? q.owed_at : q.created_at)}</span>
     <button class="bq-dismiss" title={$t('office.chief.q_dismiss')} aria-label={$t('office.chief.q_dismiss')}
             on:click={() => onDismiss(q)} disabled={busy}>×</button>
@@ -320,6 +321,8 @@
   .bq-head{ display:flex; align-items:center; gap:8px; margin-bottom:6px; font:600 10px 'JetBrains Mono',monospace; color:#cbd0e8; }
   .bq-from-dot{ width:7px; height:7px; border-radius:50%; }
   .bq-from{ color:#e7e9f4; }
+  /* Which project the question is about: an office like Growth asks for several. */
+  .bq-project{ color:#f5c86b; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .bq-time{ margin-left:auto; color:#6b7090; font-size:9px; }
   .bq-dismiss{
     background:transparent; border:none; color:#6b7090; font-size:16px;

@@ -69,6 +69,8 @@ export interface PendingQuestion {
   opinion_run_id?: string;
   opinion?: QuestionOpinion | null;
   opinion_error?: string;
+  /** The project of the run that raised it; offices like Growth ask for several. */
+  project?: { id: string; name: string } | null;
 }
 
 /** What the investigator answers (kernel: question-opinion.ts). */

@@ -271,6 +271,8 @@ export function registerAgentRoutes(
       limit,
     }).map((q) => ({
       ...q,
+      // Which project it is about, for offices that serve several.
+      project: service.projectOfRun(q.run_id),
       // What past decisions of its kind suggest, and the last one on the same subject.
       suggestion: service.decisions.suggestionFor(q.id),
       previous: service.decisions.previousOnSubject(q),

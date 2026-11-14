@@ -1613,6 +1613,25 @@ export class AgentService {
       .map((r) => r.run_id);
   }
 
+  /**
+   * The project a question is about: the project of the run that raised it.
+   * An office that serves several projects (Growth) asks from all of them, and
+   * a card that names only the agent leaves the operator guessing which one.
+   * Null for a question with no run, a run with no project, or no projects
+   * module.
+   */
+  projectOfRun(runId: string): { id: string; name: string } | null {
+    if (!runId) return null;
+    try {
+      const row = this.db
+        .prepare("SELECT p.id, p.name FROM agent_runs r JOIN projects p ON p.id = r.project_id WHERE r.id = ?")
+        .get(runId) as { id: string; name: string } | undefined;
+      return row ?? null;
+    } catch {
+      return null; // no projects table on this install
+    }
+  }
+
   listQuestions(opts?: { status?: QuestionStatus; answered_by?: "chief" | "human"; limit?: number }): AgentQuestion[] {
     let sql = "SELECT * FROM agent_questions WHERE 1=1";
     const params: unknown[] = [];
