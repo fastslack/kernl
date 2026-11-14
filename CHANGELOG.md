@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrading from 0.5.1
+
+- **Search by meaning runs inside Kernl by default; LM Studio is no longer
+  needed for it.** The default embeddings provider is now the in-process
+  model `Xenova/paraphrase-multilingual-MiniLM-L12-v2` (384 dimensions, the
+  same weights LM Studio serves as
+  `text-embedding-paraphrase-multilingual-minilm-l12-v2.gguf`). On first start
+  it downloads once (464 MB, into `<data>/data/transformers-cache`), then
+  re-embeds stored learnings, run goals and memory in the background; until a
+  row is done it is still found by its words. To keep the previous behaviour,
+  set `EMBEDDINGS_PROVIDER=auto` (the /models chain) or `lmstudio`.
+
+### Added
+
+- **The in-process embeddings are a first-class provider, chosen in Settings →
+  AI.** A note under the connections names the model, the device it runs on
+  and why, and how many rows are still being re-embedded; its picker switches
+  between "On this computer", "Model chain" and "LM Studio only"
+  (`EMBEDDINGS_PROVIDER` = `local`, `auto`, `lmstudio`). The model is
+  multilingual (most stored memory is Spanish; the old fallback,
+  all-MiniLM-L6-v2, was English-only). `EMBEDDINGS_LOCAL_MODEL` picks
+  `Xenova/multilingual-e5-small` or another ONNX repo, `EMBEDDINGS_LOCAL_DTYPE=q8`
+  a 113 MB model that is faster and slightly less precise.
+- **The device is chosen on its own: GPU when it is faster, CPU otherwise.**
+  Candidates come from the platform and from what the shipped onnxruntime-node
+  carries: CoreML on macOS, DirectML on Windows, CUDA on Linux x64 when its
+  provider library is present. Each is timed once against the CPU and kept
+  only if it wins; the verdict is cached per model and onnxruntime version, a
+  provider that fails to load or to run falls back to the CPU, and the log
+  says which device was picked and why (`embeddings/local: … on CPU — …`).
+  On Apple Silicon the CPU wins: CoreML splits this model into 97 partitions
+  and runs 2.5–5× slower. `EMBEDDINGS_DEVICE` pins one.
+- **Rows embedded by another model are re-embedded in the background.**
+  Searches only compare vectors of the same model, so rows written while
+  another provider served (the fallback during an LM Studio outage, a
+  previous default) were invisible to search by meaning. When the active model
+  changes — a setting, a provider that comes back, a new default — learnings,
+  run goals, agent memory, the brain index and chat memory carrying another
+  model's vectors are embedded again, newest first, and the experience graph
+  picks the new vectors up.
+- **Chat memory and the brain index follow the active model.** Chat memory
+  always embedded with all-MiniLM-L6-v2 whatever /models said, and neither it
+  nor the brain index recorded which model made a vector. Both now record it
+  (`embedding_model` on chat `Memory` nodes, a column on `brain_items`), search
+  only within the active model, and are converted by the re-embed — chat
+  memories written before this release included. A primary whose vectors do
+  not fit chat memory's 384-dimension index (OpenAI's 1536) leaves chat memory
+  on the in-process model.
+
+### Changed
+
+- **The auto chain notices when a provider comes back.** When every /models
+  embeddings link was down and the in-process model took over, the kernel
+  re-probes every five minutes and switches back (re-embedding what the
+  fallback wrote) instead of staying on the fallback until a restart.
+- **A changed embeddings setting applies without a restart.** Every consumer
+  (agents, tool memory, cinema, RSS ranking, brain) follows the new client.
+
 ## [0.5.1] - 2026-11-13
 
 ### Upgrading from 0.5.0

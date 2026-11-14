@@ -166,5 +166,18 @@ const es: Record<LlmConnectKey, string> = {
   "llm.acc.remove_confirm": "¿Quitar «{name}»?",
   "llm.acc.signin_title": "Conectar: {name}",
   "llm.acc.duplicate": "Esta es la misma suscripción que «{label}» ({email}). Rotar entre las dos no suma uso — conectá otra cuenta.",
+  "llm.emb.title": "Búsqueda por significado",
+  "llm.emb.on_device": "en {device}",
+  "llm.emb.loading": "cargando el modelo…",
+  "llm.emb.waiting": "se carga con la primera búsqueda",
+  "llm.emb.last_resort": "Ningún proveedor de embeddings de tu cadena responde: se usa el modelo local hasta que vuelva uno.",
+  "llm.emb.reembed": "Reprocesando la memoria con este modelo: faltan {n}.",
+  "llm.emb.reembed_error": "El reprocesado se pausó: {error}",
+  "llm.emb.mode": "Origen",
+  "llm.emb.mode_local": "En este equipo",
+  "llm.emb.mode_auto": "Cadena de modelos",
+  "llm.emb.mode_lmstudio": "Solo LM Studio",
+  "llm.emb.mode_hint": "«En este equipo» no necesita LM Studio ni claves; usa la GPU si es más rápida, si no la CPU. Al cambiar de origen, la memoria guardada se reprocesa sola.",
+  "llm.emb.disabled": "La búsqueda por significado está apagada: no se pudo crear ningún modelo de embeddings.",
 };
 export default es;

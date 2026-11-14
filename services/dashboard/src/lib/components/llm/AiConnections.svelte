@@ -9,6 +9,7 @@
   import ProviderGrid from './ProviderGrid.svelte';
   import ProviderConnect from './ProviderConnect.svelte';
   import ClaudeSignIn from './ClaudeSignIn.svelte';
+  import EmbeddingsNote from './EmbeddingsNote.svelte';
   import {
     addClaudeAccount, chainSummary, connectionRows, disconnectProvider, errorView, fetchCatalog, fetchClaudeAccounts,
     moveLink, removeClaudeAccount, saveChain, testProvider, timeAgo, updateClaudeAccount,
@@ -288,6 +289,8 @@
         <button type="button" class="ai-btn ghost" on:click={() => dispatch('advanced')}>{$t('llm.advanced')}</button>
       </div>
     </section>
+
+    <EmbeddingsNote />
 
     {#if catalog.claudeCodeTransition === 'legacy-token'}
       <p class="ai-notice" role="note">{$t('llm.cc_transition')}</p>

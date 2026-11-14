@@ -7,6 +7,70 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Actualizar desde 0.5.1
+
+- **La búsqueda por significado corre dentro de Kernl por defecto; ya no hace
+  falta LM Studio para eso.** El proveedor de embeddings por defecto ahora es
+  el modelo local `Xenova/paraphrase-multilingual-MiniLM-L12-v2` (384
+  dimensiones, los mismos pesos que LM Studio sirve como
+  `text-embedding-paraphrase-multilingual-minilm-l12-v2.gguf`). En el primer
+  arranque se descarga una vez (464 MB, en `<data>/data/transformers-cache`) y
+  después vuelve a procesar en segundo plano los aprendizajes, los objetivos de
+  las corridas y la memoria guardados; mientras una fila no está lista, se la
+  sigue encontrando por sus palabras. Para quedarte como antes, poné
+  `EMBEDDINGS_PROVIDER=auto` (la cadena de /models) o `lmstudio`.
+
+### Agregado
+
+- **Los embeddings locales son un proveedor más, que se elige en Ajustes →
+  IA.** Una nota debajo de las conexiones muestra el modelo, en qué
+  dispositivo corre y por qué, y cuántas filas faltan reprocesar; su selector
+  cambia entre «En este equipo», «Cadena de modelos» y «Solo LM Studio»
+  (`EMBEDDINGS_PROVIDER` = `local`, `auto`, `lmstudio`). El modelo es
+  multilingüe (casi toda la memoria guardada está en castellano; el respaldo
+  anterior, all-MiniLM-L6-v2, solo entendía inglés). `EMBEDDINGS_LOCAL_MODEL`
+  elige `Xenova/multilingual-e5-small` u otro repositorio ONNX, y
+  `EMBEDDINGS_LOCAL_DTYPE=q8` un modelo de 113 MB, más rápido y un poco menos
+  preciso.
+- **El dispositivo se elige solo: la GPU cuando es más rápida, si no la CPU.**
+  Los candidatos salen de la plataforma y de lo que trae el onnxruntime-node
+  que se distribuye: CoreML en macOS, DirectML en Windows, CUDA en Linux x64
+  cuando está su biblioteca. Cada uno se mide una vez contra la CPU y se queda
+  solo si gana; el resultado se guarda por modelo y versión de onnxruntime, un
+  proveedor que no carga o falla al correr vuelve a la CPU, y el log dice qué
+  dispositivo se eligió y por qué (`embeddings/local: … on CPU — …`). En Apple
+  Silicon gana la CPU: CoreML parte este modelo en 97 particiones y corre de
+  2,5 a 5 veces más lento. `EMBEDDINGS_DEVICE` fija uno.
+- **Las filas procesadas con otro modelo se reprocesan en segundo plano.** La
+  búsqueda solo compara vectores del mismo modelo, así que lo que se escribió
+  mientras servía otro proveedor (el respaldo durante una caída de LM Studio,
+  un modelo por defecto anterior) quedaba invisible para la búsqueda por
+  significado. Cuando cambia el modelo activo —un ajuste, un proveedor que
+  vuelve, un nuevo valor por defecto— los aprendizajes, objetivos, la memoria
+  de los agentes, el índice de brain y la memoria del chat con vectores de otro
+  modelo se procesan de nuevo, primero los más nuevos, y el grafo de
+  experiencia toma los vectores nuevos.
+- **La memoria del chat y el índice de brain siguen al modelo activo.** La
+  memoria del chat siempre usaba all-MiniLM-L6-v2, dijera lo que dijera
+  /models, y ni ella ni el índice de brain guardaban qué modelo hizo cada
+  vector. Ahora los dos lo guardan (`embedding_model` en los nodos `Memory` del
+  chat, una columna en `brain_items`), buscan solo dentro del modelo activo y
+  el reprocesado los convierte, incluidas las memorias del chat escritas antes
+  de esta versión. Si el proveedor principal da vectores que no entran en el
+  índice de 384 dimensiones de la memoria del chat (los 1536 de OpenAI), la
+  memoria del chat sigue con el modelo local.
+
+### Cambiado
+
+- **La cadena automática se da cuenta cuando vuelve un proveedor.** Si todos
+  los enlaces de embeddings de /models estaban caídos y entró el modelo local,
+  el kernel vuelve a probarlos cada cinco minutos y regresa al proveedor
+  (reprocesando lo que escribió el respaldo), en vez de quedarse en el
+  respaldo hasta reiniciar.
+- **Un cambio en los ajustes de embeddings se aplica sin reiniciar.** Todos
+  los que los usan (agentes, memoria de herramientas, cine, ranking de RSS,
+  brain) pasan al cliente nuevo.
+
 ## [0.5.1] - 2026-11-13
 
 ### Actualizar desde 0.5.0

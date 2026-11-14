@@ -163,6 +163,19 @@ const en = {
   "llm.acc.remove_confirm": "Remove «{name}»?",
   "llm.acc.signin_title": "Sign in: {name}",
   "llm.acc.duplicate": "This is the same subscription as «{label}» ({email}). Rotating between the two adds no usage — connect another account.",
+  "llm.emb.title": "Search by meaning",
+  "llm.emb.on_device": "on {device}",
+  "llm.emb.loading": "loading the model…",
+  "llm.emb.waiting": "loads with the first search",
+  "llm.emb.last_resort": "No embeddings provider in your chain answers: the local model serves until one comes back.",
+  "llm.emb.reembed": "Re-embedding memory with this model: {n} to go.",
+  "llm.emb.reembed_error": "Re-embedding paused: {error}",
+  "llm.emb.mode": "Source",
+  "llm.emb.mode_local": "On this computer",
+  "llm.emb.mode_auto": "Model chain",
+  "llm.emb.mode_lmstudio": "LM Studio only",
+  "llm.emb.mode_hint": "\"On this computer\" needs no LM Studio or key; it uses the GPU when that is faster, the CPU otherwise. Changing the source re-embeds stored memory on its own.",
+  "llm.emb.disabled": "Search by meaning is off: no embeddings model could be created.",
 } satisfies Record<string, string>;
 
 /** Every key of the LLM-connect strings. `llm-connect.es.ts` is typed against it. */

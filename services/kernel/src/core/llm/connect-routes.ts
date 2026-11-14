@@ -142,6 +142,14 @@ export function registerConnectRoutes(server: KernelHttpServer, deps: ConnectDep
     return probeAdapter(adapter, { model: input.model || undefined, timeoutMs: timeoutFor(entry.slug), local: entry.group === "local" });
   }
 
+  // Which embeddings model and device are serving, and how far the re-embed
+  // has got — the note under the connections in Settings → AI.
+  server.route("GET", "/api/embeddings/status", async () => {
+    const { getActiveEmbeddingsManager } = await import("../embeddings/manager.js");
+    const m = getActiveEmbeddingsManager();
+    return m ? { enabled: true, ...m.status() } : { enabled: false };
+  });
+
   server.route("GET", "/api/llm/catalog", () => ({
     providers: PROVIDER_CATALOG.map((e) => {
       const raw = getStoredConfig(e.slug);
