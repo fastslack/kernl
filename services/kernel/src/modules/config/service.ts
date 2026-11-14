@@ -18,6 +18,32 @@ import { parseSpeed, parseSttEngine, parseTtsEngine } from "../../voice/settings
 const SETTING_CATALOG: SettingDef[] = [
   // ── AI ────────────────────────────────────────────────────────────────────
   {
+    key: "EMBEDDINGS_PROVIDER",
+    label: { en: "Embeddings provider", es: "Proveedor de embeddings" },
+    description: {
+      en: "Where the vectors for semantic search come from. \"local\" (default): an in-process multilingual model, on the GPU when that is faster and on the CPU otherwise — no LM Studio or key needed. \"auto\": the providers in your model chain that offer embeddings (LM Studio, OpenAI, NVIDIA, Ollama), with the local model as the last resort. \"lmstudio\": LM Studio only. Changing it re-embeds stored memory in the background.",
+      es: "De dónde salen los vectores de la búsqueda por significado. \"local\" (por defecto): un modelo multilingüe que corre dentro de Kernl, en la GPU cuando es más rápida y si no en la CPU; no necesita LM Studio ni claves. \"auto\": los proveedores de tu cadena de modelos que ofrecen embeddings (LM Studio, OpenAI, NVIDIA, Ollama), con el modelo local como último recurso. \"lmstudio\": solo LM Studio. Al cambiarlo, la memoria guardada se vuelve a procesar en segundo plano.",
+    },
+    category: "ai",
+    type: "string",
+    seedDefault: "local",
+    applyToConfig: (v, c) => {
+      const p = v.trim().toLowerCase();
+      c.embeddings.provider = p === "auto" || p === "lmstudio" ? p : "local";
+    },
+  },
+  {
+    key: "EMBEDDINGS_DEVICE",
+    label: { en: "Local embeddings device", es: "Dispositivo de los embeddings locales" },
+    description: {
+      en: "\"auto\" (default) times the GPU provider of this platform (CoreML on macOS, DirectML on Windows, CUDA on Linux) against the CPU once and keeps the faster. \"cpu\", \"coreml\", \"dml\" or \"cuda\" pin one; a pinned GPU that fails falls back to the CPU.",
+      es: "\"auto\" (por defecto) compara una vez la GPU de esta plataforma (CoreML en macOS, DirectML en Windows, CUDA en Linux) con la CPU y se queda con la más rápida. \"cpu\", \"coreml\", \"dml\" o \"cuda\" fijan uno; si la GPU fijada falla, se usa la CPU.",
+    },
+    category: "ai",
+    type: "string",
+    seedDefault: "auto",
+  },
+  {
     key: "LMSTUDIO_MODEL",
     label: { en: "LM Studio Model ID", es: "ID de modelo de LM Studio" },
     description: { en: "Model identifier as exposed by LM Studio's local server (e.g. \"qwen3-1.7b\" or \"qwen3.5-9b\"). Required to enable LM Studio as a subtitle translation engine — leave blank to disable.", es: "Identificador del modelo tal como lo expone el servidor local de LM Studio (por ejemplo \"qwen3-1.7b\" o \"qwen3.5-9b\"). Necesario para usar LM Studio como motor de traducción de subtítulos." },

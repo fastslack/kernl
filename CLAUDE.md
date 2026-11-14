@@ -8,7 +8,7 @@
 - **Protocol**: MCP (Model Context Protocol) via `@modelcontextprotocol/sdk` — dual transport: stdio + Streamable HTTP
 - **Validation**: Zod schemas (converted to JSON Schema for MCP via `zodToJsonSchema()`)
 - **Testing**: vitest (in-memory SQLite, Neo4j unavailable by default)
-- **Embeddings**: `@huggingface/transformers` — local ONNX model `Xenova/all-MiniLM-L6-v2` (384d)
+- **Embeddings**: `@huggingface/transformers` on onnxruntime-node — in-process `Xenova/paraphrase-multilingual-MiniLM-L12-v2` (384d) by default, device calibrated (GPU when faster, else CPU); see `core/embeddings/` (manager, local, device, reembed)
 - **Notifications**: Multi-channel via NotificationRegistry (Mattermost, Telegram, Dashboard, WhatsApp, Slack, Discord, WebChat) — marketplace-driven, factory pattern
 </stack>
 

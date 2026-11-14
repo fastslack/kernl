@@ -237,11 +237,10 @@ export interface KernelConfig {
     socketPath: string;
   };
   // Embeddings — generic vector encoder used by graph-intel, cinema, and
-  // any future module that needs semantic search. Provider auto-detect:
-  // tries LMStudio first (configurable URL/model), falls back to a local
-  // transformers.js MiniLM if LMStudio isn't reachable.
+  // any future module that needs semantic search. Default: the in-process
+  // multilingual model (core/embeddings/local.ts), GPU when faster, else CPU.
   embeddings: {
-    /** "auto" (lmstudio→local), "lmstudio" (fail loud if down), "local" (force MiniLM). */
+    /** "local" (default, in-process), "auto" (/models chain → local), "lmstudio" (LM Studio only, fail loud). */
     provider: "auto" | "lmstudio" | "local";
     /** OpenAI-compatible base URL (must include /v1). */
     baseUrl: string;
@@ -570,8 +569,8 @@ export function loadConfig(): KernelConfig {
     },
     embeddings: {
       provider: (() => {
-        const v = (process.env.EMBEDDINGS_PROVIDER ?? "auto").toLowerCase();
-        return v === "lmstudio" || v === "local" ? v : "auto";
+        const v = (process.env.EMBEDDINGS_PROVIDER ?? "local").trim().toLowerCase();
+        return v === "lmstudio" || v === "auto" ? v : "local";
       })(),
       baseUrl: process.env.EMBEDDINGS_BASE_URL ?? "http://127.0.0.1:1234/v1",
       model: process.env.EMBEDDINGS_MODEL ?? "text-embedding-bge-m3",

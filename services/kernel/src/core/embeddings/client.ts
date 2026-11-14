@@ -4,7 +4,7 @@
  *   - openai:   OpenAI's /v1/embeddings
  *   - nvidia:   NVIDIA NIM's /v1/embeddings
  *   - ollama:   Ollama's OpenAI-compatible /v1/embeddings
- *   - local:    in-process @huggingface/transformers (MiniLM, absolute fallback)
+ *   - local:    in-process @huggingface/transformers (multilingual MiniLM; the default)
  *   - chain:    wraps multiple of the above and walks them in order on failure
  *
  * Why generic: the cinema module needs vectors but so do graph-intel,
