@@ -63,17 +63,17 @@
 		</button>
 		<span class="bar-sep" aria-hidden="true"></span>
 
-		<button class="k-btn k-btn--ghost" type="button" on:click={() => dispatch('meeting')}>
-			<Icon name="users" />{$t('office.bar.meeting')}<kbd class="k-kbd">R</kbd>
+		<button class="k-btn k-btn--ghost" type="button" title={$t('office.bar.meeting')} on:click={() => dispatch('meeting')}>
+			<Icon name="users" /><span class="bar-l">{$t('office.bar.meeting')}</span><kbd class="k-kbd">R</kbd>
 		</button>
 
-		<button class="k-btn k-btn--ghost" type="button" on:click={() => dispatch('activity')}>
-			<Icon name="activity" />{$t('office.bar.activity')}
+		<button class="k-btn k-btn--ghost" type="button" title={$t('office.bar.activity')} on:click={() => dispatch('activity')}>
+			<Icon name="activity" /><span class="bar-l">{$t('office.bar.activity')}</span>
 		</button>
 
 		<div class="bar-menu">
-			<button class="k-btn k-btn--ghost" type="button" aria-haspopup="menu" aria-expanded={openMenu === 'view'} on:click|stopPropagation={() => toggleMenu('view')}>
-				<Icon name="eye" />{$t('office.bar.view')}<Icon name="chev-d" size={14} />
+			<button class="k-btn k-btn--ghost" type="button" aria-haspopup="menu" aria-expanded={openMenu === 'view'} title={$t('office.bar.view')} on:click|stopPropagation={() => toggleMenu('view')}>
+				<Icon name="eye" /><span class="bar-l">{$t('office.bar.view')}</span><Icon name="chev-d" size={14} />
 			</button>
 			{#if openMenu === 'view'}
 				<div class="bar-pop bar-pop--right" role="menu">
@@ -105,21 +105,31 @@
 		</div>
 
 		<span class="bar-sep" aria-hidden="true"></span>
-		<button class="k-btn bar-new" type="button" on:click={() => dispatch('newoffice')}>
-			<Icon name="plus" />{$t('office.bar.new_office')}<kbd class="k-kbd bar-new-kbd">N</kbd>
+		<button class="k-btn bar-new" type="button" title={$t('office.bar.new_office')} on:click={() => dispatch('newoffice')}>
+			<Icon name="plus" /><span class="bar-l bar-l--keep">{$t('office.bar.new_office')}</span><kbd class="k-kbd bar-new-kbd">N</kbd>
 		</button>
 	</div>
 </header>
 
 <style>
+	/* One line: the stats panel shrinks first (its own container queries read this width), then the buttons lose their labels. */
 	.bar {
-		min-height: 64px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 20px; z-index: var(--z-chrome);
+		container: bar / inline-size;
+		min-height: 56px; display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; padding: 10px 16px; z-index: var(--z-chrome);
 		background: color-mix(in srgb, var(--surface-1) 92%, transparent); border-bottom: 1px solid var(--border);
 	}
 	/* The bar is its own stacking context; lift it while a menu is open so the menu paints above the drawer. */
 	.bar--menu-open { z-index: var(--z-modal); }
-	.bar-title { margin: 0; font: 600 18px/1.2 var(--font-display); color: var(--text-1); }
-	.bar-actions { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+	/* The page's heading, for screen readers: the bar has no room to spare for it. */
+	.bar-title { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+	.bar-actions { margin-left: auto; display: flex; flex: none; align-items: center; gap: 4px; }
+	@container bar (max-width: 1520px) {
+		.bar-l:not(.bar-l--keep), .bar-actions :global(kbd) { display: none; }
+	}
+	@container bar (max-width: 900px) {
+		.bar-l--keep { display: none; }
+		.bar-sep { margin: 0 2px; }
+	}
 	.bar-inbox { position: relative; }
 	.bar-badge {
 		position: absolute; top: 2px; right: 1px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
@@ -148,7 +158,7 @@
 	.bar-new:hover { background: var(--gold); border-color: var(--gold); filter: brightness(1.08); }
 	.bar-new-kbd { color: inherit; background: transparent; border-color: currentColor; opacity: .65; }
 	@media (max-width: 700px) {
-		.bar { padding: 12px; gap: 10px; }
+		.bar { padding: 12px; gap: 10px; flex-wrap: wrap; }
 		.bar-actions { width: 100%; margin-left: 0; }
 		.bar-actions :global(.k-btn), .bar-actions :global(.k-icon-btn) { min-height: 40px; }
 		.bar-sep, .bar-actions :global(kbd) { display: none; }
