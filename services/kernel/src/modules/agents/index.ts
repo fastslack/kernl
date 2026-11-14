@@ -112,6 +112,7 @@ export function createAgentsModule(): AgentsModule {
   let hostPathAuditTimer: ReturnType<typeof setTimeout> | null = null;
   let experienceSyncTimer: ReturnType<typeof setTimeout> | null = null;
   let experienceSyncHandler: ((payload: unknown) => void) | null = null;
+  let reembeddedHandler: ((payload: { table: string; ids: string[]; model: string }) => void) | null = null;
   let evalFailingHandler: ((payload: unknown) => void) | null = null;
   let eventsRef: ModuleContext["events"] | null = null;
   let decisionGraph: DecisionGraph | null = null;
@@ -180,6 +181,12 @@ export function createAgentsModule(): AgentsModule {
         experienceSyncHandler = () => scheduleSync(5_000);
         eventsRef = ctx.events;
         ctx.events.on("agent:flow:run_completed", experienceSyncHandler);
+        // Learnings re-embedded under a new model reach the graph on the next
+        // pass (other tables' batches carry nothing the graph holds).
+        reembeddedHandler = (payload) => {
+          if (payload?.table === "agent_learnings") scheduleSync(5_000);
+        };
+        ctx.events.on("embeddings:reembedded", reembeddedHandler);
         graphReplacedUnsubs.push(onGraphReplaced(() => scheduleSync(1_000)));
         scheduleSync(15_000);
       }
@@ -485,7 +492,10 @@ export function createAgentsModule(): AgentsModule {
       for (const [name, fn] of decisionSyncHandlers) eventsRef?.off(name as never, fn as never);
       if (hostPathAuditTimer) clearTimeout(hostPathAuditTimer);
       if (experienceSyncTimer) clearTimeout(experienceSyncTimer);
-      if (experienceSyncHandler) eventsRef?.off("agent:flow:run_completed", experienceSyncHandler);
+      if (experienceSyncHandler) {
+        eventsRef?.off("agent:flow:run_completed", experienceSyncHandler);
+        if (reembeddedHandler) eventsRef?.off("embeddings:reembedded", reembeddedHandler);
+      }
       if (evalFailingHandler) eventsRef?.off("agent:eval:failing", evalFailingHandler);
       agentScheduler?.stop();
       questionTriager?.stop();

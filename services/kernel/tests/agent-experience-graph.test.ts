@@ -296,4 +296,24 @@ describe.skipIf(!relateClientInstalled())("AgentExperienceGraph on Relate", () =
     expect((await xp.sync()).learnings).toBe(1);
     expect((await query()).map((h) => h.id)).toContain("l-late");
   });
+
+  it("re-projects learnings re-embedded under a new model, without an updated_at bump", async () => {
+    let active = MODEL;
+    const xp2 = new AgentExperienceGraph(db as never, () => graph, () => active);
+    await xp2.sync();
+    // The active model changes; nothing is re-embedded yet, so nothing moves.
+    active = "Xenova/paraphrase-multilingual-MiniLM-L12-v2";
+    expect((await xp2.sync()).learnings).toBe(0);
+    // The re-embed queue rewrites one row's vector (updated_at untouched).
+    db.prepare("UPDATE agent_learnings SET embedding = ?, embedding_model = ? WHERE id = 'l-mail'").run(
+      vectorToBlob(vec(1)), active,
+    );
+    expect((await xp2.sync()).learnings).toBe(1);
+    expect((await xp2.sync()).learnings).toBe(0);
+    const hits = await xp2.findSharedLearnings({
+      agentId: "b", flowId: "office-1", projectId: null, goal: "zzz unrelated words",
+      goalVector: near(vec(1)), embeddingModel: active, tools: [],
+    });
+    expect(hits.map((h) => h.id)).toEqual(["l-mail"]);
+  });
 });

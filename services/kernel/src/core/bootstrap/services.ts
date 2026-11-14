@@ -215,14 +215,46 @@ export async function wireServices(args: {
     // even when seeded in this boot (first-boot case).
     agentsModule.getReactiveEngine()?.reload();
 
-    // Embeddings client — created once at boot; cinema:embed-pending handler
-    // uses it on every tick. Probes LMStudio on init, falls back to local
-    // MiniLM if unavailable.
-    const { createEmbeddingsClient } = await import("../embeddings/index.js");
-    embeddingsClient = await createEmbeddingsClient(config).catch((err) => {
+    // Embeddings client — one manager for the whole kernel. It delegates to
+    // the client the factory builds (default: the in-process multilingual
+    // model, GPU when faster, CPU otherwise), swaps it when an EMBEDDINGS_*
+    // setting changes or a /models link comes back, and re-embeds rows still
+    // carrying another model's vectors (core/embeddings/manager.ts, reembed.ts).
+    const { createEmbeddingsClient, isLastResortClient, LocalEmbeddings } = await import("../embeddings/index.js");
+    const { EmbeddingsManager, setActiveEmbeddingsManager } = await import("../embeddings/manager.js");
+    const { ReembedQueue } = await import("../embeddings/reembed.js");
+    const embeddingsManager = await EmbeddingsManager.create({
+      build: () => createEmbeddingsClient(config),
+      isLastResort: isLastResortClient,
+    }).catch((err) => {
       log.warn("embeddings: factory failed at boot — semantic features disabled", err);
       return null;
     });
+    embeddingsClient = embeddingsManager;
+    if (embeddingsManager) {
+      setActiveEmbeddingsManager(embeddingsManager);
+      embeddingsManager.attachReembed(new ReembedQueue(sqlite, () => embeddingsManager, {
+        onBatch: ({ table, ids, model }) => events.emit("embeddings:reembedded", { table, ids, model }),
+      }));
+      const EMBEDDING_KEYS = new Set([
+        "EMBEDDINGS_PROVIDER", "EMBEDDINGS_DEVICE", "EMBEDDINGS_LOCAL_MODEL", "EMBEDDINGS_LOCAL_DTYPE",
+        "EMBEDDINGS_MODEL", "EMBEDDINGS_DIM", "EMBEDDINGS_BASE_URL",
+      ]);
+      events.on("config:changed", (payload: unknown) => {
+        const key = (payload as { key?: string } | null)?.key ?? "";
+        if (EMBEDDING_KEYS.has(key)) void embeddingsManager.rebuild(`${key} changed`);
+      });
+      // Load the in-process model now, off the boot path, so the log names
+      // the model and device before the first search needs them.
+      const warm = (c: EmbeddingsClient) => {
+        if (!(c instanceof LocalEmbeddings)) return;
+        void c.warmUp().catch((err) =>
+          log.warn(`embeddings/local: could not load ${c.model} — ${err instanceof Error ? err.message : String(err)}`),
+        );
+      };
+      warm(embeddingsManager.current());
+      embeddingsManager.onSwap(warm);
+    }
     // Hand to tool-memory's lazy resolver. If embeddings failed, leave the
     // promise pending — tool-memory's getService() returns null and hooks degrade.
     if (embeddingsClient && embeddingsResolver) {

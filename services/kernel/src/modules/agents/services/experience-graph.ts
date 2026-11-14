@@ -517,9 +517,15 @@ export class AgentExperienceGraph {
 
   private async syncLearnings(g: GraphDriver, since: string): Promise<number> {
     // Rows changed since the last pass, plus rows whose embedding arrived after
-    // they were synced (scheduleEmbed writes it without touching updated_at).
+    // they were synced (scheduleEmbed writes it without touching updated_at),
+    // plus rows re-embedded under the active model (core/embeddings/reembed.ts
+    // does not touch updated_at either) while the graph still holds the old one.
+    const model = this.getEmbeddingModel();
     const missing = await g.run(
-      "MATCH (l:AgentLearning) WHERE l.embedding IS NULL RETURN l.id AS id",
+      model
+        ? "MATCH (l:AgentLearning) WHERE l.embedding IS NULL OR l.embedding_model IS NULL OR l.embedding_model <> $model RETURN l.id AS id"
+        : "MATCH (l:AgentLearning) WHERE l.embedding IS NULL RETURN l.id AS id",
+      model ? { model } : {},
     );
     const waiting = missing.records.map((r) => str(r.get("id")));
     const changed = this.db
@@ -535,9 +541,10 @@ export class AgentExperienceGraph {
             `SELECT id, agent_id, type, content, confidence, source_runs, active, project_id, created_at,
                     updated_at, embedding, embedding_model
                FROM agent_learnings
-              WHERE embedding IS NOT NULL AND id IN (${waiting.map(() => "?").join(",")})`,
+              WHERE embedding IS NOT NULL AND id IN (${waiting.map(() => "?").join(",")})
+                ${model ? "AND embedding_model = ?" : ""}`,
           )
-          .all(...waiting) as LearningRow[])
+          .all(...waiting, ...(model ? [model] : [])) as LearningRow[])
       : [];
     // Changed rows in watermark order, then the late ones (embedding arrived).
     const seen = new Set(changed.map((r) => r.id));
