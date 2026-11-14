@@ -96,26 +96,29 @@ cask_mode() {
   local tmp; tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
 
-  local -A sums
+  # Two plain variables, not an associative array: macOS ships bash 3.2,
+  # which has none, and --cask runs on the Mac that publishes the release.
+  local sum_arm64="" sum_x64="" sum
   for arch in arm64 x64; do
     local file="Kernl-$version-$arch.dmg"
     step "Fetching $file"
     curl -fsSL --retry 3 -o "$tmp/$file" "$base/$file" \
       || die "could not download $file — is the release published and were the DMGs attached?"
     if command -v sha256sum >/dev/null; then
-      sums[$arch]="$(sha256sum "$tmp/$file" | cut -d' ' -f1)"
+      sum="$(sha256sum "$tmp/$file" | cut -d' ' -f1)"
     else
-      sums[$arch]="$(shasum -a 256 "$tmp/$file" | cut -d' ' -f1)"
+      sum="$(shasum -a 256 "$tmp/$file" | cut -d' ' -f1)"
     fi
-    ok "$arch  ${sums[$arch]}"
+    if [[ "$arch" == arm64 ]]; then sum_arm64="$sum"; else sum_x64="$sum"; fi
+    ok "$arch  $sum"
   done
 
   step "Updating $CASK"
   # Anchored to the cask's own keys so this cannot wander into another string.
   sed -i.bak \
     -e "s|^  version \".*\"|  version \"$version\"|" \
-    -e "s|^  sha256 arm:   \".*\"|  sha256 arm:   \"${sums[arm64]}\"|" \
-    -e "s|^         intel: \".*\"|         intel: \"${sums[x64]}\"|" \
+    -e "s|^  sha256 arm:   \".*\"|  sha256 arm:   \"${sum_arm64}\"|" \
+    -e "s|^         intel: \".*\"|         intel: \"${sum_x64}\"|" \
     "$CASK"
   rm -f "$CASK.bak"
   grep -E '^  version|sha256 arm|intel:' "$CASK"
@@ -229,16 +232,17 @@ BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 git show-ref --verify --quiet "refs/heads/$STABLE_BRANCH" \
   || die "no local $STABLE_BRANCH branch — create it from origin/$STABLE_BRANCH first"
 
-CURRENT="$(current_version)"
-[[ "$CURRENT" != "$VERSION" ]] || die "$PKG is already $VERSION"
-# Sort check rather than a numeric compare so 0.2.10 > 0.2.9 holds.
-[[ "$(printf '%s\n%s\n' "$CURRENT" "$VERSION" | sort -V | tail -1)" == "$VERSION" ]] \
-  || die "$VERSION is older than the current $CURRENT"
-
-git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && die "tag $TAG already exists locally"
-if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
-  die "tag $TAG already exists on the remote"
+# A local stable left behind (0.5.0 found it 360 commits back) would take the
+# release merge on an old base, and its push would be refused. Catch up while
+# it is only behind; stop if it went its own way.
+git fetch -q origin "$STABLE_BRANCH" || die "could not fetch origin/$STABLE_BRANCH"
+if ! git merge-base --is-ancestor "origin/$STABLE_BRANCH" "$STABLE_BRANCH"; then
+  git merge-base --is-ancestor "$STABLE_BRANCH" "origin/$STABLE_BRANCH" \
+    || die "local $STABLE_BRANCH and origin/$STABLE_BRANCH have diverged — reconcile them first"
+  git update-ref "refs/heads/$STABLE_BRANCH" "origin/$STABLE_BRANCH" "$(git rev-parse "$STABLE_BRANCH")"
+  ok "$STABLE_BRANCH fast-forwarded to origin/$STABLE_BRANCH"
 fi
+
 # lifekernl.com/news is built from both changelogs and refuses to publish a
 # version that is missing from either, so the entry has to exist, dated, in
 # English and in Spanish before the tag does.
@@ -303,7 +307,33 @@ git checkout -q "$STABLE_BRANCH"
 # --no-ff so the release is always a merge commit, which is what the tag points
 # at in every previous release and what makes `git log stable` read as a list
 # of releases rather than of individual changes.
-git merge --no-ff -q "$DEV_BRANCH" -m "Merge branch '$DEV_BRANCH' into $STABLE_BRANCH"
+if ! git merge --no-ff -q "$DEV_BRANCH" -m "Merge branch '$DEV_BRANCH' into $STABLE_BRANCH"; then
+  # A conflict here is almost always a fix cherry-picked onto stable between
+  # releases (a README, the deployment guide) that dev then took further. That
+  # is safe to settle with dev's side only when stable's version of the file is
+  # one dev already had: then dev's is simply newer. Anything else is a change
+  # only stable has, and the release stops rather than drop it.
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    want="$(git rev-parse -q --verify "$STABLE_BRANCH:$path" 2>/dev/null || echo none)"
+    known=0
+    if [[ "$want" != none ]]; then
+      while IFS= read -r c; do
+        if [[ "$(git rev-parse -q --verify "$c:$path" 2>/dev/null)" == "$want" ]]; then known=1; break; fi
+      done < <(git rev-list "$DEV_BRANCH" -- "$path")
+    fi
+    if ((known)); then
+      git checkout -q --theirs -- "$path" && git add -- "$path"
+      ok "conflict in $path: $STABLE_BRANCH had an older version of $DEV_BRANCH's file — took $DEV_BRANCH's"
+    else
+      git merge --abort; git checkout -q "$DEV_BRANCH"
+      die "merging into $STABLE_BRANCH conflicts on $path, and $STABLE_BRANCH's version is not one $DEV_BRANCH ever had — bring that change into $DEV_BRANCH first (scripts/release.sh --undo $VERSION to start over)"
+    fi
+  done < <(git diff --name-only --diff-filter=U)
+  git commit -q --no-edit
+fi
+git diff --quiet "$DEV_BRANCH" HEAD \
+  || warn "$STABLE_BRANCH now differs from $DEV_BRANCH in: $(git diff --name-only "$DEV_BRANCH" HEAD | tr '\n' ' ')— changes only $STABLE_BRANCH has"
 git tag -a "$TAG" -m "Kernl $VERSION"
 ok "tagged $TAG at $(git rev-parse --short HEAD)"
 git checkout -q "$DEV_BRANCH"
