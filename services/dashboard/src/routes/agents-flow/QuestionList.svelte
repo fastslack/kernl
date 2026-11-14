@@ -6,6 +6,8 @@
 -->
 <script lang="ts">
   import { groupQuestions } from '$lib/office/question-batches.js';
+  import { ageBucket, waitingSince, waitParts, type AgeBucket } from '$lib/office/question-age.js';
+  import { t } from '$lib/i18n/index.js';
   import OfficeQuestionCard from './OfficeQuestionCard.svelte';
   import QuestionBatchCard from './QuestionBatchCard.svelte';
   import type { PendingQuestion } from './world-types.js';
@@ -23,7 +25,23 @@
   export let onTake: (q: PendingQuestion) => Promise<boolean> | void = () => {};
   export let onDone: (q: PendingQuestion, note: string) => Promise<boolean> | void = () => {};
 
+  /** Set by a list grouped by age: each card gets its age accent and its wait worded. null = no age styling. */
+  export let now: number | null = null;
+
   $: groups = groupQuestions(questions);
+
+  const ageOf = (q: PendingQuestion, at: number | null): AgeBucket | null =>
+    at === null ? null : ageBucket(waitingSince(q), at);
+  function waitOf(q: PendingQuestion, at: number | null): string {
+    if (at === null) return '';
+    const p = waitParts(waitingSince(q), at);
+    if (!p) return '';
+    return p.unit === 'd' && p.n === 1 ? $t('office.q_age.dur_d1') : $t(`office.q_age.dur_${p.unit}`, { n: String(p.n) });
+  }
+  function sinceTitle(q: PendingQuestion, at: number | null): string {
+    const s = waitingSince(q);
+    return at === null || isNaN(s) ? '' : new Date(s).toLocaleString();
+  }
 
   /** "Also settles": each checked question gets its own choice, one after the other. */
   async function sendAlso(items: Array<{ q: PendingQuestion; choice: Record<string, unknown> }>): Promise<void> {
@@ -36,12 +54,14 @@
     <QuestionBatchCard questions={g.questions} agentName={nameOf(g.agentId)} color={colorOf(g.agentId)} {send} dismiss={onDismiss}>
       {#each g.questions as q (q.id)}
         <OfficeQuestionCard {q} agentName={nameOf(q.from_agent_id)} color={colorOf(q.from_agent_id)} busy={!!busy[q.id]}
+                            age={ageOf(q, now)} waitLabel={waitOf(q, now)} waitTitle={sinceTitle(q, now)}
                             others={open} {nameOf} onAlso={sendAlso}
                             {onAnswer} {onDismiss} {onFree} {onTake} {onDone} />
       {/each}
     </QuestionBatchCard>
   {:else}
     <OfficeQuestionCard q={g.q} agentName={nameOf(g.q.from_agent_id)} color={colorOf(g.q.from_agent_id)} busy={!!busy[g.q.id]}
+                        age={ageOf(g.q, now)} waitLabel={waitOf(g.q, now)} waitTitle={sinceTitle(g.q, now)}
                         others={open} {nameOf} onAlso={sendAlso}
                         {onAnswer} {onDismiss} {onFree} {onTake} {onDone} />
   {/if}

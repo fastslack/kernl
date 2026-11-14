@@ -60,6 +60,8 @@ export interface PendingQuestion {
   status?: 'triage' | 'pending' | 'owed' | 'answered' | 'dismissed';
   /** When the operator took the work on (status 'owed'). */
   owed_at?: string | null;
+  /** When the chief started triaging it — right before it escalated to the operator. */
+  triage_started_at?: string | null;
   chief_note?: string;
   answered_by?: '' | 'chief' | 'human';
   selected_option?: string;

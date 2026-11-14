@@ -12,6 +12,7 @@
   import { onDestroy } from 'svelte';
   import { agentFlowEvents } from '$lib/stores.js';
   import { opinionStepLabel } from '$lib/opinion-progress.js';
+  import type { AgeBucket } from '$lib/office/question-age.js';
   import type { PendingQuestion, QuestionOpinion } from './world-types.js';
 
   export let q: PendingQuestion;
@@ -31,8 +32,18 @@
   /** Sends the opinion's answer to the checked "also settles" questions, each with its own choice. */
   export let onAlso: (items: Array<{ q: PendingQuestion; choice: Record<string, unknown> }>) => Promise<void> | void = () => {};
 
+  /** How long it has waited (question-age.ts), when the list groups by age: drives the accent and the fold. */
+  export let age: AgeBucket | null = null;
+  /** "hace 9 s", "19 días": the wait, already worded; empty = the plain relative time. */
+  export let waitLabel = '';
+  /** Absolute time the wait started, for the tooltip. */
+  export let waitTitle = '';
+
   let free = '';
   let doneNote = '';
+  /** A stale card starts folded to one line; opening it shows every action. */
+  let expanded = false;
+  $: collapsed = age === 'stale' && !expanded;
   $: owed = q.status === 'owed';
   // Owed: the choice is made; the options left are the real ones, not the "task" one.
   $: shown = q.options.map((o, i) => ({ o, i })).filter(({ o }) => !owed || !o.task);
@@ -163,15 +174,33 @@
   }
 </script>
 
-<div class="bq-card">
+<div class="bq-card" class:bq-fresh={age === 'fresh'} class:bq-week={age === 'week'} class:bq-stale={age === 'stale'}
+     class:bq-folded={collapsed}>
   <div class="bq-head">
     <span class="bq-from-dot" style="background:{color}"></span>
     <span class="bq-from">{agentName}</span>
     {#if q.project?.name}<span class="bq-project" title={q.project.name}>· {q.project.name}</span>{/if}
-    <span class="bq-time">{fmtRelTime(owed && q.owed_at ? q.owed_at : q.created_at)}</span>
+    {#if age === 'fresh'}<span class="bq-pill bq-pill-new">{$t('office.q_age.new_badge')}</span>{/if}
+    {#if age && owed}<span class="bq-pill bq-pill-owed">{$t('office.q_age.owed_badge')}</span>{/if}
+    {#if age === 'stale'}
+      <span class="bq-pill bq-pill-old" title={waitTitle}>{$t('office.q_age.old_badge', { d: waitLabel })}</span>
+    {:else}
+      <span class="bq-time" class:bq-time-fresh={age === 'fresh'} title={waitTitle}>
+        {waitLabel ? $t('office.q_age.ago', { d: waitLabel }) : fmtRelTime(owed && q.owed_at ? q.owed_at : q.created_at)}
+      </span>
+    {/if}
+    {#if age === 'stale'}
+      <button class="bq-fold" type="button" aria-expanded={expanded} on:click={() => (expanded = !expanded)}>
+        {expanded ? $t('office.q_age.collapse') : $t('office.q_age.expand')}
+      </button>
+    {/if}
     <button class="bq-dismiss" title={$t('office.chief.q_dismiss')} aria-label={$t('office.chief.q_dismiss')}
             on:click={() => onDismiss(q)} disabled={busy}>×</button>
   </div>
+  {#if collapsed}
+    <button class="bq-question bq-question-folded" type="button" on:click={() => (expanded = true)}
+            title={$t('office.q_age.expand')}>{q.question}</button>
+  {:else}
   <div class="bq-question">{q.question}</div>
   {#if owed}
     <div class="bq-chose">{$t('office.chief.you_chose', { opt: q.selected_option ?? '' })}</div>
@@ -310,6 +339,7 @@
            aria-label={$t('office.chief.q_other')} />
     <button class="bq-free-send" type="submit" disabled={busy || !free.trim()}>{$t('office.chief.q_send')}</button>
   </form>
+  {/if}
 </div>
 
 <style>
@@ -324,6 +354,39 @@
   /* Which project the question is about: an office like Growth asks for several. */
   .bq-project{ color:#f5c86b; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .bq-time{ margin-left:auto; color:#6b7090; font-size:9px; }
+  /* Age (question-age.ts): fresh ones loud, a week old quieter, stale ones folded. */
+  .bq-card.bq-fresh{
+    background:linear-gradient(180deg, rgba(110,231,168,.11) 0%, rgba(110,231,168,.02) 100%);
+    border-color:rgba(110,231,168,.4); border-left-color:#6ee7a8;
+    box-shadow:0 0 0 1px rgba(110,231,168,.08), 0 6px 18px -10px rgba(110,231,168,.45);
+  }
+  .bq-card.bq-week{ background:rgba(240,184,116,.035); border-color:rgba(240,184,116,.16); border-left-color:rgba(240,184,116,.6); }
+  .bq-card.bq-stale{
+    background:rgba(255,255,255,.015); border-color:rgba(139,144,175,.18); border-left-color:#5a5f7d;
+    transition:opacity .15s ease, border-color .15s ease;
+  }
+  .bq-card.bq-folded{ opacity:.72; padding:7px 12px; }
+  .bq-card.bq-folded:hover, .bq-card.bq-folded:focus-within{ opacity:1; border-color:rgba(139,144,175,.35); }
+  .bq-card.bq-folded .bq-head{ margin-bottom:3px; }
+  .bq-pill{
+    font:600 9px 'JetBrains Mono',monospace; letter-spacing:.04em; text-transform:uppercase;
+    padding:1px 6px; border-radius:999px; white-space:nowrap;
+  }
+  .bq-pill-new{ color:#0e1a14; background:#6ee7a8; }
+  .bq-pill-owed{ color:#f0b874; border:1px solid rgba(240,184,116,.45); }
+  .bq-pill-old{ margin-left:auto; color:#8b90af; border:1px solid rgba(139,144,175,.3); text-transform:none; }
+  .bq-time-fresh{ color:#6ee7a8; font-size:10px; }
+  .bq-fold{
+    background:transparent; border:1px solid rgba(139,144,175,.3); border-radius:4px; color:#a9aecb;
+    font:500 9px 'JetBrains Mono',monospace; padding:1px 6px; cursor:pointer;
+  }
+  .bq-fold:hover{ color:#e7e9f4; border-color:rgba(139,144,175,.6); }
+  .bq-question-folded{
+    display:block; width:100%; text-align:left; background:none; border:none; padding:0; margin:0; cursor:pointer;
+    font:500 12px/1.4 'Manrope',sans-serif; color:#a9aecb;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .bq-question-folded:hover{ color:#e7e9f4; }
   .bq-dismiss{
     background:transparent; border:none; color:#6b7090; font-size:16px;
     cursor:pointer; padding:0 3px; line-height:1;

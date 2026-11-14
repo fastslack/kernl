@@ -8,6 +8,8 @@
   // lands back in AgentWorld3D. What only this panel uses (the open report,
   // its full text, the fixer picker, the per-question busy flags) lives here.
   import { slide } from 'svelte/transition';
+  import { onDestroy } from 'svelte';
+  import { groupByAge, sortByWaiting } from '$lib/office/question-age.js';
   import { quintOut } from 'svelte/easing';
   import { rpcOrCall } from '$lib/ws.js';
   import { isLlmConfigError, LLM_SETTINGS_HREF } from '$lib/llm-error.js';
@@ -258,6 +260,28 @@
     for (const it of items) await sendChoice(it.q, it.choice);
   }
   $: openQuestions = [...owedQuestions, ...pendingQuestions];
+
+  // ── Questions by age (question-age.ts) ──
+  // The clock the age groups read: ticks while the panel is open, and jumps
+  // to now whenever the list changes, so a question that just landed reads
+  // "hace 2 s" instead of a minute-old guess.
+  let now = Date.now();
+  const nowTimer = setInterval(() => { if (showMyOfficePanel) now = Date.now(); }, 30_000);
+  onDestroy(() => clearInterval(nowTimer));
+  $: openQuestions, (now = Date.now());
+  $: ageGroups = groupByAge(openQuestions, now);
+  /** The overview strip shows the two newest, not the two the kernel listed first. */
+  $: pendingNewest = sortByWaiting(pendingQuestions);
+
+  let staleBusy = false;
+  /** "Desestimar las antiguas": every stale question, owed ones too — each through the single dismiss path. */
+  async function dismissStale(qs: PendingQuestion[]): Promise<void> {
+    if (staleBusy || qs.length === 0) return;
+    if (!(await confirmDialog({ title: $t('office.q_age.confirm_dismiss_stale', { n: String(qs.length) }), danger: true }))) return;
+    staleBusy = true;
+    try { await Promise.all(qs.map((q) => dismissQuestion(q))); }
+    finally { staleBusy = false; }
+  }
   const markDone = (q: PendingQuestion, note: string) =>
     sendChoice(q, { kind: 'done', ...(note.trim() ? { note: note.trim() } : {}) });
   async function dismissQuestion(q: PendingQuestion) {
@@ -595,7 +619,7 @@
             {/if}
           </div>
           <div class="bq-list">
-            {#each pendingQuestions.slice(0, 2) as q (q.id)}
+            {#each pendingNewest.slice(0, 2) as q (q.id)}
               <OfficeQuestionCard {q} agentName={agentNameOf(q.from_agent_id)} color={flowColor(q.from_agent_id)}
                                   busy={!!questionSubmitting[q.id]}
                                   onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree}
@@ -650,19 +674,8 @@
         {/if}
 
       {:else if myOfficeTab === 'questions'}
-        <!-- ═══ QUESTIONS ═══ -->
-        {#if owedQuestions.length > 0}
-          <div class="or-section">
-            <span class="or-section-title or-section-q">{$t('office.chief.owed_title', { n: String(owedQuestions.length) })}</span>
-          </div>
-          <div class="bq-list">
-            <QuestionList questions={owedQuestions} open={openQuestions} nameOf={agentNameOf} colorOf={flowColor}
-                          busy={questionSubmitting} send={sendChoice}
-                          onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree}
-                          onTake={takeIt} onDone={markDone} />
-          </div>
-        {/if}
-        {#if loading && pendingQuestions.length === 0}
+        <!-- ═══ QUESTIONS, newest first, grouped by how long they have waited ═══ -->
+        {#if loading && openQuestions.length === 0}
           <div class="mo-skel" role="status" aria-live="polite" aria-label={$t('office.chief.loading')}>
             <div class="mo-skel-h"><span class="mo-spin" aria-hidden="true"></span>{$t('office.chief.loading')}</div>
             {#each [0, 1, 2] as n (n)}
@@ -673,24 +686,45 @@
               </div>
             {/each}
           </div>
-        {:else if pendingQuestions.length === 0}
-          {#if owedQuestions.length === 0}<div class="or-empty">{$t('office.chief.no_questions')}</div>{/if}
+        {:else if openQuestions.length === 0}
+          <div class="or-empty">{$t('office.chief.no_questions')}</div>
           {#if triageCount > 0}
             <div class="or-section-hint mo-center">{$t('office.chief.status_triage', { n: String(triageCount) })}</div>
           {/if}
         {:else}
           <div class="or-section">
-            <span class="or-section-title or-section-q">{$t('office.chief.needs_answer', { n: String(pendingQuestions.length) })}</span>
-            <button class="mo-bulk-btn mo-bulk-dismiss" on:click={() => dismissAllQuestions()} disabled={bulkBusy}>
-              {bulkBusy ? '…' : $t('office.chief.dismiss_all', { n: String(pendingQuestions.length) })}
-            </button>
+            <span class="or-section-title or-section-q">{$t('office.chief.needs_answer', { n: String(openQuestions.length) })}</span>
+            {#if owedQuestions.length > 0}
+              <span class="mo-owed-chip" title={$t('office.q_age.owed_hint')}>{$t('office.chief.owed_title', { n: String(owedQuestions.length) })}</span>
+            {/if}
+            {#if pendingQuestions.length > 0}
+              <button class="mo-bulk-btn mo-bulk-dismiss" on:click={() => dismissAllQuestions()} disabled={bulkBusy}>
+                {bulkBusy ? '…' : $t('office.chief.dismiss_all', { n: String(pendingQuestions.length) })}
+              </button>
+            {/if}
           </div>
-          <div class="bq-list">
-            <QuestionList questions={pendingQuestions} open={openQuestions} nameOf={agentNameOf} colorOf={flowColor}
-                          busy={questionSubmitting} send={sendChoice}
-                          onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree}
-                          onTake={takeIt} onDone={markDone} />
-          </div>
+          {#if triageCount > 0}
+            <div class="or-section-hint mo-age-triage">{$t('office.chief.status_triage', { n: String(triageCount) })}</div>
+          {/if}
+          {#each ageGroups as grp (grp.bucket)}
+            <div class="mo-age-head mo-age-{grp.bucket}">
+              <span class="mo-age-dot" aria-hidden="true"></span>
+              <span class="mo-age-title">{$t(`office.q_age.${grp.bucket}`)}</span>
+              <span class="mo-age-n">{grp.questions.length}</span>
+              {#if grp.bucket === 'stale'}
+                <span class="mo-age-hint">{$t('office.q_age.stale_hint')}</span>
+                <button class="mo-bulk-btn mo-bulk-dismiss" on:click={() => dismissStale(grp.questions)} disabled={staleBusy}>
+                  {staleBusy ? '…' : $t('office.q_age.dismiss_stale', { n: String(grp.questions.length) })}
+                </button>
+              {/if}
+            </div>
+            <div class="bq-list" class:mo-age-list-stale={grp.bucket === 'stale'}>
+              <QuestionList questions={grp.questions} open={openQuestions} nameOf={agentNameOf} colorOf={flowColor}
+                            busy={questionSubmitting} send={sendChoice} {now}
+                            onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree}
+                            onTake={takeIt} onDone={markDone} />
+            </div>
+          {/each}
         {/if}
         {#if chiefAnswered.length > 0}
           <details class="bq-chief-history">
@@ -1122,6 +1156,29 @@
   .or-section-title.or-section-fail{color:#ef5d6e}
   .or-section-title.or-section-q{color:#f0b874}
   .or-section-hint{font:500 9px 'JetBrains Mono',monospace;color:#5a5f7a}
+
+  /* ── Questions grouped by age ── */
+  .mo-owed-chip{
+    font:600 9px 'JetBrains Mono',monospace;color:#f0b874;text-transform:uppercase;letter-spacing:.5px;
+    border:1px solid rgba(240,184,116,.35);border-radius:999px;padding:1px 7px;
+  }
+  .mo-age-triage{padding:2px 14px 0}
+  .mo-age-head{
+    display:flex;align-items:center;gap:7px;
+    padding:12px 14px 6px;
+    font:700 10px 'Syne',sans-serif;letter-spacing:1px;text-transform:uppercase;color:#8a8fa8;
+  }
+  .mo-age-dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+  .mo-age-n{font:600 9px 'JetBrains Mono',monospace;color:#5a5f7a}
+  .mo-age-hint{font:500 9px 'JetBrains Mono',monospace;color:#5a5f7a;text-transform:none;letter-spacing:0}
+  .mo-age-fresh{color:#6ee7a8}
+  .mo-age-fresh .mo-age-dot{box-shadow:0 0 0 3px rgba(110,231,168,.18);animation:mo-age-pulse 2s ease-in-out infinite}
+  .mo-age-today{color:#f0b874}
+  .mo-age-week{color:#b49a74}
+  .mo-age-stale{color:#6b7090;border-top:1px dashed rgba(139,144,175,.18);margin-top:6px}
+  .bq-list.mo-age-list-stale{gap:6px}
+  @keyframes mo-age-pulse{0%,100%{opacity:1}50%{opacity:.45}}
+  @media (prefers-reduced-motion: reduce){ .mo-age-fresh .mo-age-dot{animation:none} }
 
   /* ── Top-agent question cards ─────────────────────── */
   .bq-list{ display:flex; flex-direction:column; gap:10px; padding:0 14px 12px; }  .bq-from-dot{ width:7px; height:7px; border-radius:50%; }
