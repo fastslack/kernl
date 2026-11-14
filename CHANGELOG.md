@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **How each agent's instructions evolved, in the graph.** Every version of an
+  agent's instructions and every improvement cycle are projected into the
+  graph: which version revises which, the cycle that proposed a version, the
+  one it started from, its score before and after, and the failed runs that
+  started it, joined to the runs and lessons already there. The graph explorer
+  shows it; the full text stays in the database.
 - **The in-process embeddings are a first-class provider, chosen in Settings →
   AI.** A note under the connections names the model, the device it runs on
   and why, and how many rows are still being re-embedded; its picker switches

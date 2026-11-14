@@ -22,6 +22,12 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 ### Agregado
 
+- **Cómo evolucionaron las instrucciones de cada agente, en el grafo.** Cada
+  versión de las instrucciones de un agente y cada ciclo de mejora se proyectan
+  al grafo: qué versión revisa a cuál, el ciclo que propuso una versión, de
+  cuál partió, su puntaje antes y después, y las corridas fallidas que lo
+  dispararon, unidos a las corridas y lecciones que ya estaban ahí. Se ve en el
+  explorador del grafo; el texto completo sigue en la base de datos.
 - **Los embeddings locales son un proveedor más, que se elige en Ajustes →
   IA.** Una nota debajo de las conexiones muestra el modelo, en qué
   dispositivo corre y por qué, y cuántas filas faltan reprocesar; su selector
