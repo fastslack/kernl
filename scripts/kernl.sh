@@ -78,7 +78,12 @@ fi
 COMPOSE_FILES+=(-f "$REPO/docker-compose.host.yml")
 # Neo4j is optional — the graph is built in (Relate). An install that already
 # has a Neo4j volume keeps its server, so an upgrade never strands its graph;
-# KERNL_NEO4J=1 asks for it on a fresh one, KERNL_NEO4J=0 leaves it out.
+# KERNL_NEO4J=1 asks for it on a fresh one, KERNL_NEO4J=0 leaves it out. It is
+# read from the repo's .env too, so turning Neo4j off after the move to the
+# built-in graph lasts across updates (the environment wins over the file).
+if [[ -z "${KERNL_NEO4J:-}" && -f "$REPO/.env" ]]; then
+  KERNL_NEO4J="$(sed -n 's/^KERNL_NEO4J=["'\'']\{0,1\}\([01]\)["'\'']\{0,1\}[[:space:]]*$/\1/p' "$REPO/.env" | tail -1)"
+fi
 if [[ "${KERNL_NEO4J:-}" == 1 ]] \
    || { [[ "${KERNL_NEO4J:-}" != 0 ]] && docker volume inspect "${PROJECT}_neo4j-data" >/dev/null 2>&1; }; then
   COMPOSE_FILES+=(-f "$REPO/docker-compose.neo4j.yml")
