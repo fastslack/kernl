@@ -647,6 +647,19 @@ if [ -d "$ORT_BIN" ]; then
   fi
 fi
 
+# The browser half of the in-process embeddings, never loaded here. The kernel
+# imports @huggingface/transformers through its "node" export
+# (dist/transformers.node.{mjs,cjs}), whose bundle already marks
+# onnxruntime-web "ignored": the onnxruntime-web package (~90 MB) and the
+# browser builds, wasm and source maps in transformers' dist (~40 MB) only
+# serve a page. Rehearsed against MiniLM embeddings: identical vectors.
+rm -rf "${SRC_TREE:?}/node_modules/onnxruntime-web"
+TF_DIST="${SRC_TREE:?}/node_modules/@huggingface/transformers/dist"
+if [ -f "$TF_DIST/transformers.node.mjs" ] && [ -f "$TF_DIST/transformers.node.cjs" ]; then
+  find "$TF_DIST" -mindepth 1 -maxdepth 1 -type f \
+    ! -name 'transformers.node.mjs' ! -name 'transformers.node.cjs' -delete
+fi
+
 # ── 4b) Visual C++ runtime, app-local, for win-x64 ──────────────────
 # whisper-cli.exe, its ggml DLLs and onnxruntime's binding all import
 # MSVCP140 / VCRUNTIME140(_1) / VCOMP140, and none of those ship with Windows.
