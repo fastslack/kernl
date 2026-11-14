@@ -169,6 +169,8 @@ const es: Record<I18nKey, string> = {
   "live.pillTitle": "Stream en vivo y modelos en uso — tocá para ver",
   "live.resetsAt": "Se restablece: {t}",
   "live.title": "Modelos en vivo",
+  "live.offline.lbl": "sin conexión en vivo",
+  "live.offline.txt": "Esta página no está recibiendo eventos en vivo, así que los pasos no van a aparecer acá hasta que se reconecte (sigue intentando). La corrida no se ve afectada.",
   "live.acc.title": "Cuentas de Claude",
   "live.acc.sub": "Cuánto usó cada suscripción",
   "live.acc.session": "5 h",

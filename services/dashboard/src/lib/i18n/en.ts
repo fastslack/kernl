@@ -166,6 +166,8 @@ const en = {
   "live.pillTitle": "Live stream and the models in use — click to inspect",
   "live.resetsAt": "Resets: {t}",
   "live.title": "Live models",
+  "live.offline.lbl": "no live connection",
+  "live.offline.txt": "This page is not receiving live events, so the steps will not show here until it reconnects (it keeps trying). The run itself is not affected.",
   "live.acc.title": "Claude accounts",
   "live.acc.sub": "How much of each subscription is used",
   "live.acc.session": "5 h",

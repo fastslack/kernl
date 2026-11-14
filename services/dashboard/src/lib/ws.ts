@@ -6,21 +6,30 @@ let ws: WebSocket | null = null;
 let retryDelay = 1000;
 const MAX_DELAY = 30000;
 /**
- * Give up on /mtw after this many failures IF it has never once connected.
+ * Slow down on /mtw after this many failures IF it has never once connected.
  *
  * Not every deployment runs the mtw-request server — the public stack says so
  * in nginx.public.conf and omits the `/mtw` block entirely. There the socket
- * can never connect, and retrying forever printed four console lines per
+ * can never connect, and retrying with backoff printed four console lines per
  * attempt (`connecting`, the browser's own failure notice, an `error`, and
  * `closed: 1006`) for the life of the tab. Polling already covers the data.
+ *
+ * It used to give up for good, and that was worse where the socket is only
+ * missing for a while: a tunnel route added later, a proxy restarted. The tab
+ * stayed on polling, with no live steps, until someone thought to reload it.
+ * Now it keeps trying quietly every few minutes, and at once when the tab
+ * comes back into view or the network returns.
  *
  * A socket that HAS connected before is a different story: that is a restart
  * or a blip, and it keeps retrying with backoff indefinitely.
  */
 const MAX_COLD_ATTEMPTS = 4;
+const QUIET_RETRY_MS = 5 * 60_000;
 let everConnected = false;
 let coldAttempts = 0;
-let gaveUp = false;
+/** Past MAX_COLD_ATTEMPTS without ever connecting: retry slowly and without console noise. */
+let quiet = false;
+let quietTimer: ReturnType<typeof setTimeout> | null = null;
 let fallbackTimer: ReturnType<typeof setInterval> | null = null;
 
 // Dynamic channel map — starts with hardcoded defaults, extended by manifest
@@ -111,7 +120,13 @@ let subscribedChannels = new Set<string>();
 
 function mtwWsUrl(): string {
 	const p = location.protocol === 'https:' ? 'wss:' : 'ws:';
-	return p + '//' + location.host + '/mtw';
+	// A browser cannot set headers on a WebSocket, so the kernel's token rides in
+	// the query: the tunnel's guard checks it before it lets the live socket
+	// through (nginx and the broker ignore it; the guard drops it upstream).
+	// Read here rather than from api.ts, which imports this module.
+	let token = '';
+	try { token = localStorage.getItem('kernel_auth_token') ?? ''; } catch { /* storage blocked */ }
+	return p + '//' + location.host + '/mtw' + (token ? '?token=' + encodeURIComponent(token) : '');
 }
 
 
@@ -342,7 +357,7 @@ export function onWsConnected(cb: () => void) {
 
 function connectMtwRequest(onMessage?: () => void) {
 	const url = mtwWsUrl();
-	console.log('[WS] connecting to', url);
+	if (!quiet) console.log('[WS] connecting to', url.replace(/\?.*$/, ''));
 	try {
 		mtwWs = new WebSocket(url);
 	} catch (e) {
@@ -357,6 +372,11 @@ function connectMtwRequest(onMessage?: () => void) {
 		retryDelay = 1000;
 		everConnected = true;
 		coldAttempts = 0;
+		quiet = false;
+		if (quietTimer) {
+			clearTimeout(quietTimer);
+			quietTimer = null;
+		}
 		if (fallbackTimer) {
 			clearInterval(fallbackTimer);
 			fallbackTimer = null;
@@ -382,7 +402,7 @@ function connectMtwRequest(onMessage?: () => void) {
 	};
 
 	mtwWs.onclose = (ev) => {
-		console.log('[WS] closed:', ev.code, ev.reason);
+		if (!quiet) console.log('[WS] closed:', ev.code, ev.reason);
 		mtwConnected = false;
 		subscribedChannels.clear();
 		if (disposed) return; // replaced by a reloaded copy of this module
@@ -413,18 +433,40 @@ function disconnected(onMessage?: () => void) {
 }
 
 function scheduleRetry(onMessage?: () => void) {
-	if (gaveUp) return;
 	if (!everConnected && ++coldAttempts >= MAX_COLD_ATTEMPTS) {
-		gaveUp = true;
-		console.info(
-			`[WS] /mtw never connected after ${coldAttempts} attempts — this deployment ` +
-			`likely does not run the mtw-request server. Falling back to polling; ` +
-			`reload to try again.`,
-		);
-		return;   // the 60s poll started in disconnected() keeps the data flowing
+		if (!quiet) {
+			quiet = true;
+			console.info(
+				`[WS] /mtw has not connected after ${coldAttempts} attempts — the deployment may not ` +
+				`run the mtw-request server, or its route is not there yet. Polling meanwhile, and ` +
+				`trying again every ${QUIET_RETRY_MS / 60_000} minutes.`,
+			);
+			wakeOnReturn(onMessage);
+		}
+		// The 60s poll started in disconnected() keeps the data flowing.
+		if (!quietTimer) quietTimer = setTimeout(() => { quietTimer = null; connectMtwRequest(onMessage); }, QUIET_RETRY_MS);
+		return;
 	}
 	setTimeout(() => connectMtwRequest(onMessage), retryDelay);
 	retryDelay = Math.min(retryDelay * 2, MAX_DELAY);
+}
+
+/** While retrying quietly: try at once when the tab is looked at again or the network comes back. */
+let wakeListening = false;
+function wakeOnReturn(onMessage?: () => void) {
+	if (wakeListening || typeof window === 'undefined') return;
+	wakeListening = true;
+	const tryNow = () => {
+		if (!quiet || mtwConnected || mtwWs || disposed) return;
+		if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+		if (quietTimer) {
+			clearTimeout(quietTimer);
+			quietTimer = null;
+		}
+		connectMtwRequest(onMessage);
+	};
+	window.addEventListener('online', tryNow);
+	document.addEventListener('visibilitychange', tryNow);
 }
 
 export function wsDisconnect() {
@@ -435,6 +477,10 @@ export function wsDisconnect() {
 	if (fallbackTimer) {
 		clearInterval(fallbackTimer);
 		fallbackTimer = null;
+	}
+	if (quietTimer) {
+		clearTimeout(quietTimer);
+		quietTimer = null;
 	}
 	subscribedChannels.clear();
 }

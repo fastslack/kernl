@@ -9,7 +9,7 @@
    * event, the expand state, the delta/token chips and the run totals had no
    * reader anywhere else.
    */
-  import type { AgentFlowEvent } from '$lib/stores.js';
+  import { wsConnected, type AgentFlowEvent } from '$lib/stores.js';
   import CopyTextBtn from '$lib/components/CopyTextBtn.svelte';
   import { fmtClock } from '$lib/display-format.js';
   import { liveStepHtml } from '$lib/step-view.js';
@@ -166,8 +166,14 @@
           <span class="live-now-halo"></span>
         </div>
         <div class="live-now-body">
-          <div class="live-now-lbl">warming up</div>
-          <div class="live-now-txt">Agent just started — waiting for the first step…</div>
+          {#if $wsConnected}
+            <div class="live-now-lbl">warming up</div>
+            <div class="live-now-txt">Agent just started — waiting for the first step…</div>
+          {:else}
+            <!-- Steps only arrive over the live socket; without it this would wait forever. -->
+            <div class="live-now-lbl">{$t('live.offline.lbl')}</div>
+            <div class="live-now-txt">{$t('live.offline.txt')}</div>
+          {/if}
         </div>
       </div>
     {/if}
