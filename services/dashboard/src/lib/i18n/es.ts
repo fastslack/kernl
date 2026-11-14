@@ -841,6 +841,8 @@ const es: Record<I18nKey, string> = {
   "office.bar.agents": "agentes",
   "office.bar.working": "trabajando",
   "office.bar.runs_today": "runs hoy",
+  "office.bar.stats_fit": "Ver todo el edificio",
+  "office.bar.stats_focus": "Ir a {name} en el edificio",
   "office.bar.inbox": "Dirección: {n} pendientes",
   "office.bar.meeting": "Reunión",
   "office.bar.activity": "Actividad",

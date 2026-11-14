@@ -1,12 +1,16 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
+	import BuildingStats from './BuildingStats.svelte';
+	import type { WorldStats } from '$shared/world-plugin.js';
 	import { t } from '$lib/i18n/index.js';
 
 	export let agents = 0;
 	export let working = 0;
 	export let runsToday = 0;
 	export let inbox = 0;
+	/** Numbers the extension buildings publish (e.g. the Growth Plaza), shown beside the building's. */
+	export let pluginStats: WorldStats[] = [];
 	/** View-menu entries offered by world plugins (extension buildings), e.g. hide a roof. */
 	export let extraItems: Array<{ id: string; label: string }> = [];
 	/** Whether the Message Stream bar at the bottom is shown (toggled from the View menu). */
@@ -17,6 +21,7 @@
 		meeting: void;
 		activity: void;
 		fit: void;
+		focusplugin: { stats: WorldStats };
 		turntable: void;
 		perf: void;
 		stream: void;
@@ -48,11 +53,8 @@
 
 <header class="bar" class:bar--menu-open={openMenu !== null}>
 	<h1 class="bar-title">{$t('office.bar.title')}</h1>
-	<p class="bar-stats">
-		<span><b>{agents}</b> {$t(agents === 1 ? 'office.bar.agent' : 'office.bar.agents')}</span>
-		<span class="bar-working"><b>{working}</b> {$t('office.bar.working')}</span>
-		<span><b>{runsToday}</b> {$t('office.bar.runs_today')}</span>
-	</p>
+	<BuildingStats {agents} {working} {runsToday} plugins={pluginStats}
+		on:fit={() => dispatch('fit')} on:focus={(e) => dispatch('focusplugin', e.detail)} />
 
 	<div class="bar-actions">
 		<button class="k-icon-btn bar-inbox" type="button" aria-label={$t('office.bar.inbox', { n: inbox })} on:click={() => dispatch('inbox')}>
@@ -117,9 +119,6 @@
 	/* The bar is its own stacking context; lift it while a menu is open so the menu paints above the drawer. */
 	.bar--menu-open { z-index: var(--z-modal); }
 	.bar-title { margin: 0; font: 600 18px/1.2 var(--font-display); color: var(--text-1); }
-	.bar-stats { margin: 0; display: flex; gap: 12px; font: 400 12px/1.4 var(--font-body); color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
-	.bar-stats b { color: var(--text-1); font-weight: 500; }
-	.bar-working b { color: var(--green); }
 	.bar-actions { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 	.bar-inbox { position: relative; }
 	.bar-badge {
@@ -156,6 +155,5 @@
 		.bar-pop { min-width: 210px; }
 	}
 	@media (prefers-reduced-motion: reduce) { .bar-new { transition: none; } }
-	@media (max-width: 1100px) { .bar-stats { display: none; } }
 	.bar-check { margin-left: auto; min-width: 1em; color: var(--teal); font-weight: 700; text-align: right; }
 </style>

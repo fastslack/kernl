@@ -56,7 +56,7 @@
   import { applyWorldTexture, scaleUV } from './office3d/textures.js';
   import { extWorlds, loadWorldPlugin, worldForKind } from '$lib/world-plugins.js';
   import { takesNoLot } from '$shared/office-lots.js';
-  import type { OffGridSite, WorldHit, WorldHost, WorldPlugin, WorldPluginInstance, WorldViewItem } from '$shared/world-plugin.js';
+  import type { OffGridSite, WorldHit, WorldHost, WorldPlugin, WorldPluginInstance, WorldStats as PluginStats, WorldViewItem } from '$shared/world-plugin.js';
   import { createConstructionDirector } from './office3d/construction/director.js';
   import { createConstructionStage, type ConstructionStage } from './office3d/construction/stage.js';
   import { createDemolitionDirector } from './office3d/construction/demolition.js';
@@ -308,6 +308,15 @@
   let worldOverlayRoot: HTMLElement;
   /** Window commands a plugin registered, to remove them when it unmounts. */
   const worldCommands = new Map<string, string[]>();
+  /** Headline numbers each plugin building publishes for the page's header bar, by kind. */
+  const worldStats = new Map<string, PluginStats>();
+  let worldStatsQueued = false;
+  /** Tell the page the plugins' numbers changed (once per microtask: a rebuild unmounts and remounts in one go). */
+  function queueWorldStats(): void {
+    if (worldStatsQueued) return;
+    worldStatsQueued = true;
+    queueMicrotask(() => { worldStatsQueued = false; dispatch('worldstats', [...worldStats.values()]); });
+  }
   /** Tooltip a plugin asked for under the pointer. */
   let worldTip: { x: number; y: number; text: string } | null = null;
   /** Bumped when a plugin arrives or the manifest's plugin list changes: re-plan and rebuild. */
@@ -826,6 +835,10 @@
       try {
         const inst = plugin.mount({
           host: worldHost(), target: group, site: offGridSites.get(kind) ?? null, overlay: overlay!,
+          publishStats: (stats) => {
+            if (stats) worldStats.set(kind, stats); else worldStats.delete(kind);
+            queueWorldStats();
+          },
           offices: offices.map(o => ({ id: o.id, name: o.name, color: o.color, kind })),
           camera, canvasRect: () => renderer.domElement.getBoundingClientRect(),
         });
@@ -849,6 +862,7 @@
     }
     worldInstances.clear();
     worldCommands.clear();
+    if (worldStats.size) { worldStats.clear(); queueWorldStats(); }
     worldTip = null;
   }
 

@@ -159,6 +159,10 @@
   let flows: FlowData[] = [];
   /** View-menu entries the 3D world's plugins offer (refreshed when the scene is ready and after each one runs). */
   let worldViewItems: Array<{ id: string; label: string; run(): void }> = [];
+  /** Headline numbers the extension buildings publish (the header bar shows them). */
+  let worldStats: import('$shared/world-plugin.js').WorldStats[] = [];
+  // The directory view unmounts the world: its plugins' numbers (and their camera) are gone with it.
+  $: if (directoryView) worldStats = [];
   let ranks: RankData[] = [];
 
   // Derived
@@ -823,6 +827,8 @@
         working={effectiveRunning.size}
         runsToday={todayRuns}
         inbox={inboxCount}
+        pluginStats={worldStats}
+        on:focusplugin={(e) => enterWorld(() => (worldStats.find((s) => s.title === e.detail.stats.title) ?? e.detail.stats).focus?.())}
         extraItems={[...worldViewItems, { id: 'time-machine', label: $t('tm.title') }, { id: 'library', label: $t('lib.title') }, { id: 'engine', label: $t('eng.title') }, { id: 'sky', label: $t('sky.title') }]}
         on:newoffice={() => openWizard()}
         on:meeting={openMeetingModal}
@@ -862,6 +868,7 @@
           on:timemachine={(e) => { tmSubject = ''; tmAgent = e.detail.agentId ?? ''; tmKey += 1; tmOpen = true; world?.selectAgent(null); }}
           on:sceneready={onSceneReady}
           on:worldchange={() => { worldViewItems = world?.pluginViewItems() ?? []; }}
+          on:worldstats={(e) => { worldStats = e.detail; }}
           on:meetings={(e) => (meetings = e.detail.list)}
           on:mgmtlog={(e) => (mgmtEntries = e.detail.entries)}
           on:humanmeeting={(e) => (humanMeeting = e.detail)}

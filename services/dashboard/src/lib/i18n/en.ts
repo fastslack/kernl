@@ -839,6 +839,8 @@ const en = {
   "office.bar.agents": "agents",
   "office.bar.working": "working",
   "office.bar.runs_today": "runs today",
+  "office.bar.stats_fit": "Show the whole building",
+  "office.bar.stats_focus": "Go to {name} in the building",
   "office.bar.inbox": "Headquarters: {n} pending",
   "office.bar.meeting": "Meeting",
   "office.bar.activity": "Activity",
