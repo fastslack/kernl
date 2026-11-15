@@ -32,7 +32,7 @@ describe("agentActionOf", () => {
     const zod = [{ code: "invalid_type", expected: "string", received: "undefined", path: ["body"], message: "Required" }];
     const a = agentActionOf(
       "mcp__kernel__kernel_agents_post_to_colleague",
-      JSON.stringify({ to_agent_name: "Acme Integrador", subject: "SOLO web#2590" }),
+      JSON.stringify({ to_agent_name: "Acme Integrador", subject: "SOLO app#2590" }),
       { preview: JSON.stringify(zod), failed: true },
     );
     expect(a?.failure).toBe("body: Required (expected string, got undefined)");

@@ -56,7 +56,7 @@ export interface OpinionAsker {
   description?: string;
 }
 
-/** A registered repo, so `web#2595` can be read from the right forge project. */
+/** A registered repo, so `app#2595` can be read from the right forge project. */
 export interface KnownRepo {
   name: string;
   remote_url: string;

@@ -177,7 +177,7 @@ export interface EarlierAttemptItem {
   ok: boolean;
   /** "2026-11-14 03:00" */
   when: string;
-  /** The issue or part the run was on, e.g. `web#2653:a-b`. */
+  /** The issue or part the run was on, e.g. `app#2653:a-b`. */
   key: string;
   outcome: string;
 }

@@ -20,7 +20,7 @@ const raw = {
       body: "Pedido desde el panel.",
       input: { type: "object", required: ["mode", "issue"], properties: {
         mode: { type: "string", enum: ["uno", "ronda"] },
-        issue: { type: "string", pattern: "^(api|web)#\\d+$", visibleIf: { mode: "uno" } } } } },
+        issue: { type: "string", pattern: "^(api|app)#\\d+$", visibleIf: { mode: "uno" } } } } },
     ronda: { type: "run", label: "Ronda", agent: "acme-vigia", goal: "Ronda del vigía." },
     nota: { type: "record", label: "Nota", collection: "notes", key: "{{key}}",
       input: { type: "object", required: ["key", "text"], properties: { key: { type: "string" }, text: { type: "string", maxLength: 500 } } } },
@@ -68,10 +68,10 @@ describe("PanelGateway", () => {
   });
 
   it("sends a letter built from the case template, after validating the form", () => {
-    expect(gw.act("f1", "vigia.mode", { mode: "uno", issue: "web#2585" }, "operator")).toEqual({ ok: true, result: expect.stringContaining("Acme Vigía") });
-    expect(letters[0]).toMatchObject({ toAgentId: "vigia-id", subject: "TOMAR web#2585" });
+    expect(gw.act("f1", "vigia.mode", { mode: "uno", issue: "app#2585" }, "operator")).toEqual({ ok: true, result: expect.stringContaining("Acme Vigía") });
+    expect(letters[0]).toMatchObject({ toAgentId: "vigia-id", subject: "TOMAR app#2585" });
     expect(letters[0].body).toContain("Pedido desde el panel.");
-    expect(store.listAudit("f1")[0]).toMatchObject({ action: "vigia.mode", ok: true, values: { mode: "uno", issue: "web#2585" } });
+    expect(store.listAudit("f1")[0]).toMatchObject({ action: "vigia.mode", ok: true, values: { mode: "uno", issue: "app#2585" } });
   });
 
   it("rejects bad input with 400 and sends nothing", () => {

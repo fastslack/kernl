@@ -10,10 +10,10 @@ describe("parseLoose", () => {
   });
 
   it("repairs a payload the server cut mid-string and says so", () => {
-    const cut = '{"to":"Integrador","subject":"SOLO web#2590","body":"El operador me pidió trab';
+    const cut = '{"to":"Integrador","subject":"SOLO app#2590","body":"El operador me pidió trab';
     const r = parseLoose(cut)!;
     expect(r.truncated).toBe(true);
-    expect((r.value as Record<string, string>).subject).toBe("SOLO web#2590");
+    expect((r.value as Record<string, string>).subject).toBe("SOLO app#2590");
     expect((r.value as Record<string, string>).body).toStartWith("El operador");
   });
 
@@ -40,17 +40,17 @@ describe("jsonHtml", () => {
   });
 
   it("breaks big objects into rows and shows multi-line strings as text, not \\n escapes", () => {
-    const html = jsonHtml({ subject: "SOLO web#2590", body: "línea uno\nlínea dos" });
+    const html = jsonHtml({ subject: "SOLO app#2590", body: "línea uno\nlínea dos" });
     expect(html).toContain("jv-nest");
     expect(html).toContain('class="jv-text"');
     expect(html).not.toContain("\\n");
   });
 
   it("renders JSON fenced inside a string as JSON, so it cannot break the layout", () => {
-    const body = 'Pedido del operador.\n\n```json\n{"mode":"only","only":"web#2590"}\n```\n';
+    const body = 'Pedido del operador.\n\n```json\n{"mode":"only","only":"app#2590"}\n```\n';
     const html = jsonHtml({ body });
     expect(html).not.toContain("```");
-    expect(text(html)).toContain('only: "web#2590"');
+    expect(text(html)).toContain('only: "app#2590"');
   });
 
   it("caps long arrays with a count of the rest", () => {

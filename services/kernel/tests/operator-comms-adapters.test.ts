@@ -33,7 +33,7 @@ describe("buildAdapters", () => {
   it("sends plain text (no parse mode) so _ and * cannot break the message", async () => {
     const calls: unknown[][] = [];
     const [a] = buildAdapters({ list: () => [tg(7, calls)] } as never);
-    await a.send({ text: "merge_hold *x* web#2588:web-3-c", buttons: [[{ text: "A", data: "oq:x:0" }]] });
+    await a.send({ text: "merge_hold *x* app#2588:web-3-c", buttons: [[{ text: "A", data: "oq:x:0" }]] });
     const opts = calls[0][3] as { parseMode?: unknown };
     expect(opts.parseMode).toBeNull();
   });

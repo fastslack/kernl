@@ -3,8 +3,8 @@ import { parseQuestionRefs, refsEmpty } from "../src/modules/agents/question-ref
 
 describe("parseQuestionRefs", () => {
   it("issues with and without repo, dropping a part suffix", () => {
-    const r = parseQuestionRefs("Sobre web#2595:api-1 y el #2600, también api#243.");
-    expect(r.issues).toEqual([{ repo: "web", number: 2595 }, { repo: "", number: 2600 }, { repo: "api", number: 243 }]);
+    const r = parseQuestionRefs("Sobre app#2595:api-1 y el #2600, también api#243.");
+    expect(r.issues).toEqual([{ repo: "app", number: 2595 }, { repo: "", number: 2600 }, { repo: "api", number: 243 }]);
   });
 
   it("merge requests: repo!n, bare !n, 'MR 83'; a bare one next to the qualified one is the same", () => {
@@ -18,10 +18,10 @@ describe("parseQuestionRefs", () => {
   });
 
   it("paths with a line, and URLs are not paths", () => {
-    const r = parseQuestionRefs("ver app/services/medication/index.js:167 y prescription-admin/index.js, https://gitlab.com/acme/web/-/issues/1");
+    const r = parseQuestionRefs("ver app/services/billing/index.js:167 y invoice-admin/index.js, https://gitlab.com/acme/app/-/issues/1");
     expect(r.paths).toEqual([
-      { path: "app/services/medication/index.js", line: 167 },
-      { path: "prescription-admin/index.js", line: null },
+      { path: "app/services/billing/index.js", line: 167 },
+      { path: "invoice-admin/index.js", line: null },
     ]);
   });
 
@@ -32,8 +32,8 @@ describe("parseQuestionRefs", () => {
   });
 
   it("the three escalated questions of 14/10", () => {
-    expect(parseQuestionRefs("web#2595 / api!95 (vínculo con familiar paciente)").changes[0]).toEqual({ repo: "api", number: 95 });
-    expect(parseQuestionRefs("web#2600 parte 2 (H-Digest PROD) LAB_EXTRACTION_HIDDEN_BEFORE").issues[0]).toEqual({ repo: "web", number: 2600 });
+    expect(parseQuestionRefs("app#2595 / api!95 (invitación rechazada)").changes[0]).toEqual({ repo: "api", number: 95 });
+    expect(parseQuestionRefs("app#2600 parte 2 (the PROD report) REPORT_HIDDEN_BEFORE").issues[0]).toEqual({ repo: "app", number: 2600 });
     expect(parseQuestionRefs("¿Pego la descripción corregida en !83?").changes).toEqual([{ repo: "", number: 83 }]);
   });
 });

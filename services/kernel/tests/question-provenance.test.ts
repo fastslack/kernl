@@ -26,9 +26,9 @@ const OPTS = [{ label: "Aprobar y mergear" }, { label: "Lo reviso yo", task: tru
 
 describe("what a question is about", () => {
   it("takes the subject from the first issue reference, part included", () => {
-    expect(subjectKeyOf("web#2653:a-b (api!905): el Resolver no puede seguir")).toBe("web#2653:a-b");
-    expect(subjectKeyOf("¿Apruebo api!83 (web#2601: los mails…)?")).toBe("web#2601");
-    expect(subjectKeyOf("Para WEB#2600 parte 2: ¿qué ruta?")).toBe("web#2600");
+    expect(subjectKeyOf("app#2653:a-b (api!905): el Resolver no puede seguir")).toBe("app#2653:a-b");
+    expect(subjectKeyOf("¿Apruebo api!83 (app#2601: los mails…)?")).toBe("app#2601");
+    expect(subjectKeyOf("Para APP#2600 parte 2: ¿qué ruta?")).toBe("app#2600");
     expect(subjectKeyOf("La corrida programada no corre")).toBe("");
     expect(normalizeCategory("  Approve MR! ")).toBe("approve-mr");
     expect(normalizeCategory(undefined)).toBe("");
@@ -39,9 +39,9 @@ describe("what a question is about", () => {
     const s = new AgentService(db, new EventBus());
     const a = s.createAgent({ name: "Cerrador" }).id;
     const given = s.createQuestion({ from_agent_id: a, question: "¿Cierro?", options: OPTS, for_operator: true, subject_key: "WEB#1:R2", category: "Closer Blocked" });
-    const read = s.createQuestion({ from_agent_id: a, question: "web#2816: el Cerrador no lo cierra", options: OPTS, for_operator: true });
+    const read = s.createQuestion({ from_agent_id: a, question: "app#2816: el Cerrador no lo cierra", options: OPTS, for_operator: true });
     expect([s.getQuestion(given.id)?.subject_key, s.getQuestion(given.id)?.category]).toEqual(["web#1:r2", "closer-blocked"]);
-    expect([s.getQuestion(read.id)?.subject_key, s.getQuestion(read.id)?.category]).toEqual(["web#2816", ""]);
+    expect([s.getQuestion(read.id)?.subject_key, s.getQuestion(read.id)?.category]).toEqual(["app#2816", ""]);
     db.close();
   });
 });

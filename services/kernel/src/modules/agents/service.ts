@@ -66,7 +66,7 @@ export interface AgentQuestion {
   /** When failed: "no_answer" | "unavailable", then ": " and the detail. */
   opinion_error: string; opinion_at: string | null;
   owed_at: string | null; reminded_at: string | null; for_operator: boolean;
-  /** What the question is about, e.g. `web#2653:a-b` (an issue and its part); '' when unknown. */
+  /** What the question is about, e.g. `app#2653:a-b` (an issue and its part); '' when unknown. */
   subject_key: string;
   /** The asker's kind of question, e.g. `approve-mr`, `closer-blocked`; '' when not given. */
   category: string;
@@ -1447,7 +1447,7 @@ export class AgentService {
     direct_to_human?: boolean;
     /** Alias of direct_to_human; also stored as for_operator=1. */
     for_operator?: boolean;
-    /** What it is about (`web#2653:a-b`). Taken from the question text when not given. */
+    /** What it is about (`app#2653:a-b`). Taken from the question text when not given. */
     subject_key?: string;
     /** The asker's kind of question (`approve-mr`); precedents are matched within one. */
     category?: string;
@@ -1807,7 +1807,7 @@ export class AgentService {
         q.from_agent_id,
         `ANSWER: ${q.question.slice(0, 160)}`,
         // The id travels with the answer: a host op that needs the operator's approval (a big DEV write)
-        // asks for it, and without it the asker had to ask again (web#2677, 01/11: five times).
+        // asks for it, and without it the asker had to ask again (app#2677, 01/11: five times).
         `${who} answered your question (question_id: ${q.id}).\n\n**Question:** ${q.question}\n\n**Answer:** ${q.selected_option}` +
           (q.answered_note && q.answered_note !== q.selected_option ? `\n\n**Note:** ${q.answered_note}` : ""),
         isoNow(),

@@ -5,8 +5,8 @@ describe('opinionStepLabel', () => {
   it('names the MR or issue being read, by its short project name', () => {
     expect(opinionStepLabel('mcp__kernel__kernel_gitlab_mr_read', '{"project":"gitlab.com/acme/api-server","number":95}'))
       .toEqual({ key: 'office.chief.q_step_read', params: { what: 'api-server!95' } });
-    expect(opinionStepLabel('mcp__kernel__kernel_gitlab_issue_read', '{"project":"git@gitlab.com:acme/web.git","number":2595}'))
-      .toEqual({ key: 'office.chief.q_step_read', params: { what: 'web#2595' } });
+    expect(opinionStepLabel('mcp__kernel__kernel_gitlab_issue_read', '{"project":"git@gitlab.com:acme/app.git","number":2595}'))
+      .toEqual({ key: 'office.chief.q_step_read', params: { what: 'app#2595' } });
   });
 
   it('a log over a range is a comparison between branches', () => {

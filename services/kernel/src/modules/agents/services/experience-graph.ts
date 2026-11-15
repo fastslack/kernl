@@ -46,7 +46,7 @@ const BATCH = 500;
  * 2: USED.errors counts failed tool results (they are tool_result steps
  * flagged is_error, not error steps).
  * 3: RECALLED edges, from agent_run_learnings.
- * 4: ON edges to the work item a run's goal names (web#2653, web#2653:a-b).
+ * 4: ON edges to the work item a run's goal names (app#2653, app#2653:a-b).
  */
 const RUNS_SYNC_VERSION = 4;
 /** 2: learnings carry created_at (when they were learned), for the time machine. */
@@ -156,7 +156,7 @@ export interface EarlierAttempt {
   id: string; agent: string; status: string; at: string; key: string; outcome: string;
 }
 
-/** Finished runs on an issue or its parts (ON → WorkItem, keyed `web#2653` or `web#2653:…`), newest first. */
+/** Finished runs on an issue or its parts (ON → WorkItem, keyed `app#2653` or `app#2653:…`), newest first. */
 export const EARLIER_ATTEMPTS_CYPHER = `
 MATCH (w:WorkItem) WHERE w.key = $root OR w.key STARTS WITH $prefix
 MATCH (a:Agent)-[:RAN]->(r:AgentRun)-[:ON]->(w)
@@ -467,7 +467,7 @@ export class AgentExperienceGraph {
           );
         }
         // The work item each run was about, as the decision graph files it:
-        // (run)-[:ON]->(web#2653:a-b)-[:PART_OF]->(web#2653). What any agent
+        // (run)-[:ON]->(app#2653:a-b)-[:PART_OF]->(app#2653). What any agent
         // already tried on an issue is then one traversal (earlierAttempts).
         const subjects = rows
           .map((r) => ({ run_id: r.id, key: subjectKeyOf(r.goal ?? "") }))

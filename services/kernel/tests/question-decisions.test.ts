@@ -29,12 +29,12 @@ describe("decisions", () => {
   });
   afterEach(() => db.close());
 
-  const ask = (subject = "web#1", category = "approve-mr") =>
+  const ask = (subject = "app#1", category = "approve-mr") =>
     s.createQuestion({ from_agent_id: qa, flow_id: FLOW, question: `¿Apruebo el MR de ${subject}?`, options: OPTS, for_operator: true, subject_key: subject, category }).id;
   /** n earlier answers in the category, `usual` of them the first option, all a day back. */
   const history = (n: number, usual: number, category = "approve-mr") => {
     for (let i = 0; i < n; i++) {
-      const id = ask(`web#${100 + i}`, category);
+      const id = ask(`app#${100 + i}`, category);
       s.answerQuestion(id, i < usual ? { selected_index: 0, selected_option: OPTS[0].label, answered_by: "human" } : { selected_index: 1, selected_option: OPTS[1].label, answered_by: "human" });
     }
     db.run("UPDATE agent_questions SET created_at = '2026-11-01T10:00:00.000Z', answered_at = '2026-11-01T10:05:00.000Z'");
@@ -43,7 +43,7 @@ describe("decisions", () => {
 
   it("suggests a category's usual answer once it is clear, and measures whether the operator then chose it", () => {
     history(12, 11);
-    const id = ask("web#9");
+    const id = ask("app#9");
     const sug = s.decisions.suggestionFor(id)!;
     expect([sug.label, sug.option_index, sug.samples, sug.precision, sug.mode]).toEqual(["Aprobar y mergear", 0, 12, null, "suggest"]);
     expect(sug.share).toBeCloseTo(11 / 12, 5);
@@ -51,20 +51,20 @@ describe("decisions", () => {
 
     resolveHumanChoice(s, executor, events, id, { kind: "option", index: 0 }, { via: "dashboard" });
     expect(s.decisions.precision(FLOW, "approve-mr")).toEqual({ precision: 1, measured: 1 });
-    const other = ask("web#10");
+    const other = ask("app#10");
     resolveHumanChoice(s, executor, events, other, { kind: "option", index: 1 }, { via: "dashboard" });
     expect(s.decisions.precision(FLOW, "approve-mr")).toEqual({ precision: 0.5, measured: 2 });
   });
 
   it("suggests nothing without a category, with a thin or split history, or when the office turned it off", () => {
     history(8, 8);
-    expect(s.decisions.suggestionFor(ask("web#9"))).toBeNull(); // 8 < 10 earlier answers
-    expect(s.decisions.suggestionFor(ask("web#9", ""))).toBeNull();
+    expect(s.decisions.suggestionFor(ask("app#9"))).toBeNull(); // 8 < 10 earlier answers
+    expect(s.decisions.suggestionFor(ask("app#9", ""))).toBeNull();
     history(12, 7, "split");
-    expect(s.decisions.suggestionFor(ask("web#9", "split"))).toBeNull(); // 7/12 < 70 %
+    expect(s.decisions.suggestionFor(ask("app#9", "split"))).toBeNull(); // 7/12 < 70 %
     history(12, 12, "quiet");
     s.decisions.setPolicy(FLOW, "quiet", { mode: "off" });
-    expect(s.decisions.suggestionFor(ask("web#9", "quiet"))).toBeNull();
+    expect(s.decisions.suggestionFor(ask("app#9", "quiet"))).toBeNull();
   });
 
   it("on auto, a precedent answers alone only while its measured precision holds, its condition is met and the environment is sound; 1 in 10 still goes to the operator", () => {
@@ -73,7 +73,7 @@ describe("decisions", () => {
     s.decisions.setPolicy(FLOW, "approve-mr", { mode: "auto", min_precision: 0.9, min_samples: 20 });
 
     // Not measured yet: suggested, asked.
-    const first = ask("web#7");
+    const first = ask("app#7");
     expect(s.getQuestion(first)?.status).toBe("pending");
 
     const seed = db.prepare(`INSERT INTO agent_question_suggestions (question_id, flow_id, category, label, option_index, share, samples, mode, outcome, created_at, resolved_at)
@@ -81,15 +81,15 @@ describe("decisions", () => {
     for (let i = 0; i < 25; i++) seed.run(`seed-${i}`, FLOW, i < 24 ? "hit" : "miss"); // 96 %
 
     // Measured, but no condition registered for the category: history alone never answers.
-    const noEvidence = Array.from({ length: 6 }, (_, i) => ask(`web#${150 + i}`));
+    const noEvidence = Array.from({ length: 6 }, (_, i) => ask(`app#${150 + i}`));
     expect(noEvidence.every((id) => s.getQuestion(id)?.status === "pending")).toBe(true);
-    expect(s.decisions.condition({ id: "x", flow_id: FLOW, category: "approve-mr", subject_key: "web#1", question: "" }, { label: "Aprobar y mergear" }).reason).toBe("no condition registered for this category");
+    expect(s.decisions.condition({ id: "x", flow_id: FLOW, category: "approve-mr", subject_key: "app#1", question: "" }, { label: "Aprobar y mergear" }).reason).toBe("no condition registered for this category");
 
-    // The MR's own checks say no for web#13: that one goes to the operator whatever the precedent says.
-    s.decisions.setCondition("approve-mr", (q) => (q.subject_key === "web#213" ? { ok: false, reason: "criterion #2 failed on web!1" } : { ok: true, reason: "all criteria passed" }));
+    // The MR's own checks say no for app#13: that one goes to the operator whatever the precedent says.
+    s.decisions.setCondition("approve-mr", (q) => (q.subject_key === "app#213" ? { ok: false, reason: "criterion #2 failed on web!1" } : { ok: true, reason: "all criteria passed" }));
 
     const outcomes = Array.from({ length: 15 }, (_, i) => {
-      const id = ask(`web#${200 + i}`);
+      const id = ask(`app#${200 + i}`);
       const q = s.getQuestion(id)!;
       return { holdout: isHoldout(id), status: q.status, by: q.answered_by, via: q.answered_via, asked: asked.includes(id) };
     });
@@ -102,7 +102,7 @@ describe("decisions", () => {
 
     // DEV down: the same precedent no longer answers alone.
     s.envFacts.report({ flow_id: FLOW, key: "dev-e2e", by: "test" });
-    const whileDown = Array.from({ length: 5 }, (_, i) => ask(`web#${300 + i}`));
+    const whileDown = Array.from({ length: 5 }, (_, i) => ask(`app#${300 + i}`));
     expect(whileDown.every((id) => s.getQuestion(id)?.status === "pending")).toBe(true);
   });
 
@@ -113,19 +113,19 @@ describe("decisions", () => {
     const seed = db.prepare(`INSERT INTO agent_question_suggestions (question_id, flow_id, category, label, option_index, share, samples, mode, outcome, created_at, resolved_at)
                              VALUES (?, ?, 'approve-mr', 'x', 0, 1, 40, 'suggest', ?, '2026-11-02', '2026-11-02')`);
     for (let i = 0; i < 25; i++) seed.run(`seed-${i}`, FLOW, i < 22 ? "hit" : "miss"); // 88 %
-    const ids = Array.from({ length: 6 }, (_, i) => ask(`web#${400 + i}`));
+    const ids = Array.from({ length: 6 }, (_, i) => ask(`app#${400 + i}`));
     expect(ids.every((id) => s.getQuestion(id)?.status === "pending")).toBe(true);
   });
 
   it("shows the last decision on the same subject and what changed in the environment since, without applying it", () => {
-    const before = ask("web#2653:a-b", "closer-blocked");
+    const before = ask("app#2653:a-b", "closer-blocked");
     s.answerQuestion(before, { selected_index: 1, selected_option: "Pedir cambios", answered_by: "human", source: { via: "whatsapp", actor: "whatsapp:1" } });
     db.run("UPDATE agent_questions SET created_at = '2026-11-01T10:00:00.000Z', answered_at = '2026-11-01T10:05:00.000Z' WHERE id = ?", [before]);
     s.envFacts.report({ flow_id: FLOW, key: "dev-e2e", by: "test" });
     db.run("UPDATE agent_env_facts SET valid_from = '2026-11-02T08:00:00.000Z'");
     s.closeEnvFact({ flow_id: FLOW, key: "dev-e2e", by: "test" });
 
-    const again = ask("web#2653:a-b", "closer-blocked");
+    const again = ask("app#2653:a-b", "closer-blocked");
     const q = s.getQuestion(again)!;
     expect(q.status).toBe("pending");
     const prev = s.decisions.previousOnSubject(q)!;
@@ -143,7 +143,7 @@ describe("decisions", () => {
       answer: (id, c, src) => resolveHumanChoice(s, executor, events, id, c, src), dashboardUrl: () => null, language: () => "es",
       hint: (q) => s.decisions.hint(q),
     });
-    const id = ask("web#9");
+    const id = ask("app#9");
     await comms.ask(id);
     expect(sent[0].text).toContain("💡 Lo habitual: «Aprobar y mergear» (100% de 12 casos)");
   });
@@ -160,9 +160,9 @@ describe("environment facts", () => {
     const woke: string[] = [];
     events.on("agent:inbox:posted" as never, (p: never) => { woke.push((p as { to_agent_id: string }).to_agent_id); });
 
-    const first = s.envFacts.report({ flow_id: FLOW, key: "Credential DEV_PATIENT_JWT", description: "no hay JWT", by: "agent:a", blocked: { agent_id: a, subject_key: "web#2098" } });
-    const second = s.envFacts.report({ flow_id: FLOW, key: "credential-dev-patient-jwt", by: "agent:b", blocked: { agent_id: b, subject_key: "web#2600:2-b" } });
-    const third = s.envFacts.report({ flow_id: FLOW, key: "credential-dev-patient-jwt", by: "agent:a", blocked: { agent_id: a, subject_key: "web#2601" } });
+    const first = s.envFacts.report({ flow_id: FLOW, key: "Credential DEV_PATIENT_JWT", description: "no hay JWT", by: "agent:a", blocked: { agent_id: a, subject_key: "app#2098" } });
+    const second = s.envFacts.report({ flow_id: FLOW, key: "credential-dev-patient-jwt", by: "agent:b", blocked: { agent_id: b, subject_key: "app#2600:2-b" } });
+    const third = s.envFacts.report({ flow_id: FLOW, key: "credential-dev-patient-jwt", by: "agent:a", blocked: { agent_id: a, subject_key: "app#2601" } });
     expect([first.opened, second.opened, third.opened, third.blocked]).toEqual([true, false, false, 3]);
     expect(first.fact.id).toBe(third.fact.id);
     expect(s.envFacts.listOpen(FLOW).length).toBe(1);
@@ -173,7 +173,7 @@ describe("environment facts", () => {
     expect(woke.sort()).toEqual([a, b].sort());
     const letter = db.query("SELECT subject, body FROM agent_office_inbox WHERE to_agent_id = ?").get(a) as { subject: string; body: string };
     expect(letter.subject).toBe("ENV-OK: credential-dev-patient-jwt");
-    expect(letter.body).toContain("web#2098, web#2601");
+    expect(letter.body).toContain("app#2098, app#2601");
     expect(s.closeEnvFact({ flow_id: FLOW, key: "credential-dev-patient-jwt", by: "operator" }).closed).toBe(false);
 
     // A new outage of the same thing is a new fact; the old one keeps its dates.

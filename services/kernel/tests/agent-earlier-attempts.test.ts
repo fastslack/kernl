@@ -10,11 +10,11 @@ import type { GraphDriver } from "../src/core/db-drivers/graph-driver.js";
 
 describe("subject keys", () => {
   it("takes the first issue or part a text names", () => {
-    expect(subjectKeyOf("TRABAJAR web#2653:a-b — fix the form")).toBe("web#2653:a-b");
+    expect(subjectKeyOf("TRABAJAR app#2653:a-b — fix the form")).toBe("app#2653:a-b");
     expect(subjectKeyOf("Review API#12 then web#3")).toBe("api#12");
     expect(subjectKeyOf("see https://x/y#12 or !1253")).toBe("");
-    expect(subjectRootOf("web#2653:a-b")).toBe("web#2653");
-    expect(subjectRootOf("web#2653")).toBe("web#2653");
+    expect(subjectRootOf("app#2653:a-b")).toBe("app#2653");
+    expect(subjectRootOf("app#2653")).toBe("app#2653");
   });
 });
 
@@ -73,25 +73,25 @@ describe.skipIf(!relateClientInstalled())("earlier attempts and learning audit o
   });
 
   it("links runs to the issue they were on, and lists what was tried on it or its parts", async () => {
-    addRun("r1", "dev", "TRABAJAR web#2653:form — build it", "2026-11-14T01:00:00.000Z", "failed", "", "no DB access");
-    addRun("r2", "qa", "Test web#2653", "2026-11-14T02:00:00.000Z", "completed", "  looks\n good  ");
-    addRun("r3", "dev", "TRABAJAR web#2653:form again", "2026-11-14T03:00:00.000Z");
-    addRun("r4", "dev", "TRABAJAR web#26530 other issue", "2026-11-14T04:00:00.000Z");
+    addRun("r1", "dev", "TRABAJAR app#2653:form — build it", "2026-11-14T01:00:00.000Z", "failed", "", "no DB access");
+    addRun("r2", "qa", "Test app#2653", "2026-11-14T02:00:00.000Z", "completed", "  looks\n good  ");
+    addRun("r3", "dev", "TRABAJAR app#2653:form again", "2026-11-14T03:00:00.000Z");
+    addRun("r4", "dev", "TRABAJAR app#26530 other issue", "2026-11-14T04:00:00.000Z");
     addRun("r5", "dev", "no issue named", "2026-11-14T05:00:00.000Z");
     await xp.sync();
 
     const part = await graph.run(
       "MATCH (:AgentRun {id: 'r1'})-[:ON]->(w:WorkItem)-[:PART_OF]->(p:WorkItem) RETURN w.key AS w, p.key AS p",
     );
-    expect(part.records.map((r) => [r.get("w"), r.get("p")])).toEqual([["web#2653:form", "web#2653"]]);
+    expect(part.records.map((r) => [r.get("w"), r.get("p")])).toEqual([["app#2653:form", "app#2653"]]);
 
     // Asked from a part: the whole issue counts; the current run and other issues stay out.
-    const got = await xp.earlierAttempts("web#2653:form", "r3");
+    const got = await xp.earlierAttempts("app#2653:form", "r3");
     expect(got.map((a) => [a.id, a.agent, a.status, a.key, a.outcome])).toEqual([
-      ["r2", "Tester", "completed", "web#2653", "looks good"],
-      ["r1", "Developer", "failed", "web#2653:form", "no DB access"],
+      ["r2", "Tester", "completed", "app#2653", "looks good"],
+      ["r1", "Developer", "failed", "app#2653:form", "no DB access"],
     ]);
-    expect((await xp.earlierAttempts("web#2653", "", 1)).map((a) => a.id)).toEqual(["r3"]);
+    expect((await xp.earlierAttempts("app#2653", "", 1)).map((a) => a.id)).toEqual(["r3"]);
     expect(await xp.earlierAttempts("web#9", "")).toEqual([]);
   });
 

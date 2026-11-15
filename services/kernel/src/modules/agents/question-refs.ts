@@ -1,5 +1,5 @@
 /**
- * The references an escalated question carries — `web#2595`, `api!95`, `!83`,
+ * The references an escalated question carries — `app#2595`, `api!95`, `!83`,
  * a sha, `app/services/x.js:154` — so the investigator is told what to read
  * first instead of finding it on its own. Pure: no lookups here.
  */
@@ -9,7 +9,7 @@ export interface ChangeRef { repo: string; number: number }
 export interface PathRef { path: string; line: number | null }
 
 export interface QuestionRefs {
-  /** `web#2595` (repo "web"), `#2600` (repo ""). A part suffix (`web#2595:api-1`) is dropped. */
+  /** `app#2595` (repo "web"), `#2600` (repo ""). A part suffix (`app#2595:api-1`) is dropped. */
   issues: IssueRef[];
   /** `api!95`, `!83` (repo ""), `MR 83`. */
   changes: ChangeRef[];

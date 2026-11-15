@@ -1263,7 +1263,7 @@ export function agentsTools(
         })).min(2).max(4).describe("2 to 4 options, your preferred one first."),
         meeting_id: z.string().optional().describe("If the question came out of a meeting, reference its id."),
         for_operator: z.boolean().optional().describe("Only the operator can decide or do this (approve a risky MR, set something in an environment, a product decision): skip the chief."),
-        subject: z.string().optional().describe("What the question is about, as a key: an issue and its part (`web#2653:a-b`), an MR, a ticket. Taken from the question text when omitted."),
+        subject: z.string().optional().describe("What the question is about, as a key: an issue and its part (`app#2653:a-b`), an MR, a ticket. Taken from the question text when omitted."),
         category: z.string().optional().describe("The kind of question, the same slug every time for the same kind (`approve-mr`, `closer-blocked`, `env-down`). Past decisions are matched within a category."),
         env: z.string().optional().describe("When the question is about the environment being broken (DEV down, a missing credential): its key, e.g. `dev-e2e`. If that problem is already open you join it and nobody is asked again."),
         ...CALLER_AGENT_ID_FIELD,
@@ -1466,7 +1466,7 @@ export function agentsTools(
           schema: z.object({
             key: z.string().describe("Short stable key of the problem, e.g. `dev-e2e`."),
             description: z.string().optional().describe("What is broken, as you saw it (first reporter's text is kept)."),
-            subject: z.string().optional().describe("What you parked because of it, e.g. `web#2653:a-b`."),
+            subject: z.string().optional().describe("What you parked because of it, e.g. `app#2653:a-b`."),
             ...CALLER_AGENT_ID_FIELD,
           }),
           handler: async (input) => {
@@ -1527,10 +1527,10 @@ export function agentsTools(
         defineTool({
           name: "kernel_agents_subject_history",
           description:
-            "Read-only. Everything asked and decided about an issue and all its parts (`web#2653` covers `web#2653:a-b`…), oldest first: " +
+            "Read-only. Everything asked and decided about an issue and all its parts (`app#2653` covers `app#2653:a-b`…), oldest first: " +
             "who asked, the answer, who decided it and through what channel, and which environment problems were open at the time. " +
             "Read it before asking about a subject again.",
-          schema: z.object({ subject: z.string().describe("An issue or one of its parts, e.g. `web#2653` or `web#2653:a-b`."), limit: z.number().int().optional() }),
+          schema: z.object({ subject: z.string().describe("An issue or one of its parts, e.g. `app#2653` or `app#2653:a-b`."), limit: z.number().int().optional() }),
           handler: async ({ subject, limit }) => {
             if (!service.decisionGraph) return errorResult("The decision graph is not available.");
             const rows = await service.decisionGraph.subjectHistory(subject, Math.min(Math.max(limit ?? 100, 1), 500));

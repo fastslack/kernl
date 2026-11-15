@@ -329,7 +329,7 @@ const similarRuns: SystemPromptStep = (ctx) => {
 
 // What the office already tried on the issue this run is about — by any of its
 // agents, newest first (experience graph: run → work item → issue). An office
-// re-dispatched web#2653 every few minutes, each run finding the same blocker
+// re-dispatched app#2653 every few minutes, each run finding the same blocker
 // and ending the same way; with the earlier attempts in front of it, the next
 // run sees that nothing changed and says so instead of trying again. Never
 // blocks a run: any failure contributes nothing.

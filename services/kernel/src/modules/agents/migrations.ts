@@ -1089,7 +1089,7 @@ export const agentsMigrations: Migration[] = [
     // Who decided, and about what. answered_by only told chief from "human",
     // and an office orchestrator answering through the API counted as human:
     // answered_via/answered_actor keep the channel and the sender. subject_key
-    // (`web#2653:a-b`) and category file every question under what it is about,
+    // (`app#2653:a-b`) and category file every question under what it is about,
     // so a decision can be found again for the same subject or the same kind.
     version: 64,
     sql: `
