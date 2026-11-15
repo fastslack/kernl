@@ -1157,6 +1157,26 @@ export const agentsMigrations: Migration[] = [
       );
     `,
   },
+  {
+    // An office orchestrator reports the state of each work item it drives
+    // (`web#2873` → `merging`). A question remembers the state its item was in
+    // when it was asked; once the item moves on, the question is stale: it is
+    // dismissed by rule with the reason, and a late answer is refused instead
+    // of acting on an item that is no longer where the question saw it.
+    version: 65,
+    sql: `
+      CREATE TABLE IF NOT EXISTS agent_subject_states (
+        flow_id     TEXT NOT NULL DEFAULT '',
+        subject_key TEXT NOT NULL,
+        state       TEXT NOT NULL,
+        updated_at  TEXT NOT NULL,
+        updated_by  TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (flow_id, subject_key)
+      );
+      ALTER TABLE agent_questions ADD COLUMN subject_state     TEXT NOT NULL DEFAULT '';
+      ALTER TABLE agent_questions ADD COLUMN superseded_reason TEXT NOT NULL DEFAULT '';
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is
@@ -1165,5 +1185,5 @@ export const agentsMigrations: Migration[] = [
   //
   // NOTE: versions 61 and 62 are burned too. They belonged to a learning
   // import from other instances that was removed before any release; a dev
-  // DB may have recorded them. The next migration is 65.
+  // DB may have recorded them. The next migration is 66.
 ];

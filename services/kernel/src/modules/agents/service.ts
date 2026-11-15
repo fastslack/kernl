@@ -71,6 +71,10 @@ export interface AgentQuestion {
   /** Channel the answer (or the dismissal) came through, and who sent it — see AnswerSource. */
   answered_via: string;
   answered_actor: string;
+  /** The state the subject's work item was in when this was asked (see setSubjectState); '' when unknown. */
+  subject_state: string;
+  /** Why it was dismissed on its own: the item moved on (e.g. «el ítem pasó de ready a merging»). */
+  superseded_reason: string;
 }
 
 /** The subject a question names first — see subject-key.ts. */
@@ -1423,10 +1427,13 @@ export class AgentService {
     subject_key?: string;
     /** The asker's kind of question (`approve-mr`); precedents are matched within one. */
     category?: string;
+    /** The state of the subject's work item when asked. Defaults to the state its orchestrator last reported. */
+    subject_state?: string;
   }): { id: string; status: "triage" | "pending" } {
     const id = newId();
     const askedAt = isoNow();
     const subject = (input.subject_key ?? "").trim().toLowerCase() || subjectKeyOf(input.question);
+    const subjectState = (input.subject_state ?? "").trim() || (subject ? this.getSubjectState(input.flow_id ?? "", subject)?.state ?? "" : "");
     // The chief triages everyone else's questions; its own (or any question
     // when there is no active chief, or one the caller addresses to the human
     // explicitly) goes straight to the human.
@@ -1437,13 +1444,13 @@ export class AgentService {
       .prepare(
         `INSERT INTO agent_questions
           (id, from_agent_id, flow_id, meeting_id, run_id, question, context, options, status, created_at, for_operator,
-           subject_key, category)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           subject_key, category, subject_state)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id, input.from_agent_id, input.flow_id ?? "", input.meeting_id ?? "", input.run_id ?? "",
         input.question, input.context ?? "", JSON.stringify(input.options), status, askedAt, toOperator ? 1 : 0,
-        subject, normalizeCategory(input.category),
+        subject, normalizeCategory(input.category), subjectState,
       );
     this.events.emit("data.changed", { module: "agents", action: "question_asked" });
     if (status === "pending") this.toHuman(id);
@@ -1537,6 +1544,8 @@ export class AgentService {
       category: String(r.category ?? ""),
       answered_via: String(r.answered_via ?? ""),
       answered_actor: String(r.answered_actor ?? ""),
+      subject_state: String(r.subject_state ?? ""),
+      superseded_reason: String(r.superseded_reason ?? ""),
     };
   }
 
@@ -1650,6 +1659,8 @@ export class AgentService {
       source?: { via: string; actor?: string };
     },
   ): { from_agent_id: string; question: string } | null {
+    // A question whose item moved on is dismissed instead of answered, whoever answers it.
+    if (this.supersedeIfStale(id)) return null;
     const q = this.getQuestion(id);
     if (!q) return null;
     const allowed = input.answered_by === "chief" ? ["triage"] : input.answered_by === "rule" ? ["pending"] : ["pending", "owed"];
@@ -1830,6 +1841,7 @@ export class AgentService {
     id: string,
     input: { selected_index: number; selected_option: string; note?: string; source?: { via: string; actor?: string } },
   ): AgentQuestion | null {
+    if (this.supersedeIfStale(id)) return null;
     const r = this.db
       .prepare(
         `UPDATE agent_questions SET status='owed', selected_option=?, selected_index=?, answered_note=?, owed_at=?, answered_by='human',
@@ -1841,6 +1853,61 @@ export class AgentService {
     this.events.emit("data.changed", { module: "agents", action: "question_owed" });
     this.events.emit("agent:question_owed", { question_id: id });
     return this.getQuestion(id) ?? null;
+  }
+
+  /** The state an office orchestrator last reported for a work item, or null. */
+  getSubjectState(flowId: string, subjectKey: string): { state: string; updated_at: string; updated_by: string } | null {
+    const key = subjectKey.trim().toLowerCase();
+    if (!key) return null;
+    return (this.db
+      .prepare("SELECT state, updated_at, updated_by FROM agent_subject_states WHERE flow_id=? AND subject_key=?")
+      .get(flowId, key) as { state: string; updated_at: string; updated_by: string } | null) ?? null;
+  }
+
+  /**
+   * An office orchestrator reports where a work item is now. Every open
+   * question on it that was asked in another state is stale: it is dismissed
+   * by rule, with the reason, and nobody gets a letter (the orchestrator that
+   * reports the move already knows). Returns the ids it dismissed.
+   */
+  setSubjectState(input: { flow_id: string; subject_key: string; state: string; by?: string }): { state: string; superseded: string[] } {
+    const key = input.subject_key.trim().toLowerCase();
+    const state = input.state.trim();
+    if (!key || !state) throw new Error("subject_key and state are required");
+    this.db
+      .prepare(
+        `INSERT INTO agent_subject_states (flow_id, subject_key, state, updated_at, updated_by) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (flow_id, subject_key) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at, updated_by=excluded.updated_by`,
+      )
+      .run(input.flow_id, key, state, isoNow(), input.by ?? "");
+    const open = this.db
+      .prepare(`SELECT id FROM agent_questions WHERE flow_id=? AND subject_key=? AND status IN ('triage','pending','owed')
+                AND subject_state <> '' AND subject_state <> ?`)
+      .all(input.flow_id, key, state) as Array<{ id: string }>;
+    const superseded = open.map((r) => r.id).filter((id) => this.supersedeIfStale(id) !== null);
+    return { state, superseded };
+  }
+
+  /**
+   * When the question's work item is no longer in the state it was asked in,
+   * dismiss the question by rule and return why; otherwise null. Called before
+   * any answer is applied, so a late answer never acts on an item that moved on.
+   */
+  supersedeIfStale(id: string): string | null {
+    const q = this.getQuestion(id);
+    if (!q || !q.subject_state || !["triage", "pending", "owed"].includes(q.status)) return null;
+    const now = this.getSubjectState(q.flow_id, q.subject_key);
+    if (!now || now.state === q.subject_state) return null;
+    const reason = `el ítem ${q.subject_key} pasó de ${q.subject_state} a ${now.state}`;
+    const r = this.db
+      .prepare(`UPDATE agent_questions SET status='dismissed', answered_at=?, answered_by='rule', answered_note=?, superseded_reason=?
+                WHERE id=? AND status=?`)
+      .run(isoNow(), reason, reason, id, q.status);
+    if (r.changes === 0) return null;
+    if (q.status === "owed") this.markOwedLettersRead(id);
+    this.events.emit("data.changed", { module: "agents", action: "question_dismissed" });
+    this.events.emit("agent:question_resolved", { question_id: id, status: "dismissed" });
+    return reason;
   }
 
   /** Dismiss a question waiting on the operator. Returns it as it was, or null. */

@@ -284,15 +284,36 @@ export function registerAgentRoutes(
     const choice = parseAnswerBody(body);
     if (!choice) throw new HttpError(400, "choice required");
     const r = resolveHumanChoice(service, executor, events, id, choice, answerSourceOf(req.headers, body));
+    if (!r.ok && r.reason === "superseded") throw new HttpError(409, r.detail, { reason: r.reason, detail: r.detail });
     if (!r.ok) throw new HttpError(r.reason === "not_open" ? 409 : 400, r.reason, { reason: r.reason });
     return { success: true, status: r.status };
   });
+
+  // An office orchestrator reports where one of its work items is now. Open questions on it asked in another state
+  // are dismissed as stale; later questions remember this state. The office is named by flow_id or by one of its
+  // agents (from_agent_slug), as in POST /api/agents/questions.
+  server.route<{ flow_id?: string; from_agent_slug?: string; subject_key?: string; state?: string; by?: string }>(
+    "PUT", "/api/agents/subjects/state", ({ req, body }) => {
+      let flowId = typeof body?.flow_id === "string" ? body.flow_id : undefined;
+      if (flowId === undefined && body?.from_agent_slug) {
+        const agent = service.getAgentBySlug(body.from_agent_slug);
+        if (!agent) throw new HttpError(404, "agent not found");
+        flowId = agent.flow_id ?? "";
+      }
+      if (flowId === undefined) throw new HttpError(400, "flow_id or from_agent_slug required");
+      const subjectKey = String(body?.subject_key ?? "").trim();
+      const state = String(body?.state ?? "").trim();
+      if (!subjectKey || !state) throw new HttpError(400, "subject_key and state required");
+      const by = typeof body?.by === "string" && body.by ? body.by : answerSourceOf(req.headers, body).actor ?? "";
+      return service.setSubjectState({ flow_id: flowId, subject_key: subjectKey, state, by });
+    },
+  );
 
   // An office's host process (its own service on the host) files a question for one of its agents:
   // the answer reaches that agent like any other.
   server.route<{
     from_agent_slug: string; question: string; context?: string; options: QuestionOption[]; for_operator?: boolean;
-    subject_key?: string; category?: string;
+    subject_key?: string; category?: string; subject_state?: string;
   }>(
     "POST", "/api/agents/questions", ({ body }) => {
       const agent = body?.from_agent_slug ? service.getAgentBySlug(body.from_agent_slug) : undefined;
@@ -309,7 +330,8 @@ export function registerAgentRoutes(
       return service.createQuestion({ from_agent_id: agent.id, flow_id: agent.flow_id ?? "", question,
         context: String(body.context ?? ""), options, for_operator: body.for_operator !== false,
         subject_key: typeof body.subject_key === "string" ? body.subject_key : undefined,
-        category: typeof body.category === "string" ? body.category : undefined });
+        category: typeof body.category === "string" ? body.category : undefined,
+        subject_state: typeof body.subject_state === "string" ? body.subject_state : undefined });
     },
   );
 

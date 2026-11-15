@@ -106,7 +106,7 @@ export class OperatorComms {
    */
   private reply(id: string, r: ReturnType<AnswerPort>): string {
     const s = strings(this.lang());
-    if (!r.ok) return r.reason === "not_open" ? s.notOpen : s.badChoice;
+    if (!r.ok) return r.reason === "superseded" ? s.superseded(r.detail) : r.reason === "not_open" ? s.notOpen : s.badChoice;
     const q = this.d.service.getQuestion(id);
     if (!q) return s.notOpen;
     return r.status === "owed" ? owedText(q, this.lang()) : resolvedText(q, this.lang());
