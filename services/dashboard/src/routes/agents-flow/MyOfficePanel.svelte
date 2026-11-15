@@ -74,7 +74,6 @@
   export let onOutputClick: (e: MouseEvent) => void;
   /** "Go to agent desk": select the agent, then fly the camera to it. */
   export let selectAgent: (id: string) => void;
-  export let focusAgent: () => void;
   /** The backlog or the questions are still loading: show a skeleton, never
    *  "all clear" — an empty list before the data arrives is not good news. */
   export let loading = false;
@@ -481,7 +480,6 @@
     selectAgent(openReport.agentId);
     showMyOfficePanel = false;
     openReport = null;
-    focusAgent();
   }
 </script>
 
@@ -516,7 +514,7 @@
             {$t('office.chief.talk')}
           </button>
           <button class="mo-btn mo-btn-primary" type="button" title={$t('office.chief.open_agent_title')}
-                  on:click={() => { selectAgent(chief.id); showMyOfficePanel = false; focusAgent(); }}>
+                  on:click={() => { selectAgent(chief.id); showMyOfficePanel = false; }}>
             {$t('office.chief.open_agent')} →
           </button>
         {/if}
@@ -897,7 +895,6 @@
             selectAgent(openReport.agentId);
             showMyOfficePanel = false;
             openReport = null;
-            focusAgent();
           }
         }}>
           {$t('office.chief.go_to_agent')} →
