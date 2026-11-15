@@ -331,7 +331,7 @@ export function resolveHumanChoice(
 ): ChoiceResult {
   const q = service.getQuestion(id);
   if (!q || (q.status !== "pending" && q.status !== "owed")) return { ok: false, reason: "not_open" };
-  // 15/11: «Reintentar la aprobación» on a question about an MR that had merged since sent its item back to merging.
+  // A late "retry the approval" on a question about an MR that had merged since sent its item back to merging.
   // An answer to a question whose item moved on is refused, and the question leaves the panel.
   const stale = service.supersedeIfStale(id);
   if (stale) return { ok: false, reason: "superseded", detail: stale };

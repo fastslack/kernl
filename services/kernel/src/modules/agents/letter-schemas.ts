@@ -2,11 +2,11 @@
  * The letter types an office's orchestrator reads, and what each must carry.
  *
  * An office whose orchestrator is code reads letters by type: the subject
- * starts with the type (`E2E-DEV-ROJO web#2873`) and the body carries a
+ * starts with the type (`E2E-RED app#42`) and the body carries a
  * ```json block with the fields the orchestrator acts on. A letter missing one
- * was only caught after it was sent: the orchestrator answered «carta
- * inválida» and the agent had to be woken again to resend it (15/11, an
- * E2E-DEV-ROJO with no "veredicto"). With the types registered here, the
+ * was only caught after it was sent: the orchestrator answered "invalid
+ * letter" and the agent had to be woken again to resend it (a red end-to-end
+ * report with no verdict). With the types registered here, the
  * letter is refused when the agent posts it, and the agent fixes it in the
  * same run.
  */
@@ -14,7 +14,7 @@ import type { SqliteDb } from "../../core/db/sqlite.js";
 import { isoNow } from "../../core/helpers.js";
 
 export interface LetterSchema {
-  /** The subject's first word, e.g. `E2E-DEV-ROJO`. */
+  /** The subject's first word, e.g. `E2E-RED`. */
   type: string;
   /** Fields the JSON block must carry, non-empty. */
   required: string[];
@@ -74,7 +74,7 @@ export function parseLetterSchemas(raw: unknown): LetterSchema[] {
   return raw.map((s, i) => {
     const o = (s ?? {}) as Record<string, unknown>;
     const type = String(o.type ?? "").trim();
-    if (!/^[A-Z][A-Z0-9_-]{1,40}$/.test(type)) throw new Error(`schemas[${i}].type must be an upper-case word like E2E-DEV-ROJO`);
+    if (!/^[A-Z][A-Z0-9_-]{1,40}$/.test(type)) throw new Error(`schemas[${i}].type must be an upper-case word like E2E-RED`);
     const required = Array.isArray(o.required) ? o.required.map((k) => String(k).trim()).filter(Boolean) : [];
     const equals = o.equals && typeof o.equals === "object" && !Array.isArray(o.equals)
       ? Object.fromEntries(Object.entries(o.equals as Record<string, unknown>).map(([k, v]) => [k, String(v)]))

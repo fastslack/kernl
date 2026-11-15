@@ -75,7 +75,7 @@ export interface AgentQuestion {
   answered_actor: string;
   /** The state the subject's work item was in when this was asked (see setSubjectState); '' when unknown. */
   subject_state: string;
-  /** Why it was dismissed on its own: the item moved on (e.g. «el ítem pasó de ready a merging»). */
+  /** Why it was dismissed on its own: the item moved on (e.g. "item app#42 moved from ready to merging"). */
   superseded_reason: string;
 }
 
@@ -1958,7 +1958,7 @@ export class AgentService {
     if (!q || !q.subject_state || !["triage", "pending", "owed"].includes(q.status)) return null;
     const now = this.getSubjectState(q.flow_id, q.subject_key);
     if (!now || now.state === q.subject_state) return null;
-    const reason = `el ítem ${q.subject_key} pasó de ${q.subject_state} a ${now.state}`;
+    const reason = `item ${q.subject_key} moved from ${q.subject_state} to ${now.state}`;
     const r = this.db
       .prepare(`UPDATE agent_questions SET status='dismissed', answered_at=?, answered_by='rule', answered_note=?, superseded_reason=?
                 WHERE id=? AND status=?`)

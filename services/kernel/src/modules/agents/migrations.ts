@@ -1159,7 +1159,7 @@ export const agentsMigrations: Migration[] = [
   },
   {
     // An office orchestrator reports the state of each work item it drives
-    // (`web#2873` → `merging`). A question remembers the state its item was in
+    // (`app#42` → `merging`). A question remembers the state its item was in
     // when it was asked; once the item moves on, the question is stale: it is
     // dismissed by rule with the reason, and a late answer is refused instead
     // of acting on an item that is no longer where the question saw it.
@@ -1179,8 +1179,8 @@ export const agentsMigrations: Migration[] = [
   },
   {
     // A work item an office keeps from moving: held until someone lifts it, or
-    // snoozed until a time, with who placed it and why (an orchestrator's
-    // «Seguir retenido» was a 24 h snooze nobody could see or lift). And the
+    // snoozed until a time, with who placed it and why (an orchestrator's own
+    // "keep waiting" snooze was invisible and could not be lifted). And the
     // letter types an office's orchestrator reads by code, with the fields each
     // must carry, so a malformed letter is refused when it is posted.
     version: 66,

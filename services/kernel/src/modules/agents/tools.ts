@@ -1770,7 +1770,7 @@ export function agentsTools(
         "List the work items your office keeps from moving right now: held until someone lifts it, or snoozed until a " +
         "time, each with its reason and who placed it. Leave a held item where it is.",
       schema: z.object({
-        subject_key: z.string().optional().describe("Only this item, e.g. web#2707"),
+        subject_key: z.string().optional().describe("Only this item, e.g. app#42"),
         ...CALLER_AGENT_ID_FIELD,
       }),
       handler: async (input) => {
@@ -1790,7 +1790,7 @@ export function agentsTools(
         "(until, or minutes). Say why. It replaces the item's current hold. The operator sees it and can lift it; " +
         "you get a HOLD-LIFTED letter when someone does.",
       schema: z.object({
-        subject_key: z.string().describe("The item, e.g. web#2707"),
+        subject_key: z.string().describe("The item, e.g. app#42"),
         kind: z.enum(["hold", "snooze"]),
         reason: z.string().describe("Why it waits, in one sentence the operator understands"),
         until: z.string().optional().describe("Snooze only: ISO time it ends"),

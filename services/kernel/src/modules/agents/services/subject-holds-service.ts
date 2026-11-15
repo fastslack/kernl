@@ -1,10 +1,10 @@
 /**
  * Work items an office keeps from moving, and until when.
  *
- * An office orchestrator held an item for 24 hours when the operator chose
- * «Seguir retenido» (15/11): nobody could see the hold, who placed it or why,
- * and lifting it meant editing the orchestrator's state by hand. Here a hold
- * is a row: on a subject (`web#2707`), with a reason and an owner, either open
+ * An office orchestrator held an item for 24 hours when the operator chose to
+ * keep it waiting: nobody could see the hold, who placed it or why, and
+ * lifting it meant editing the orchestrator's state by hand. Here a hold
+ * is a row: on a subject (`app#42`), with a reason and an owner, either open
  * until lifted (`hold`) or until a time (`snooze`). Orchestrators read the
  * active ones on every tick; the operator sees them and lifts them.
  */
