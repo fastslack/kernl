@@ -1177,6 +1177,38 @@ export const agentsMigrations: Migration[] = [
       ALTER TABLE agent_questions ADD COLUMN superseded_reason TEXT NOT NULL DEFAULT '';
     `,
   },
+  {
+    // A work item an office keeps from moving: held until someone lifts it, or
+    // snoozed until a time, with who placed it and why (an orchestrator's
+    // «Seguir retenido» was a 24 h snooze nobody could see or lift). And the
+    // letter types an office's orchestrator reads by code, with the fields each
+    // must carry, so a malformed letter is refused when it is posted.
+    version: 66,
+    sql: `
+      CREATE TABLE IF NOT EXISTS agent_subject_holds (
+        id              TEXT PRIMARY KEY,
+        flow_id         TEXT NOT NULL DEFAULT '',
+        subject_key     TEXT NOT NULL,
+        kind            TEXT NOT NULL CHECK (kind IN ('hold','snooze')),
+        until           TEXT,
+        reason          TEXT NOT NULL DEFAULT '',
+        owner           TEXT NOT NULL DEFAULT '',
+        notify_agent_id TEXT NOT NULL DEFAULT '',
+        created_at      TEXT NOT NULL,
+        lifted_at       TEXT,
+        lifted_by       TEXT NOT NULL DEFAULT ''
+      );
+      CREATE INDEX IF NOT EXISTS idx_subject_holds_active ON agent_subject_holds (flow_id, subject_key, lifted_at);
+
+      CREATE TABLE IF NOT EXISTS agent_letter_schemas (
+        flow_id    TEXT NOT NULL,
+        type       TEXT NOT NULL,
+        schema     TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (flow_id, type)
+      );
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is
@@ -1185,5 +1217,5 @@ export const agentsMigrations: Migration[] = [
   //
   // NOTE: versions 61 and 62 are burned too. They belonged to a learning
   // import from other instances that was removed before any release; a dev
-  // DB may have recorded them. The next migration is 66.
+  // DB may have recorded them. The next migration is 67.
 ];

@@ -42,6 +42,8 @@ import { protectedReason, ProtectedAgentError } from "./protected-agents.js";
 import { CLAUDE_ACCESS_WAITING, CLAUDE_LIMIT_WAITING } from "../../sdk/claude-access.js";
 import { DecisionService, type Suggestion } from "./services/decisions-service.js";
 import { EnvFactsService, type EnvFact } from "./services/env-facts-service.js";
+import { SubjectHoldsService, type HoldKind, type SubjectHold } from "./services/subject-holds-service.js";
+import { LetterSchemasService, letterProblem } from "./letter-schemas.js";
 import type { DecisionGraph } from "./services/decision-graph.js";
 import { subjectKeyOf } from "./subject-key.js";
 
@@ -216,6 +218,10 @@ export class AgentService {
   readonly decisions: DecisionService;
   /** What is broken in each office's environment, and who is waiting on it. */
   readonly envFacts: EnvFactsService;
+  /** Work items an office keeps from moving (held, or snoozed until a time). */
+  readonly holds: SubjectHoldsService;
+  /** Letter types an office's orchestrator reads, and the fields each must carry. */
+  readonly letterSchemas: LetterSchemasService;
 
   /**
    * Answers a question by its precedent when the office's policy allows it
@@ -258,6 +264,17 @@ export class AgentService {
     return findDuplicateQuestion({ question: input.question, context: input.context ?? "" }, candidates, this.questionJudge);
   }
 
+  /** An open question of the office with exactly this text (spacing and case aside), or null. */
+  findOpenQuestionByText(flowId: string, question: string): AgentQuestion | null {
+    const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+    const want = norm(question);
+    const rows = this.db.prepare(
+      "SELECT * FROM agent_questions WHERE flow_id = ? AND status IN ('triage','pending','owed') ORDER BY created_at DESC LIMIT 200",
+    ).all(flowId) as Array<Record<string, unknown>>;
+    const hit = rows.find((r) => norm(String(r.question ?? "")) === want);
+    return hit ? this.mapQuestionRow(hit) : null;
+  }
+
   private duplicateCandidates(fromAgentId: string, flowId: string): AgentQuestion[] {
     const since = new Date(Date.now() - DUPLICATE_WINDOW_DAYS * 86_400_000).toISOString();
     const rows = this.db.prepare(
@@ -284,6 +301,8 @@ export class AgentService {
     this.chains = new AgentChainsService(db, events);
     this.decisions = new DecisionService(db);
     this.envFacts = new EnvFactsService(db);
+    this.holds = new SubjectHoldsService(db);
+    this.letterSchemas = new LetterSchemasService(db);
     this.eventLog = new AgentEventLogService(db);
     this.evolution = new AgentEvolutionService(db, events);
     this.triggers = new AgentTriggersService(db, events);
@@ -1188,6 +1207,11 @@ export class AgentService {
     if (!from) return { message: null, error: `Sender agent not found: ${input.from_agent_id}` };
     if (!to) return { message: null, error: `Recipient agent not found: ${input.to_agent_id}` };
     if (from.id === to.id) return { message: null, error: "Cannot post a message to yourself" };
+    // A letter of a type the recipient's office reads by code must carry its fields: refused now, while the
+    // sender can still fix it, instead of answered «invalid» by the orchestrator after the run ended.
+    const schemas = to.flow_id ? this.letterSchemas.list(to.flow_id) : [];
+    const problem = schemas.length ? letterProblem(schemas, input.subject, input.body) : null;
+    if (problem) return { message: null, error: problem };
 
     // flow_id on the inbox row is kept for legacy indexing. For cross-office
     // messages we store the sender's flow so the sender's office dashboard
@@ -1853,6 +1877,42 @@ export class AgentService {
     this.events.emit("data.changed", { module: "agents", action: "question_owed" });
     this.events.emit("agent:question_owed", { question_id: id });
     return this.getQuestion(id) ?? null;
+  }
+
+  /** Hold or snooze a work item (see SubjectHoldsService). The office's dashboards refresh. */
+  placeSubjectHold(input: {
+    flow_id: string; subject_key: string; kind: HoldKind; reason: string; owner: string;
+    until?: string | null; minutes?: number; notify_agent_id?: string;
+  }): SubjectHold {
+    const hold = this.holds.place(input);
+    this.events.emit("data.changed", { module: "agents", action: "subject_hold_placed" });
+    return hold;
+  }
+
+  /**
+   * Lift a hold. The agent named to be told gets a HOLD-LIFTED letter from the
+   * headquarters (and is woken by it like by any letter). Null when the hold is
+   * unknown or no longer active.
+   */
+  liftSubjectHold(id: string, by: string): SubjectHold | null {
+    const hold = this.holds.lift(id, by);
+    if (!hold) return null;
+    this.events.emit("data.changed", { module: "agents", action: "subject_hold_lifted" });
+    const agent = hold.notify_agent_id ? this.getAgent(hold.notify_agent_id) : undefined;
+    if (agent) {
+      const letterId = newId();
+      const subject = `HOLD-LIFTED ${hold.subject_key}`;
+      const body = `${by || "Someone"} lifted the ${hold.kind} on ${hold.subject_key} («${hold.reason}», placed by ${hold.owner || "unknown"} ` +
+        `at ${hold.created_at}). It can move again.\n\n\`\`\`json\n${JSON.stringify({ key: hold.subject_key, hold_id: hold.id, lifted_by: by })}\n\`\`\``;
+      this.db
+        .prepare(
+          `INSERT INTO agent_office_inbox (id, flow_id, from_agent_id, to_agent_id, subject, body, status, related_run_id, created_at, read_at)
+           VALUES (?, ?, '__top_agent__', ?, ?, ?, 'unread', '', ?, NULL)`,
+        )
+        .run(letterId, agent.flow_id ?? "", agent.id, subject, body, isoNow());
+      this.events.emit("agent:inbox:posted", { message_id: letterId, flow_id: agent.flow_id ?? "", from_agent_id: "__top_agent__", to_agent_id: agent.id, subject });
+    }
+    return hold;
   }
 
   /** The state an office orchestrator last reported for a work item, or null. */

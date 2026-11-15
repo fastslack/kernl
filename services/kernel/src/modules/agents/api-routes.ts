@@ -10,6 +10,7 @@ import { normalizeCategory, type AgentService, type QuestionOption, type Questio
 import type { AgentExecutor } from "./executor.js";
 import { resolveGoal } from "./executor.js";
 import { resolveHumanChoice, type AnswerSource, type HumanChoice } from "./question-delivery.js";
+import { parseLetterSchemas } from "./letter-schemas.js";
 import { createQuestionInvestigator, type QuestionInvestigator } from "./question-investigator.js";
 import type { EventBus } from "../../core/event-bus.js";
 import type { KernelLanguage } from "../../core/config.js";
@@ -309,6 +310,64 @@ export function registerAgentRoutes(
     },
   );
 
+  // The office a host process speaks for: flow_id, or the office of one of its agents.
+  const officeOf = (b: { flow_id?: unknown; from_agent_slug?: unknown } | undefined): string => {
+    if (typeof b?.flow_id === "string") return b.flow_id;
+    if (typeof b?.from_agent_slug === "string" && b.from_agent_slug) {
+      const agent = service.getAgentBySlug(b.from_agent_slug);
+      if (!agent) throw new HttpError(404, "agent not found");
+      return agent.flow_id ?? "";
+    }
+    throw new HttpError(400, "flow_id or from_agent_slug required");
+  };
+
+  // Work items held or snoozed. GET lists the active ones (one office with flow_id, or every office);
+  // an orchestrator reads them on each tick and leaves those items where they are.
+  server.route("GET", "/api/agents/subjects/holds", ({ query }) => {
+    const flowId = query.get("flow_id");
+    const holds = flowId !== null ? service.holds.active(flowId, query.get("subject_key") ?? undefined) : service.holds.allActive();
+    return { holds, total: holds.length };
+  });
+
+  server.route<{
+    flow_id?: string; from_agent_slug?: string; subject_key?: string; kind?: string; reason?: string; owner?: string;
+    until?: string; minutes?: number; notify_agent_slug?: string;
+  }>("POST", "/api/agents/subjects/holds", ({ req, body }) => {
+    const flowId = officeOf(body);
+    const notify = body?.notify_agent_slug ? service.getAgentBySlug(body.notify_agent_slug) : undefined;
+    if (body?.notify_agent_slug && !notify) throw new HttpError(404, "notify agent not found");
+    try {
+      return service.placeSubjectHold({
+        flow_id: flowId, subject_key: String(body?.subject_key ?? ""), kind: body?.kind === "snooze" ? "snooze" : "hold",
+        reason: String(body?.reason ?? ""), owner: String(body?.owner ?? answerSourceOf(req.headers, body).actor ?? ""),
+        until: typeof body?.until === "string" ? body.until : null,
+        minutes: typeof body?.minutes === "number" ? body.minutes : undefined, notify_agent_id: notify?.id,
+      });
+    } catch (err) {
+      throw new HttpError(400, err instanceof Error ? err.message : String(err));
+    }
+  });
+
+  server.route<{ by?: string }>("POST", "/api/agents/subjects/holds/:id/lift", ({ req, params: { id }, body }) => {
+    const by = typeof body?.by === "string" && body.by ? body.by : answerSourceOf(req.headers, body).actor || "operator";
+    const hold = service.liftSubjectHold(id, by);
+    if (!hold) throw new HttpError(409, "hold not found or no longer active", { reason: "not_active" });
+    return { hold };
+  });
+
+  // The letter types an office's orchestrator reads by code. PUT replaces the office's list; a letter of one of
+  // these types posted to an agent of that office without its fields is refused to the sender.
+  server.route("GET", "/api/agents/flows/:flow_id/letter-schemas", ({ params: { flow_id } }) => ({
+    schemas: service.letterSchemas.list(flow_id),
+  }));
+
+  server.route<{ schemas?: unknown }>("PUT", "/api/agents/flows/:flow_id/letter-schemas", ({ params: { flow_id }, body }) => {
+    let schemas;
+    try { schemas = parseLetterSchemas(body?.schemas); } catch (err) { throw new HttpError(400, err instanceof Error ? err.message : String(err)); }
+    service.letterSchemas.replace(flow_id, schemas);
+    return { schemas };
+  });
+
   // An office's host process (its own service on the host) files a question for one of its agents:
   // the answer reaches that agent like any other.
   server.route<{
@@ -327,6 +386,10 @@ export function registerAgentRoutes(
         })
         .filter((x): x is QuestionOption => x !== null);
       if (!question || options.length < 2 || options.length > 4) throw new HttpError(400, "question and 2-4 options required");
+      // The same question still open in the office is not filed twice: the caller gets the open one's id.
+      // Exact text only — a host process words its questions from code, so a reworded one is a different question.
+      const open = service.findOpenQuestionByText(agent.flow_id ?? "", question);
+      if (open) return { id: open.id, status: open.status, duplicate_of: open.id };
       return service.createQuestion({ from_agent_id: agent.id, flow_id: agent.flow_id ?? "", question,
         context: String(body.context ?? ""), options, for_operator: body.for_operator !== false,
         subject_key: typeof body.subject_key === "string" ? body.subject_key : undefined,

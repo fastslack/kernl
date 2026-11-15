@@ -1763,6 +1763,69 @@ export function agentsTools(
       },
     }),
 
+    // ── kernel_agents_holds_list / hold_place / hold_lift ─
+    defineTool({
+      name: "kernel_agents_holds_list",
+      description:
+        "List the work items your office keeps from moving right now: held until someone lifts it, or snoozed until a " +
+        "time, each with its reason and who placed it. Leave a held item where it is.",
+      schema: z.object({
+        subject_key: z.string().optional().describe("Only this item, e.g. web#2707"),
+        ...CALLER_AGENT_ID_FIELD,
+      }),
+      handler: async (input) => {
+        const caller = service.getAgent(resolveCallerAgentId(input) ?? "");
+        if (!caller) return errorResult("Caller agent context missing — kernel_agents_holds_list is only usable from an agent run.");
+        const holds = service.holds.active(caller.flow_id ?? "", input.subject_key);
+        if (holds.length === 0) return textResult("Nothing is held or snoozed in your office.");
+        return textResult(holds.map((h) =>
+          `- ${h.subject_key}: ${h.kind}${h.until ? ` until ${h.until}` : ""} — ${h.reason} (by ${h.owner || "?"}, ${h.created_at}; id ${h.id})`).join("\n"));
+      },
+    }),
+
+    defineTool({
+      name: "kernel_agents_hold_place",
+      description:
+        "Keep a work item of your office from moving: kind 'hold' until someone lifts it, or 'snooze' until a time " +
+        "(until, or minutes). Say why. It replaces the item's current hold. The operator sees it and can lift it; " +
+        "you get a HOLD-LIFTED letter when someone does.",
+      schema: z.object({
+        subject_key: z.string().describe("The item, e.g. web#2707"),
+        kind: z.enum(["hold", "snooze"]),
+        reason: z.string().describe("Why it waits, in one sentence the operator understands"),
+        until: z.string().optional().describe("Snooze only: ISO time it ends"),
+        minutes: z.number().optional().describe("Snooze only: how long, instead of until"),
+        ...CALLER_AGENT_ID_FIELD,
+      }),
+      handler: async (input) => {
+        const caller = service.getAgent(resolveCallerAgentId(input) ?? "");
+        if (!caller) return errorResult("Caller agent context missing — kernel_agents_hold_place is only usable from an agent run.");
+        try {
+          const h = service.placeSubjectHold({
+            flow_id: caller.flow_id ?? "", subject_key: input.subject_key, kind: input.kind, reason: input.reason,
+            owner: caller.name, until: input.until ?? null, minutes: input.minutes, notify_agent_id: caller.id,
+          });
+          return textResult(`${h.subject_key} is ${h.kind === "hold" ? "held" : `snoozed until ${h.until}`} (id ${h.id}).`);
+        } catch (err) {
+          return errorResult(err instanceof Error ? err.message : String(err));
+        }
+      },
+    }),
+
+    defineTool({
+      name: "kernel_agents_hold_lift",
+      description: "Lift a hold or snooze of your office (id from kernel_agents_holds_list) once the item can move again.",
+      schema: z.object({ hold_id: z.string(), ...CALLER_AGENT_ID_FIELD }),
+      handler: async (input) => {
+        const caller = service.getAgent(resolveCallerAgentId(input) ?? "");
+        if (!caller) return errorResult("Caller agent context missing — kernel_agents_hold_lift is only usable from an agent run.");
+        const hold = service.holds.get(input.hold_id);
+        if (!hold || hold.flow_id !== (caller.flow_id ?? "")) return errorResult("No hold with that id in your office.");
+        const lifted = service.liftSubjectHold(hold.id, caller.name);
+        return lifted ? textResult(`Lifted the ${lifted.kind} on ${lifted.subject_key}.`) : errorResult("That hold is no longer active.");
+      },
+    }),
+
     // ── kernel_agents_call_meeting ─────────────────────
     defineTool({
       name: "kernel_agents_call_meeting",
