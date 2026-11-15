@@ -7,7 +7,7 @@ import type { SqliteDb } from "../../core/db/sqlite.js";
 import { log } from "../../core/logger.js";
 import { audienceOf, readEditionState, writeEditionState, type EditionMode } from "../../core/edition.js";
 import { isPaidExtension } from "./entitlement.js";
-import { planEdition, type EditionRow } from "./edition-plan.js";
+import { hiddenNavGroups, planEdition, type EditionRow } from "./edition-plan.js";
 import type { ExtensionService } from "./service.js";
 import type { ExtensionManifest } from "./types.js";
 
@@ -20,11 +20,41 @@ export interface EditionSummary {
   activated: string[];
   deactivated: string[];
   failed: Array<{ id: string; error: string }>;
+  /** Sidebar groups this edition hides by default (the user can show them again). */
+  hiddenGroups: string[];
 }
 
-export function editionStatus(db: SqliteDb): { mode: EditionMode | null; legacy: boolean; parked: number } {
+export interface EditionStatus {
+  mode: EditionMode | null;
+  legacy: boolean;
+  parked: number;
+  hiddenGroups: string[];
+}
+
+/** Computed live, so an extension installed or toggled later counts at once. */
+export function editionStatus(db: SqliteDb, ext: Pick<ExtensionsPort, "list">): EditionStatus {
   const s = readEditionState(db);
-  return { mode: s.mode, legacy: s.legacy, parked: s.parked.length };
+  return {
+    mode: s.mode,
+    legacy: s.legacy,
+    parked: s.parked.length,
+    hiddenGroups: hiddenNavGroups(s.mode, ext.list().map(toRow)),
+  };
+}
+
+/** Group ids a manifest puts in the sidebar: `nav`, `navGroups` and `navItems` (the last two are not typed on FrontendBlock). */
+function navGroupsOf(manifest: Partial<ExtensionManifest>): string[] {
+  const fe = (manifest.frontend ?? {}) as {
+    nav?: { group?: unknown };
+    navGroups?: Array<{ id?: unknown }>;
+    navItems?: Array<{ group?: unknown }>;
+  };
+  const ids = [
+    fe.nav?.group,
+    ...(Array.isArray(fe.navGroups) ? fe.navGroups.map((g) => g?.id) : []),
+    ...(Array.isArray(fe.navItems) ? fe.navItems.map((i) => i?.group) : []),
+  ];
+  return [...new Set(ids.filter((x): x is string => typeof x === "string" && x.length > 0))];
 }
 
 function toRow(r: ReturnType<ExtensionsPort["list"]>[number]): EditionRow {
@@ -40,6 +70,7 @@ function toRow(r: ReturnType<ExtensionsPort["list"]>[number]): EditionRow {
     audience: audienceOf(manifest),
     paid: isPaidExtension({ slug: r.slug, pricing: manifest.pricing ?? null }),
     requiresActivation: manifest.requires_activation === true,
+    navGroups: navGroupsOf(manifest),
   };
 }
 
@@ -47,11 +78,11 @@ export async function applyEdition(
   db: SqliteDb,
   ext: ExtensionsPort,
   mode: EditionMode,
-  opts: { addOnly?: boolean } = {},
+  // Kept for older clients: the edition never deactivates anything any more.
+  _opts: { addOnly?: boolean } = {},
 ): Promise<EditionSummary> {
   const state = readEditionState(db);
-  const firstApply = !opts.addOnly && state.mode === null && !state.legacy;
-  const plan = planEdition({ mode, firstApply, rows: ext.list().map(toRow), parked: state.parked });
+  const plan = planEdition({ mode, rows: ext.list().map(toRow), parked: state.parked });
 
   const failed: EditionSummary["failed"] = [];
   const deactivated: string[] = [];
@@ -83,5 +114,8 @@ export async function applyEdition(
   writeEditionState(db, { mode, parked });
   log.info(`Edition set to ${mode}: +${activated.length} -${deactivated.length}, ${failed.length} failed`);
 
-  return { mode, legacy: state.legacy, parked: parked.length, activated, deactivated, failed };
+  return {
+    mode, legacy: state.legacy, parked: parked.length, activated, deactivated, failed,
+    hiddenGroups: hiddenNavGroups(mode, ext.list().map(toRow)),
+  };
 }

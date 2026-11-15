@@ -106,11 +106,12 @@ describe('buildNav', () => {
     expect(nav.allViews.map((v) => v.id)).not.toContain('paid');
   });
 
-  it('crea el grupo que un item nombra y no existe, al final y con label legible', () => {
+  it('crea el grupo que un item nombra y no existe, antes de system y con label legible', () => {
     const nav = buildNav({
       navItems: [{ id: 'gym', label: 'Gym', icon: '🏋️', group: 'wellness' }],
     }, base());
-    const g = nav.navGroups.at(-1)!;
+    expect(nav.navGroups.map((g) => g.id)).toEqual(['people', 'wellness', 'system']);
+    const g = nav.navGroups.find((x) => x.id === 'wellness')!;
     expect(g).toMatchObject({ id: 'wellness', label: 'Wellness', icon: '⚙️', order: 500 });
     expect(nav.viewToGroup.gym).toBe('wellness');
   });
@@ -136,6 +137,25 @@ describe('buildNav', () => {
       { id: 'system', label: 'System', icon: '⚙️', views: [] },
     ]);
     expect(nav.navGroups.map((g) => g.id)).toEqual(['system']);
+  });
+
+  it('system queda último aunque un ítem cree un grupo no declarado', () => {
+    // El demo mandaba ítems de Inicio sin el grupo `dashboard`: el grupo
+    // creado al vuelo quedaba después de system y el shell lo fijaba abajo.
+    const nav = buildNav({
+      navGroups: [{ id: 'work', label: 'Work', icon: '💼', order: 200 }],
+      navItems: [
+        { id: 'tasks', label: 'Tasks', icon: '☑', group: 'work' },
+        { id: 'home', label: 'Home', icon: '🏠', group: 'dashboard' },
+      ],
+    }, base());
+    expect(nav.navGroups.map((g) => g.id)).toEqual(['work', 'people', 'dashboard', 'system']);
+  });
+
+  it('system queda último aunque el manifest le dé otro order', () => {
+    const nav = buildNav({ navGroups: [{ id: 'late', label: 'Late', icon: '⏳', order: 100000 }],
+      navItems: [{ id: 'x', label: 'X', icon: 'x', group: 'late' }] }, base());
+    expect(nav.navGroups.at(-1)?.id).toBe('system');
   });
 });
 

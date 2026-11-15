@@ -451,6 +451,15 @@ const SETTING_CATALOG: SettingDef[] = [
     category: "general",
     type: "boolean",
   },
+  {
+    // Read by the dashboard shell only; Settings → General → Menu edits it.
+    // JSON { order, hidden, shown } of group ids; empty is the default sidebar.
+    key: "DASHBOARD_NAV_LAYOUT",
+    label: { en: "Sidebar menus", es: "Menús de la barra lateral" },
+    description: { en: "Which menus show at the top of the sidebar and in what order.", es: "Qué menús aparecen arriba en la barra lateral y en qué orden." },
+    category: "general",
+    type: "string",
+  },
 
   // ── Agent sandboxing ──────────────────────────────────────────────────────
   {

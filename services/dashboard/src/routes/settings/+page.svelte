@@ -32,6 +32,8 @@
   import UpdateProgress from '$lib/components/UpdateProgress.svelte';
   import LicensePanel from '$lib/components/LicensePanel.svelte';
   import EditionCard from '$lib/components/settings/EditionCard.svelte';
+  import NavMenuCard from '$lib/components/settings/NavMenuCard.svelte';
+  import { NAV_LAYOUT_KEY, SHOW_TOOLS_KEY } from '$lib/nav-prefs.js';
   import {
     updateInfo, checking, updating, updateError, updateHint,
     canApplyUpdate, refreshUpdateInfo, applyUpdate, restartKernl, updateNotice,
@@ -250,6 +252,8 @@
   }
 
   // ── Category → section mapping ───────────────
+  // Keys the Menu card owns (NavMenuCard) — hidden from the generic renderer.
+  const NAV_MENU_KEYS = new Set([NAV_LAYOUT_KEY, SHOW_TOOLS_KEY]);
   // Keys the AI connections card owns — hidden from the generic renderer.
   const AI_RICH_KEYS = /^(LMSTUDIO_(BASE_URL|API_KEY)|MINIMAX_)/;
   // Voice settings get their own card, with the live engine status on top.
@@ -280,7 +284,7 @@
     const out: Record<string, GenericCard[]> = {};
 
     out.general = [
-      { id: 'cat-general', title: tr('settings.general.title'), desc: tr('settings.general.desc'), items: by('general') },
+      { id: 'cat-general', title: tr('settings.general.title'), desc: tr('settings.general.desc'), items: by('general').filter((i) => !NAV_MENU_KEYS.has(i.key)) },
       { id: 'cat-life', title: tr('settings.life.title'), desc: tr('settings.life.desc'), items: by('life') },
     ].filter((c) => c.items.length);
 
@@ -471,9 +475,16 @@
   // is never a frozen "just now" from the first render.
   $: checkedLabel = checkedAgo($updateInfo?.checkedAt, $locale);
 
+  // Rich cards that go after the generic ones, so they never become the
+  // section's first tab (General's first tab also carries the edition card).
+  $: richCardsAfter = {
+    general: [{ id: 'nav-menu', title: $t('settings.menu.title') }],
+  } as Record<string, Array<{ id: string; title: string }>>;
+
   $: cardTabs = [
     ...(richCards[activeSection] ?? []),
     ...(cardsBySection[activeSection] ?? []).map((c) => ({ id: c.id, title: c.title })),
+    ...(richCardsAfter[activeSection] ?? []),
   ];
   let activeCard = '';
   // Switching section, or landing on one whose first card changed, must not
@@ -694,6 +705,11 @@
         <!-- ═══ Edition (first card of General only, so it doesn't repeat per tab) ═══ -->
         {#if activeSection === 'general' && activeCard === cardTabs[0]?.id}
           <EditionCard />
+        {/if}
+
+        <!-- ═══ Sidebar menus ═══ -->
+        {#if activeSection === 'general' && activeCard === 'nav-menu'}
+          <NavMenuCard layoutValue={original[NAV_LAYOUT_KEY] ?? ''} showToolsValue={original[SHOW_TOOLS_KEY] ?? ''} />
         {/if}
 
         <!-- ═══ License ═══ -->

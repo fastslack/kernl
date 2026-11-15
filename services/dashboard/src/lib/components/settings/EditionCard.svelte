@@ -19,9 +19,10 @@
     busy = true; error = ''; message = ''; needsRestart = false;
     try {
       const s = await setEdition(mode, { addOnly: true });
-      status = { mode: s.mode, legacy: s.legacy, parked: s.parked };
+      status = { mode: s.mode, legacy: s.legacy, parked: s.parked, hiddenGroups: s.hiddenGroups };
       message = $t('edition.switched', { n: s.activated.length });
       needsRestart = s.activated.length > 0;
+      window.dispatchEvent(new CustomEvent('edition:changed'));
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
