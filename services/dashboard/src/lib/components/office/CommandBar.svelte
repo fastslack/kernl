@@ -64,16 +64,16 @@
 		<span class="bar-sep" aria-hidden="true"></span>
 
 		<button class="k-btn k-btn--ghost" type="button" title={$t('office.bar.meeting')} on:click={() => dispatch('meeting')}>
-			<Icon name="users" /><span class="bar-l">{$t('office.bar.meeting')}</span><kbd class="k-kbd">R</kbd>
+			<Icon name="users" /><span class="cb-label">{$t('office.bar.meeting')}</span><kbd class="k-kbd">R</kbd>
 		</button>
 
 		<button class="k-btn k-btn--ghost" type="button" title={$t('office.bar.activity')} on:click={() => dispatch('activity')}>
-			<Icon name="activity" /><span class="bar-l">{$t('office.bar.activity')}</span>
+			<Icon name="activity" /><span class="cb-label">{$t('office.bar.activity')}</span>
 		</button>
 
 		<div class="bar-menu">
 			<button class="k-btn k-btn--ghost" type="button" aria-haspopup="menu" aria-expanded={openMenu === 'view'} title={$t('office.bar.view')} on:click|stopPropagation={() => toggleMenu('view')}>
-				<Icon name="eye" /><span class="bar-l">{$t('office.bar.view')}</span><Icon name="chev-d" size={14} />
+				<Icon name="eye" /><span class="cb-label">{$t('office.bar.view')}</span><Icon name="chev-d" size={14} />
 			</button>
 			{#if openMenu === 'view'}
 				<div class="bar-pop bar-pop--right" role="menu">
@@ -106,7 +106,7 @@
 
 		<span class="bar-sep" aria-hidden="true"></span>
 		<button class="k-btn bar-new" type="button" title={$t('office.bar.new_office')} on:click={() => dispatch('newoffice')}>
-			<Icon name="plus" /><span class="bar-l bar-l--keep">{$t('office.bar.new_office')}</span><kbd class="k-kbd bar-new-kbd">N</kbd>
+			<Icon name="plus" /><span class="cb-label cb-label--keep">{$t('office.bar.new_office')}</span><kbd class="k-kbd bar-new-kbd">N</kbd>
 		</button>
 	</div>
 </header>
@@ -124,10 +124,10 @@
 	.bar-title { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 	.bar-actions { margin-left: auto; display: flex; flex: none; align-items: center; gap: 4px; }
 	@container bar (max-width: 1520px) {
-		.bar-l:not(.bar-l--keep), .bar-actions :global(kbd) { display: none; }
+		.cb-label:not(.cb-label--keep), .bar-actions :global(kbd) { display: none; }
 	}
 	@container bar (max-width: 900px) {
-		.bar-l--keep { display: none; }
+		.cb-label--keep { display: none; }
 		.bar-sep { margin: 0 2px; }
 	}
 	.bar-inbox { position: relative; }
