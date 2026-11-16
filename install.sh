@@ -110,8 +110,16 @@ TMP="$(mktemp -d)"
 # shellcheck disable=SC2064
 trap "rm -rf '$TMP'" EXIT INT TERM
 
+# Through lifekernl.com/download/<tag>/<file>, which counts the download and
+# redirects to this same file on GitHub. Should the site be unreachable, the
+# GitHub URL is tried directly: counting must never cost anyone an install.
+# A fork skips it and goes straight to its own releases.
+COUNTED=""
+[ "$REPO" = "fastslack/kernl" ] && COUNTED="https://lifekernl.com/download/$TAG/$ASSET?ref=install-github"
+
 say "Downloading $ASSET"
-curl -fsSL -o "$TMP/$ASSET" "$URL" \
+{ [ -n "$COUNTED" ] && curl -fsSL -o "$TMP/$ASSET" "$COUNTED"; } \
+  || curl -fsSL -o "$TMP/$ASSET" "$URL" \
   || die "could not download $ASSET.
     The release may not carry a build for this platform:
     https://github.com/$REPO/releases/tag/$TAG"
