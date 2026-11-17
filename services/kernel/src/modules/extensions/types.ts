@@ -116,6 +116,11 @@ export interface FrontendBlock {
     entry: string;
     kinds: Array<{ id: string; offGrid?: boolean; labels?: Record<string, string> }>;
   }>;
+  /**
+   * Renderers for this extension's tools in the agent run views (LIVE, HISTORY): the bundle's `export` (default
+   * "mountTool") draws a call and its result (contract in assets/extensions/_shared/tool-renderer.ts).
+   */
+  toolRenderers?: Array<{ tools: string[]; entry: string; export?: string }>;
 }
 
 export interface ThemeBlock {

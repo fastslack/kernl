@@ -29,6 +29,8 @@
   import ToolName from '$lib/components/agent/ToolName.svelte';
   import { liveEventDetail } from '$lib/live-event-detail.js';
   import LiveEventDetail from './LiveEventDetail.svelte';
+  import ExtToolRender from '$lib/components/agent/ExtToolRender.svelte';
+  import { extToolRenderers, rendererFor, parseToolInput } from '$lib/tool-renderers.js';
 
   /** Name of the selected agent, for the hero header. */
   export let agentName = '';
@@ -286,6 +288,17 @@
             {@const _cid = emailCommId(e.data.tool_name, String(e.data.content_preview ?? e.data.result ?? ''))}
             {#if _cid}
               <button class="email-view-link" on:click|stopPropagation={() => onOpenEmail(_cid)} title="Ver el email enviado (de/para/asunto/cuerpo)">📧 Ver email</button>
+            {/if}
+          {/if}
+          {#if etype === 'tool_call' && e.data.tool_name}
+            <!-- A tool an extension draws itself (lib/tool-renderers.ts): shown open, the call and then its result. -->
+            {@const _rinfo = rendererFor(String(e.data.tool_name), $extToolRenderers)}
+            {#if _rinfo}
+              <ExtToolRender info={_rinfo} input={{
+                tool_name: String(e.data.tool_name), phase: res ? 'result' : 'call',
+                input: parseToolInput(e.data.content_preview), text: res ? String(res.e.data.content_preview ?? '') : '',
+                is_error: resBad, surface: 'live',
+              }} />
             {/if}
           {/if}
           {#if detail && isOpen}
