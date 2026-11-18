@@ -155,6 +155,16 @@ describe("connect routes", () => {
     expect(ok.status).toBe(200);
     expect(chain).toEqual([{ provider: "grok", model: "grok-4.3" }]);
   });
+
+  it("PUT /api/llm/chain keeps several models of one provider, and one copy of each", async () => {
+    const links = [
+      { provider: "nvidia", model: "a" }, { provider: "nvidia", model: "b" },
+      { provider: "nvidia", model: "a" }, { provider: "nim", model: " b " },
+    ];
+    const r = await fetch(`${base}/api/llm/chain`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ links }) });
+    expect(r.status).toBe(200);
+    expect(chain).toEqual([{ provider: "nvidia", model: "a" }, { provider: "nvidia", model: "b" }]);
+  });
 });
 
 describe("detectLocalServer", () => {

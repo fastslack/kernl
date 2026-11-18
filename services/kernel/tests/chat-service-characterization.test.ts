@@ -143,6 +143,21 @@ describe("ChatService.chat — prompt + fallback chain", () => {
     expect(calls.map((c) => c.name)).toEqual(["p1"]);
   });
 
+  it("another model of the same provider is a link of its own; a repeat or a bare provider is not", async () => {
+    const calls: Call[] = [];
+    let n = 0;
+    const { svc } = makeService("en", {
+      p1: fakeProvider("p1", calls, async () => { if (n++ === 0) throw new Error("p1 API error 503: busy"); return { content: "from m9", model: "m9", tokens_used: 1 }; }),
+    });
+    (svc as unknown as { config: KernelConfig }).config.agents.defaultModelChain = [
+      { provider: "p1", model: "m1" }, { provider: "p1", model: "" }, { provider: "p1", model: "m9" }, { provider: "p1", model: "m9" },
+    ];
+    const ep = svc.createEpisode({ provider: "p1", model: "m1" });
+    const r = await svc.chat(ep.id, "x", { skipExtraction: true });
+    expect(calls.map((c) => c.opts?.model)).toEqual(["m1", "m9"]);
+    expect(r.message.content).toBe("from m9");
+  });
+
   it("a 400 that is not a schema error still falls through", async () => {
     const calls: Call[] = [];
     const { svc } = makeService("en", {

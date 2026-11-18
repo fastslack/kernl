@@ -102,6 +102,8 @@ export interface ConnectionLine {
   extra: boolean;
   /** 2+ accounts: the primary row shows its chip and the account menu. */
   multi: boolean;
+  /** A backup model of this provider: another link of it further down the chain. */
+  backup?: { model: string; index: number; n: number };
 }
 
 /**

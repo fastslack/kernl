@@ -1412,13 +1412,20 @@ export class ChatService {
   ): Promise<{ content: string; tokens_used: number; tool_calls?: import("./types.js").ToolUseBlock[] }> {
     type Link = { provider: ChatLlmProvider; model: string; label: string };
     const links: Link[] = [{ provider: primary.provider, model: primary.model, label: primary.provider.name }];
-    const seen = new Set<string>([primary.provider.name]);
+    // A provider may sit in the chain more than once with different models
+    // (NVIDIA's model A, then its model B). A link adds nothing when its
+    // provider is already there and it names no model, or one already tried.
+    const models = new Map<string, Set<string>>([[primary.provider.name, new Set([primary.model])]]);
     for (const f of chain) {
       const p = this.providers.get(f.provider);
-      if (!p || seen.has(p.name)) continue;
+      if (!p) continue;
+      const tried = models.get(p.name);
+      const model = f.model || "";
+      if (tried && (!model || tried.has(model))) continue;
       if (!p.available()) continue;
-      seen.add(p.name);
-      links.push({ provider: p, model: f.model || "", label: p.name });
+      if (tried) tried.add(model);
+      else models.set(p.name, new Set([model]));
+      links.push({ provider: p, model, label: tried ? `${p.name}/${model}` : p.name });
     }
 
     const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err));

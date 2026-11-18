@@ -11,8 +11,9 @@
   import ClaudeSignIn from './ClaudeSignIn.svelte';
   import EmbeddingsNote from './EmbeddingsNote.svelte';
   import {
-    addClaudeAccount, chainSummary, connectionRows, disconnectProvider, errorView, fetchCatalog, fetchClaudeAccounts,
-    moveLink, removeClaudeAccount, saveChain, testProvider, timeAgo, updateClaudeAccount,
+    addClaudeAccount, addModelLink, chainSummary, connectionRows, disconnectProvider, errorView, fetchCatalog, fetchClaudeAccounts,
+    fetchLiveModels, moveLink, removeClaudeAccount, removeLinkAt, saveChain, testProvider, timeAgo, updateClaudeAccount,
+    withBackupModels,
     type CatalogResponse, type ChainLink, type ClaudeLoginStatus,
   } from '$lib/llm-connect.js';
   import {
@@ -34,6 +35,17 @@
   let dialogSlug = '';
   let draftChain: ChainLink[] = [];
   let chainSaving = false;
+
+  // Backup models within one provider: "+ Modelo" on its row adds another of
+  // its models to the chain, right after the ones it already has.
+  let modelDialog: HTMLDialogElement;
+  let modelSlug = '';
+  let modelOptions: string[] = [];
+  let modelPick = '';
+  let modelLoading = false;
+  let modelError = '';
+  let modelSaving = false;
+  let backupBusy = -1;
 
   // Claude Code accounts: extra rows of the list. `accountsSupported` stays false on a kernel without the
   // routes (404), which keeps today's single row and hides "Otra cuenta de Claude Code".
@@ -58,7 +70,7 @@
 
   $: providers = catalog?.providers ?? [];
   $: claudeConnected = isClaudeConnected(providers);
-  $: rows = withClaudeAccounts(connectionRows(providers, catalog?.chain ?? []), accounts);
+  $: rows = withBackupModels(withClaudeAccounts(connectionRows(providers, catalog?.chain ?? []), accounts), catalog?.chain ?? []);
   $: canAddAccount = accountsSupported && claudeConnected;
   $: signInAccount = accounts.find((a) => a.id === signInId) ?? null;
   $: summary = chainSummary(catalog?.chain ?? [], providers);
@@ -254,6 +266,51 @@
 
   const nameOf = (slug: string) => providers.find((p) => p.slug === slug)?.name ?? slug;
 
+  /** Models of `slug` the chain does not use yet: its main row's and its backups' are left out. */
+  function unusedModels(slug: string, all: string[]): string[] {
+    const p = providers.find((x) => x.slug === slug);
+    const used = new Set((catalog?.chain ?? []).filter((l) => l.provider === slug).map((l) => l.model || p?.model || ''));
+    return all.filter((m) => !used.has(m));
+  }
+
+  async function openAddModel(slug: string): Promise<void> {
+    modelSlug = slug;
+    modelOptions = [];
+    modelPick = '';
+    modelError = '';
+    modelLoading = true;
+    modelDialog.showModal();
+    try {
+      modelOptions = unusedModels(slug, await fetchLiveModels(slug));
+      modelPick = modelOptions[0] ?? '';
+    } catch (e) {
+      modelError = e instanceof Error ? e.message : String(e);
+    } finally {
+      modelLoading = false;
+    }
+  }
+
+  async function saveAddModel(): Promise<void> {
+    if (!modelPick || modelSaving) return;
+    modelSaving = true;
+    modelError = '';
+    try {
+      const current = providers.find((p) => p.slug === modelSlug)?.model ?? '';
+      await saveChain(addModelLink(catalog?.chain ?? [], modelSlug, modelPick, current));
+      modelDialog.close();
+      await load();
+    } catch (e) {
+      modelError = e instanceof Error ? e.message : String(e);
+    } finally {
+      modelSaving = false;
+    }
+  }
+
+  async function removeBackup(index: number): Promise<void> {
+    backupBusy = index;
+    try { await saveChain(removeLinkAt(catalog?.chain ?? [], index)); } finally { backupBusy = -1; await load(); }
+  }
+
   onMount(async () => {
     // Before the first await, so a view destroyed meanwhile still clears it.
     timer = setInterval(() => void refreshAccounts(isClaudeConnected(catalog?.providers ?? [])), POLL_MS);
@@ -278,7 +335,7 @@
           <strong>{summary.primary.name}</strong><span class="ai-model">{summary.primary.model}</span>
           <span class="ai-k">→ {$t('llm.fallback_to')}</span>
           {#if summary.fallbacks.length}
-            {#each summary.fallbacks as f, i (f.slug + i)}<span class="ai-fb">{f.name}</span>{/each}
+            {#each summary.fallbacks as f, i (f.slug + i)}<span class="ai-fb">{f.name}{#if f.model} <span class="ai-fb-model">{f.model}</span>{/if}</span>{/each}
           {:else}<span class="ai-muted">{$t('llm.no_fallback')}</span>{/if}
         {:else}
           <span class="ai-muted">{$t('llm.none_yet')}</span>
@@ -341,6 +398,7 @@
                     <span class="ai-name-row">
                       <span class="ai-name-t" title={lineName(l)}>{lineName(l)}</span>
                       {#if l.multi && !l.extra}<span class="ai-chip" title={$t('llm.acc.primary_hint')}>{$t('llm.acc.primary')}</span>{/if}
+                      {#if l.backup}<span class="ai-chip backup">{$t('llm.backup_chip', { n: l.backup.n })}</span>{/if}
                     </span>
                     <!-- Which subscription this row is: the email is what tells two accounts apart. -->
                     {#if a}
@@ -349,11 +407,13 @@
                     {/if}
                   </span>
                   <span class="ai-modelcol">
-                    {#if !l.extra}<span class="ai-model">{r.model || '—'}</span>{/if}
+                    {#if !l.extra}<span class="ai-model">{r.model || '—'}</span>
+                    {:else if l.backup}<span class="ai-model" title={l.backup.model}>{l.backup.model}</span>{/if}
                   </span>
                   <span class="ai-meta" class:ai-state={showState} class:limited={st?.kind === 'limited'} class:down={st?.kind === 'down'}
                         role="status" aria-live="polite">
-                    {#if showState && a}{stateText(a, now)}
+                    {#if l.backup}{$t('llm.backup_meta')}
+                    {:else if showState && a}{stateText(a, now)}
                     {:else if testing[r.slug]}{$t('llm.state.testing')}
                     {:else if last}
                       {$t('llm.tested', { ago: $t(timeAgo(last.at).key, { n: timeAgo(last.at).n }) })}
@@ -361,7 +421,10 @@
                     {:else}{$t('llm.never_tested')}{/if}
                   </span>
                   <span class="ai-row-actions" data-acc-menu>
-                    {#if a && confirmAccount === a.id}
+                    {#if l.backup}
+                      {@const bi = l.backup.index}
+                      <button type="button" class="ai-btn ghost" disabled={backupBusy === bi} on:click={() => removeBackup(bi)}>{$t('llm.remove')}</button>
+                    {:else if a && confirmAccount === a.id}
                       <span class="ai-confirm">{$t('llm.acc.remove_confirm', { name: accName(a, l.index) })}</span>
                       <button type="button" class="ai-btn ghost" on:click={() => (confirmAccount = '')}>{$t('llm.cancel')}</button>
                       <button type="button" class="ai-btn danger" disabled={accBusy}
@@ -377,6 +440,10 @@
                       {#if !l.extra}
                         <button type="button" class="ai-btn ghost" disabled={testing[r.slug]} on:click={() => test(r.slug)}>{$t('llm.test')}</button>
                         <button type="button" class="ai-btn ghost" on:click={() => openConnect(r.slug)}>{$t('llm.edit')}</button>
+                        {#if r.slug !== 'claude-code'}
+                          <button type="button" class="ai-btn ghost" title={$t('llm.add_model_hint')}
+                                  aria-label={$t('llm.add_model_title', { name: r.name })} on:click={() => openAddModel(r.slug)}>+ {$t('llm.add_model')}</button>
+                        {/if}
                       {/if}
                       {#if a && l.multi}
                         <button type="button" class="ai-more" aria-haspopup="menu" aria-expanded={menuFor === a.id}
@@ -464,6 +531,30 @@
   </footer>
 </dialog>
 
+<dialog class="ai-dialog narrow" bind:this={modelDialog} aria-labelledby="ai-model-title">
+  <header class="ai-dialog-head">
+    <h2 id="ai-model-title">{$t('llm.add_model_title', { name: nameOf(modelSlug) })}</h2>
+  </header>
+  <p class="ai-muted">{$t('llm.add_model_hint')}</p>
+  {#if modelLoading}
+    <p class="ai-muted">{$t('llm.loading_models')}</p>
+  {:else if modelOptions.length}
+    <label class="ai-field">
+      <span class="ai-k">{$t('llm.model_label')}</span>
+      <select class="ai-input" bind:value={modelPick}>
+        {#each modelOptions as m (m)}<option value={m}>{m}</option>{/each}
+      </select>
+    </label>
+  {:else if !modelError}
+    <p class="ai-muted">{$t('llm.no_more_models')}</p>
+  {/if}
+  {#if modelError}<p class="ai-error" role="alert">{modelError}</p>{/if}
+  <footer class="ai-row-actions end">
+    <button type="button" class="ai-btn ghost" on:click={() => modelDialog.close()}>{$t('llm.cancel')}</button>
+    <button type="button" class="ai-btn primary" disabled={!modelPick || modelSaving || modelLoading} on:click={saveAddModel}>{$t('llm.add')}</button>
+  </footer>
+</dialog>
+
 <style>
   .ai { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
   .ai-strip {
@@ -474,7 +565,10 @@
   .ai-strip-actions { display: flex; gap: 8px; }
   .ai-k { font-size: 12px; color: var(--text-2); }
   .ai-model { font-family: var(--font-mono); font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ai-fb { padding: 2px 8px; border-radius: 999px; background: var(--surface-3); font-size: 12px; }
+  .ai-fb { padding: 2px 8px; border-radius: 999px; background: var(--surface-3); font-size: 12px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ai-fb-model { margin-left: 6px; font-family: var(--font-mono); font-size: 11px; color: var(--text-2); }
+  .ai-chip.backup { color: var(--teal); border-color: color-mix(in srgb, var(--teal) 55%, transparent); background: color-mix(in srgb, var(--teal) 10%, transparent); }
+  .ai-field { display: grid; gap: 6px; margin-top: 12px; }
   .ai-muted { margin: 0; font-size: 13px; color: var(--text-2); }
   .ai-error { margin: 0; color: var(--red); }
   .ai-notice { margin: 0; padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid color-mix(in srgb, var(--orange) 40%, var(--border)); color: var(--orange); font-size: 13px; }
