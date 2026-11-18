@@ -12,7 +12,7 @@
  */
 
 import { mkdirSync, writeFileSync, unlinkSync, chmodSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { dirname, resolve, join } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { log } from "../../logger.js";
@@ -29,7 +29,15 @@ import type {
 } from "../driver.js";
 import { SANDBOX_TRANSCRIPTS_PATH, sandboxTranscriptLines } from "../driver.js";
 
-const WRAPPER_DIR = "/app/data/.claude-wrappers";
+/**
+ * Where the per-run scripts and session copies go: beside the kernel's
+ * database. That is /app/data in the image, the data dir of a deb, rpm or
+ * desktop install. It was fixed to /app/data, so on an install that does not
+ * run in a container every sandboxed run failed at once with EACCES on /app.
+ */
+export function wrapperDir(env: NodeJS.ProcessEnv = process.env): string {
+  return resolve(dirname(env.SQLITE_PATH || resolve("data", "kernel.db")), ".claude-wrappers");
+}
 
 interface DockerDriverConfig {
   defaultImage: string;
@@ -164,6 +172,7 @@ export class DockerSandboxDriver implements SandboxDriver {
   }
 
   async prepareRun(opts: SandboxRunOptions): Promise<SandboxHandle> {
+    const WRAPPER_DIR = wrapperDir();
     mkdirSync(WRAPPER_DIR, { recursive: true });
 
     const image = opts.image ?? this.cfg.defaultImage;
