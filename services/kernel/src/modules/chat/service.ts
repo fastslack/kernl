@@ -980,6 +980,32 @@ export class ChatService {
     };
   }
 
+  /**
+   * `chatStream` for a provider with no SDK loop. The 3D channel let the top
+   * agent run on any connected model but kept sending every turn to the
+   * stream endpoint, which refused anything but claude_code: each turn on
+   * NVIDIA, MiniMax, Gemini… came back as an error. The turn runs through
+   * `chat()` — same storage, tool bridge, fallback chain and attachments as
+   * /chat — and its result is replayed as stream events.
+   *
+   * A warmup only primes the claude_code subprocess; here it would store a
+   * throwaway turn and spend a real call, so it does nothing.
+   */
+  private async chatStreamViaSync(
+    episodeId: string,
+    userMessage: string,
+    sink: ChatStreamSink,
+    options: { signal?: AbortSignal; warmup?: boolean; attachmentIds?: string[] },
+  ): Promise<{ message: Message | null; tokens_used: number }> {
+    if (options.warmup) return { message: null, tokens_used: 0 };
+    const res = await this.chat(episodeId, userMessage, { attachmentIds: options.attachmentIds });
+    if (options.signal?.aborted) return { message: res.message, tokens_used: res.tokens_used };
+    const text = res.message.content ?? "";
+    if (text) sink({ type: "assistant_text", text });
+    sink({ type: "done", final_text: text, tokens_used: res.tokens_used, message_id: res.message.id });
+    return { message: res.message, tokens_used: res.tokens_used };
+  }
+
   // ── Streaming chat (Claude Code SDK loop) ─────────
   /**
    * Streamed chat path used by the dashboard for the full "Claude Code in the
@@ -988,9 +1014,10 @@ export class ChatService {
    * content_blocks) after it, and threads the SDK session id through the
    * episode so tool_use history survives across turns.
    *
-   * Only works when the episode's provider is `claude_code` (or unset and the
-   * default provider is). For any other provider the caller should fall back
-   * to the synchronous `chat()` path.
+   * The live SDK loop exists only for `claude_code`. Every other provider is
+   * answered through the synchronous `chat()` path and replayed into `sink`
+   * (see chatStreamViaSync), so a client that always streams — the 3D
+   * channel does, whatever model it is on — still gets an answer.
    */
   async chatStream(
     episodeId: string,
@@ -1031,9 +1058,7 @@ export class ChatService {
       episode.llm_provider, this.defaultProvider, this.config.agents.defaultModelChain,
     );
     if (providerName !== "claude_code" && providerName !== "claude-code") {
-      throw new Error(
-        `chatStream is only supported for the claude_code provider (episode uses "${providerName}").`,
-      );
+      return this.chatStreamViaSync(episodeId, userMessage, sink, options);
     }
 
     const provider = this.providers.get(providerName) as ChatClaudeCodeProvider | undefined;

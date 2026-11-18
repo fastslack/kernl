@@ -217,3 +217,32 @@ describe("ChatService.chatStream — prompt", () => {
     expect(seenOpts!.model).toBeUndefined();
   });
 });
+
+describe("ChatService.chatStream — providers without an SDK loop", () => {
+  it("answers through chat() and replays the reply as stream events", async () => {
+    const calls: Call[] = [];
+    const { svc } = makeService("en", { nvidia: fakeProvider("nvidia", calls, ok("hola desde nvidia")) });
+    const ep = svc.createEpisode({ provider: "nvidia", model: "minimaxai/minimax-m3.1" });
+    const events: Array<{ type: string; [k: string]: unknown }> = [];
+    const r = await svc.chatStream(ep.id, "hola", (ev) => events.push(ev as never));
+
+    expect(calls[0].name).toBe("nvidia");
+    expect(calls[0].opts?.model).toBe("minimaxai/minimax-m3.1");
+    expect(r.message?.content).toBe("hola desde nvidia");
+    expect(events.map((e) => e.type)).toEqual(["assistant_text", "done"]);
+    expect(events[1]).toMatchObject({ final_text: "hola desde nvidia", message_id: r.message!.id });
+    expect(svc.getMessages(ep.id).map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+
+  it("a warmup spends no call and stores nothing", async () => {
+    const calls: Call[] = [];
+    const { svc } = makeService("en", { nvidia: fakeProvider("nvidia", calls, ok("never")) });
+    const ep = svc.createEpisode({ provider: "nvidia", model: "m" });
+    const events: unknown[] = [];
+    const r = await svc.chatStream(ep.id, "Ping", (ev) => events.push(ev), { warmup: true });
+    expect(r.message).toBeNull();
+    expect(calls).toHaveLength(0);
+    expect(events).toHaveLength(0);
+    expect(svc.getMessages(ep.id)).toHaveLength(0);
+  });
+});
