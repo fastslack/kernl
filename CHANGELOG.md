@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-18
+
 ### Upgrading from 0.5.1
 
 - **Search by meaning runs inside Kernl by default; LM Studio is no longer
@@ -61,6 +63,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   memories written before this release included. A primary whose vectors do
   not fit chat memory's 384-dimension index (OpenAI's 1536) leaves chat memory
   on the in-process model.
+- **A work item can be held or snoozed.** Held until lifted or snoozed until
+  a time, with its reason and owner, through the API or three agent tools;
+  lifting it tells the agent named for it (`HOLD-LIFTED`).
+- **Questions remember the state of their work item.** An office orchestrator
+  reports each item's state (`PUT /api/agents/subjects/state`); when the item
+  moves on, open questions asked in another state are dismissed with the
+  reason, and a late answer is refused (409 superseded) instead of acting on
+  an item that is no longer where the question saw it. Offices that report no
+  states behave as before.
+- **Offices declare the letter types they read.** A letter missing a required
+  field is refused to its sender with an example, and asking an open question
+  again returns the existing one instead of filing it twice.
+- **Agents see what was already tried on their issue.** The system prompt
+  lists the latest finished runs on the same issue or its parts, by any
+  agent, with their outcome (`agents.earlierAttempts = false` turns it off),
+  and each run is linked to its work item in the experience graph.
+- **Questions name the project they are about**, beside the agent, in the
+  card and in the inbox.
+- **Extensions can draw their own tools in the agent run views**
+  (`frontend.toolRenderers`); a renderer that fails leaves the plain text.
+- **The sidebar menus can be ordered and hidden** in Settings → General →
+  Menu. Chat and System stay at the bottom, and choosing Personal or Business
+  only hides menus instead of turning extensions off.
 
 ### Changed
 
@@ -70,6 +95,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallback wrote) instead of staying on the fallback until a restart.
 - **A changed embeddings setting applies without a restart.** Every consumer
   (agents, tool memory, cinema, RSS ranking, brain) follows the new client.
+- **Every office's Questions tab groups questions by how long they have
+  waited**, like the chief's, which now lists the newest first.
+- **Installs download through lifekernl.com**, which counts them and
+  redirects to the same file on GitHub; `install.sh` falls back to GitHub
+  when the site cannot be reached.
+
+### Fixed
+
+- **"Update to vX" in Extensions updates the extension.** It only re-enabled
+  the installed version, hung on "Installing…" and offered the same update
+  again.
+- **Bundles packed on a Mac install on Linux.** macOS's tar added `._` files
+  that failed the integrity check there.
+- **The dashboard's live socket comes back on its own** after an outage,
+  instead of leaving the tab on polling until it was reloaded.
+- **`backup.sh` backs up a packaged install** (desktop app, deb, rpm), not
+  only a source checkout.
+- **The embeddings provider picked in Settings survives a restart.**
+- **`kernel_agents_inbox_ack` takes one id or a list written as text**,
+  instead of failing and leaving the letter unacked.
 
 ## [0.5.1] - 2026-11-13
 

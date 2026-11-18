@@ -7,6 +7,8 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-18
+
 ### Actualizar desde 0.5.1
 
 - **La búsqueda por significado corre dentro de Kernl por defecto; ya no hace
@@ -65,6 +67,31 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
   de esta versión. Si el proveedor principal da vectores que no entran en el
   índice de 384 dimensiones de la memoria del chat (los 1536 de OpenAI), la
   memoria del chat sigue con el modelo local.
+- **Un ítem de trabajo se puede retener o posponer.** Retenido hasta que se
+  libere o pospuesto hasta una hora, con su motivo y responsable, por la API o
+  con tres herramientas de agente; al liberarlo se avisa al agente indicado
+  (`HOLD-LIFTED`).
+- **Las preguntas recuerdan el estado de su ítem.** El orquestador de una
+  oficina informa el estado de cada ítem (`PUT /api/agents/subjects/state`);
+  cuando el ítem avanza, las preguntas abiertas hechas en otro estado se
+  descartan con el motivo, y una respuesta tardía se rechaza (409 superseded)
+  en vez de actuar sobre un ítem que ya no está donde lo vio la pregunta. Las
+  oficinas que no informan estados siguen como antes.
+- **Las oficinas declaran los tipos de carta que leen.** Una carta a la que le
+  falta un campo obligatorio se le devuelve al remitente con un ejemplo, y
+  repetir una pregunta abierta devuelve la que ya existe en vez de duplicarla.
+- **Los agentes ven lo que ya se intentó en su issue.** El prompt de sistema
+  lista las últimas corridas terminadas sobre el mismo issue o sus partes, de
+  cualquier agente, con su resultado (se apaga con
+  `agents.earlierAttempts = false`), y cada corrida queda ligada a su ítem en
+  el grafo de experiencia.
+- **Las preguntas nombran el proyecto del que hablan**, junto al agente, en la
+  tarjeta y en la bandeja.
+- **Las extensiones pueden dibujar sus propias herramientas en las vistas de
+  corridas** (`frontend.toolRenderers`); si el dibujo falla queda el texto.
+- **Los menús de la barra lateral se pueden ordenar y ocultar** en Ajustes →
+  General → Menú. Chat y Sistema quedan abajo, y elegir Personal o Negocio
+  solo oculta menús en vez de apagar extensiones.
 
 ### Cambiado
 
@@ -76,6 +103,26 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 - **Un cambio en los ajustes de embeddings se aplica sin reiniciar.** Todos
   los que los usan (agentes, memoria de herramientas, cine, ranking de RSS,
   brain) pasan al cliente nuevo.
+- **La pestaña Preguntas de cada oficina agrupa por cuánto llevan
+  esperando**, como la del chief, que ahora muestra primero las más nuevas.
+- **Las instalaciones descargan a través de lifekernl.com**, que las cuenta y
+  redirige al mismo archivo en GitHub; `install.sh` vuelve a GitHub si el
+  sitio no responde.
+
+### Corregido
+
+- **"Actualizar a vX" en Extensiones actualiza la extensión.** Solo
+  reactivaba la versión instalada, se quedaba en "Instalando…" y volvía a
+  ofrecer la misma actualización.
+- **Los paquetes armados en una Mac se instalan en Linux.** El tar de macOS
+  agregaba archivos `._` que ahí fallaban la verificación de integridad.
+- **El socket en vivo del dashboard vuelve solo** después de un corte, en vez
+  de dejar la pestaña consultando hasta recargarla.
+- **`backup.sh` respalda una instalación empaquetada** (app de escritorio,
+  deb, rpm), no solo un checkout del código.
+- **El proveedor de embeddings elegido en Ajustes sobrevive a un reinicio.**
+- **`kernel_agents_inbox_ack` acepta un id o una lista escrita como texto**,
+  en vez de fallar y dejar la carta sin confirmar.
 
 ## [0.5.1] - 2026-11-13
 
