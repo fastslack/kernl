@@ -311,7 +311,8 @@ export async function initHttpAndMcp(args: {
       // step, detect local servers, remove a provider, reorder the chain.
       const { registerConnectRoutes } = await import("../llm/connect-routes.js");
       const claudeCodeTransition = await import("../llm/claude-code-transition.js");
-      const { createClaudeLogin } = await import("../llm/claude-code-login.js");
+      const { createClaudeLogin, claudeLoginNeedsCapture } = await import("../llm/claude-code-login.js");
+      const captureLogin = claudeLoginNeedsCapture({ inContainer: existsSync("/.dockerenv") });
       const { findClaudeCli } = await import("../../sdk/claude-cli.js");
       const { resetClaudeCodeSdkCache } = await import("../llm/client.js");
       // The account store feeds the SDK resolver; any change to the list must
@@ -343,9 +344,10 @@ export async function initHttpAndMcp(args: {
         hasClaudeCredential: () => claudeCodeTransition.hasClaudeCodeCredential(),
         claudeCodeTransition: () => claudeCodeTransition.applyClaudeCodeTransition(),
         loginCommand: () => claudeCodeTransition.claudeCodeLoginCommand(),
-        // In a container the CLI has no browser to open, and the host's browser
-        // cannot reach the callback port it listens on: capture the approval
-        // link for the dashboard instead, and take the redirect back by paste.
+        // In a container or on a headless Linux server the CLI has no browser
+        // to open, and the user's browser cannot reach the callback port it
+        // listens on: capture the approval link for the dashboard instead, and
+        // take the redirect back by paste.
         claudeLogin: createClaudeLogin({
           cli: () => findClaudeCli(),
           // The readiness verdict from boot said "no session"; without the
@@ -356,7 +358,7 @@ export async function initHttpAndMcp(args: {
             resetClaudeCodeSdkCache();
             refreshLlmConsumers("Claude Code signed in");
           },
-          captureBrowser: existsSync("/.dockerenv"),
+          captureBrowser: captureLogin,
           duplicateOf: (id) => {
             const other = duplicateOf(id);
             if (!other) return null;
@@ -373,7 +375,9 @@ export async function initHttpAndMcp(args: {
             },
           } : {}),
         }),
-        browserLogin: () => !existsSync("/.dockerenv"),
+        // The dialog follows the same verdict: open the page here, or show the
+        // link and a box for the redirect.
+        browserLogin: () => !captureLogin,
       });
 
       // The chat service and llm() were built before credentials were migrated

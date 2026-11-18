@@ -11,7 +11,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  callbackTarget, createClaudeLogin, parsePastedRedirect,
+  callbackTarget, claudeLoginNeedsCapture, createClaudeLogin, parsePastedRedirect,
 } from "../src/core/llm/claude-code-login.js";
 
 const AUTHORIZE = "https://claude.com/cai/oauth/authorize?code=true&client_id=x"
@@ -56,6 +56,23 @@ describe("callbackTarget", () => {
   it("refuses a link that does not call back to localhost", () => {
     const manual = "https://claude.com/cai/oauth/authorize?redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&state=s";
     expect(callbackTarget(manual)).toBeNull();
+  });
+});
+
+describe("claudeLoginNeedsCapture", () => {
+  it("captures the link in a container, whatever the platform says", () => {
+    expect(claudeLoginNeedsCapture({ inContainer: true, platform: "darwin", env: {} })).toBe(true);
+  });
+  it("captures it on a Linux server with no graphical session", () => {
+    expect(claudeLoginNeedsCapture({ inContainer: false, platform: "linux", env: {} })).toBe(true);
+  });
+  it("lets the CLI open the browser on a Linux desktop", () => {
+    expect(claudeLoginNeedsCapture({ inContainer: false, platform: "linux", env: { DISPLAY: ":0" } })).toBe(false);
+    expect(claudeLoginNeedsCapture({ inContainer: false, platform: "linux", env: { WAYLAND_DISPLAY: "wayland-0" } })).toBe(false);
+  });
+  it("lets the CLI open the browser on macOS and Windows", () => {
+    expect(claudeLoginNeedsCapture({ inContainer: false, platform: "darwin", env: {} })).toBe(false);
+    expect(claudeLoginNeedsCapture({ inContainer: false, platform: "win32", env: {} })).toBe(false);
   });
 });
 

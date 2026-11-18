@@ -56,7 +56,7 @@ export interface ClaudeLoginDeps {
   /** Called once the CLI exits cleanly: re-read the session, reset caches. */
   onSignedIn?: () => void;
   timeoutMs?: number;
-  /** Docker mode: record the approval link instead of opening a browser. */
+  /** No browser here (container, headless Linux): record the approval link instead of opening one. */
   captureBrowser?: boolean;
   /**
    * A fresh dir per sign-in for the shim and the link it writes; a temp dir by
@@ -68,6 +68,21 @@ export interface ClaudeLoginDeps {
   fetchImpl?: typeof fetch;
   /** The other account holding the same identity as `id`, once its sign-in finished. */
   duplicateOf?: (id: string) => { id: string; label: string; email?: string } | null;
+}
+
+/**
+ * Whether the CLI has no browser of its own to open, so the dashboard has to
+ * show the approval link and take the redirect back by paste. True in a
+ * container, and on a Linux machine with no graphical session (a server
+ * running the deb or rpm): there the CLI's open call failed in silence and
+ * the dialog waited for a page that never opened, with no link to follow.
+ */
+export function claudeLoginNeedsCapture(
+  opts: { inContainer: boolean; platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv },
+): boolean {
+  if (opts.inContainer) return true;
+  const env = opts.env ?? process.env;
+  return (opts.platform ?? process.platform) === "linux" && !env.DISPLAY && !env.WAYLAND_DISPLAY;
 }
 
 /** Why a pasted address was refused — each maps to a message in the dialog. */
