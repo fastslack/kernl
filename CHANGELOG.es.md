@@ -124,6 +124,13 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 - **`kernel_agents_inbox_ack` acepta un id o una lista escrita como texto**,
   en vez de fallar y dejar la carta sin confirmar.
 
+### Seguridad
+
+- **Tres dependencias del kernel pasan sus CVE abiertas:** protobufjs 7.6.6
+  (CVE-2026-41242 y cinco más), tar 7.5.23 (CVE-2026-59873 y cuatro más) y
+  proxy-addr 2.0.8 (CVE-2026-90711). El kernel nunca activa `trust proxy`, así
+  que la de proxy-addr no tenía nada que explotar acá.
+
 ## [0.5.1] - 2026-11-13
 
 ### Actualizar desde 0.5.0
