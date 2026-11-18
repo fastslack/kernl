@@ -1,12 +1,16 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
+	import BuildingStats from './BuildingStats.svelte';
+	import type { WorldStats } from '$shared/world-plugin.js';
 	import { t } from '$lib/i18n/index.js';
 
 	export let agents = 0;
 	export let working = 0;
 	export let runsToday = 0;
 	export let inbox = 0;
+	/** Numbers the extension buildings publish (e.g. the Growth Plaza), shown beside the building's. */
+	export let pluginStats: WorldStats[] = [];
 	/** View-menu entries offered by world plugins (extension buildings), e.g. hide a roof. */
 	export let extraItems: Array<{ id: string; label: string }> = [];
 	/** Whether the Message Stream bar at the bottom is shown (toggled from the View menu). */
@@ -17,6 +21,7 @@
 		meeting: void;
 		activity: void;
 		fit: void;
+		focusplugin: { stats: WorldStats };
 		turntable: void;
 		perf: void;
 		stream: void;
@@ -48,11 +53,8 @@
 
 <header class="bar" class:bar--menu-open={openMenu !== null}>
 	<h1 class="bar-title">{$t('office.bar.title')}</h1>
-	<p class="bar-stats">
-		<span><b>{agents}</b> {$t(agents === 1 ? 'office.bar.agent' : 'office.bar.agents')}</span>
-		<span class="bar-working"><b>{working}</b> {$t('office.bar.working')}</span>
-		<span><b>{runsToday}</b> {$t('office.bar.runs_today')}</span>
-	</p>
+	<BuildingStats {agents} {working} {runsToday} plugins={pluginStats}
+		on:fit={() => dispatch('fit')} on:focus={(e) => dispatch('focusplugin', e.detail)} />
 
 	<div class="bar-actions">
 		<button class="k-icon-btn bar-inbox" type="button" aria-label={$t('office.bar.inbox', { n: inbox })} on:click={() => dispatch('inbox')}>
@@ -61,17 +63,17 @@
 		</button>
 		<span class="bar-sep" aria-hidden="true"></span>
 
-		<button class="k-btn k-btn--ghost" type="button" on:click={() => dispatch('meeting')}>
-			<Icon name="users" />{$t('office.bar.meeting')}<kbd class="k-kbd">R</kbd>
+		<button class="k-btn k-btn--ghost" type="button" title={$t('office.bar.meeting')} on:click={() => dispatch('meeting')}>
+			<Icon name="users" /><span class="cb-label">{$t('office.bar.meeting')}</span><kbd class="k-kbd">R</kbd>
 		</button>
 
-		<button class="k-btn k-btn--ghost" type="button" on:click={() => dispatch('activity')}>
-			<Icon name="activity" />{$t('office.bar.activity')}
+		<button class="k-btn k-btn--ghost" type="button" title={$t('office.bar.activity')} on:click={() => dispatch('activity')}>
+			<Icon name="activity" /><span class="cb-label">{$t('office.bar.activity')}</span>
 		</button>
 
 		<div class="bar-menu">
-			<button class="k-btn k-btn--ghost" type="button" aria-haspopup="menu" aria-expanded={openMenu === 'view'} on:click|stopPropagation={() => toggleMenu('view')}>
-				<Icon name="eye" />{$t('office.bar.view')}<Icon name="chev-d" size={14} />
+			<button class="k-btn k-btn--ghost" type="button" aria-haspopup="menu" aria-expanded={openMenu === 'view'} title={$t('office.bar.view')} on:click|stopPropagation={() => toggleMenu('view')}>
+				<Icon name="eye" /><span class="cb-label">{$t('office.bar.view')}</span><Icon name="chev-d" size={14} />
 			</button>
 			{#if openMenu === 'view'}
 				<div class="bar-pop bar-pop--right" role="menu">
@@ -103,24 +105,31 @@
 		</div>
 
 		<span class="bar-sep" aria-hidden="true"></span>
-		<button class="k-btn bar-new" type="button" on:click={() => dispatch('newoffice')}>
-			<Icon name="plus" />{$t('office.bar.new_office')}<kbd class="k-kbd bar-new-kbd">N</kbd>
+		<button class="k-btn bar-new" type="button" title={$t('office.bar.new_office')} on:click={() => dispatch('newoffice')}>
+			<Icon name="plus" /><span class="cb-label cb-label--keep">{$t('office.bar.new_office')}</span><kbd class="k-kbd bar-new-kbd">N</kbd>
 		</button>
 	</div>
 </header>
 
 <style>
+	/* One line: the stats panel shrinks first (its own container queries read this width), then the buttons lose their labels. */
 	.bar {
-		min-height: 64px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 20px; z-index: var(--z-chrome);
+		container: bar / inline-size;
+		min-height: 56px; display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; padding: 10px 16px; z-index: var(--z-chrome);
 		background: color-mix(in srgb, var(--surface-1) 92%, transparent); border-bottom: 1px solid var(--border);
 	}
 	/* The bar is its own stacking context; lift it while a menu is open so the menu paints above the drawer. */
 	.bar--menu-open { z-index: var(--z-modal); }
-	.bar-title { margin: 0; font: 600 18px/1.2 var(--font-display); color: var(--text-1); }
-	.bar-stats { margin: 0; display: flex; gap: 12px; font: 400 12px/1.4 var(--font-body); color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
-	.bar-stats b { color: var(--text-1); font-weight: 500; }
-	.bar-working b { color: var(--green); }
-	.bar-actions { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+	/* The page's heading, for screen readers: the bar has no room to spare for it. */
+	.bar-title { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+	.bar-actions { margin-left: auto; display: flex; flex: none; align-items: center; gap: 4px; }
+	@container bar (max-width: 1520px) {
+		.cb-label:not(.cb-label--keep), .bar-actions :global(kbd) { display: none; }
+	}
+	@container bar (max-width: 900px) {
+		.cb-label--keep { display: none; }
+		.bar-sep { margin: 0 2px; }
+	}
 	.bar-inbox { position: relative; }
 	.bar-badge {
 		position: absolute; top: 2px; right: 1px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
@@ -149,13 +158,12 @@
 	.bar-new:hover { background: var(--gold); border-color: var(--gold); filter: brightness(1.08); }
 	.bar-new-kbd { color: inherit; background: transparent; border-color: currentColor; opacity: .65; }
 	@media (max-width: 700px) {
-		.bar { padding: 12px; gap: 10px; }
+		.bar { padding: 12px; gap: 10px; flex-wrap: wrap; }
 		.bar-actions { width: 100%; margin-left: 0; }
 		.bar-actions :global(.k-btn), .bar-actions :global(.k-icon-btn) { min-height: 40px; }
 		.bar-sep, .bar-actions :global(kbd) { display: none; }
 		.bar-pop { min-width: 210px; }
 	}
 	@media (prefers-reduced-motion: reduce) { .bar-new { transition: none; } }
-	@media (max-width: 1100px) { .bar-stats { display: none; } }
 	.bar-check { margin-left: auto; min-width: 1em; color: var(--teal); font-weight: 700; text-align: right; }
 </style>

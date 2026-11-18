@@ -87,7 +87,7 @@
   function subOf(i: InboxItem): string {
     const r = i.raw;
     if (i.kind === 'approve') return [CHANNEL[r.channel] ?? r.channel, projectName(r.project_id), agentNames[r.agent_id], r.status === 'failed' ? 'falló al enviarse' : age(r.created_at)].filter(Boolean).join(' · ');
-    if (i.kind === 'answer') return [agentNames[r.from_agent_id], flowName(r.flow_id), r.status === 'owed' ? 'dijiste «lo veo yo»' : age(r.created_at)].filter(Boolean).join(' · ');
+    if (i.kind === 'answer') return [agentNames[r.from_agent_id], flowName(r.flow_id), r.project?.name, r.status === 'owed' ? 'dijiste «lo veo yo»' : age(r.created_at)].filter(Boolean).join(' · ');
     if (i.kind === 'task') return [r.due_date ? `${i.urgent ? 'venció' : 'vence'} ${fmt(r.due_date)}` : '', r.tags, age(r.created_at)].filter(Boolean).join(' · ');
     return [i.urgent ? 'vencido' : 'próximo', fmt(r.trigger_at)].join(' · ');
   }

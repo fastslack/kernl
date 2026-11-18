@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync, copyFileSync, rmSync, chmodSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync, copyFileSync, rmSync, chmodSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { SidecarSupervisor, reapOrphan, windowsImageMatches } from "../src/core/sidecars/supervisor.js";
@@ -13,7 +13,7 @@ afterEach(async () => {
 });
 
 function tmp(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "sidecar-test-"));
+  const dir = realpathSync(mkdtempSync(path.join(tmpdir(), "sidecar-test-")));
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

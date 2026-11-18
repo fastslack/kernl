@@ -7,10 +7,10 @@
  * for chat, embeddings get it for free.
  *
  * Order of construction:
- *   1. Start with the explicit `EMBEDDINGS_PROVIDER` (back-compat with the
- *      legacy single-provider config). When set to "lmstudio" or "local",
- *      that becomes the primary and the chain is bypassed entirely — the
- *      user wanted exactly one backend, give them exactly one.
+ *   1. `EMBEDDINGS_PROVIDER`. The default is "local": the in-process model
+ *      (local.ts), on the GPU when that is faster and the CPU otherwise —
+ *      no LM Studio, no key. "lmstudio" pins LM Studio alone. "auto" builds
+ *      the /models chain below.
  *   2. Otherwise build a chain from `config.agents.defaultModelChain`:
  *      - For each entry whose provider has an embeddings API
  *        (openai / nvidia / lmstudio / ollama), materialize a client.
@@ -21,11 +21,10 @@
  *        rest become fallbacks. Fallbacks with incompatible (model, dim)
  *        get filtered out inside `ChainedEmbeddings` so the Neo4j index
  *        never sees mismatched vectors.
- *   3. Append `LocalEmbeddings` (MiniLM, in-process) as the absolute final
- *      fallback ONLY when the resolved primary is also 384d MiniLM —
- *      otherwise local would corrupt a non-MiniLM index, which is worse
- *      than failing the call. Users who want local fallback for a non-
- *      MiniLM primary should set `EMBEDDINGS_PROVIDER=local`.
+ *   3. Append `LocalEmbeddings` as a fallback link ONLY when the resolved
+ *      primary is the same model (the chain never mixes embedding spaces).
+ *      When every link is down at build time, the in-process model is the
+ *      last resort; the embeddings manager re-probes and swaps back.
  *
  * The chain's `.model` and `.dim` always reflect the PRIMARY link — that's
  * what consumers use for Neo4j index naming and reembed bookkeeping.
@@ -36,13 +35,13 @@ import type { KernelConfig } from "../config.js";
 import { getProviderConfig, isConnected } from "../llm/credentials.js";
 import type { EmbeddingsClient } from "./client.js";
 import { LmStudioEmbeddings } from "./lmstudio.js";
-import { LocalEmbeddings } from "./local.js";
+import { sharedLocalEmbeddings } from "./local.js";
 import { OpenAiCompatEmbeddings, type OpenAiCompatOptions } from "./openai-compat.js";
 import { ChainedEmbeddings } from "./chain.js";
 
 export { type EmbeddingsClient, type EmbeddingsProvider, safeIndexSuffix } from "./client.js";
 export { LmStudioEmbeddings } from "./lmstudio.js";
-export { LocalEmbeddings } from "./local.js";
+export { LocalEmbeddings, LOCAL_MODELS, DEFAULT_LOCAL_MODEL, resolveLocalModel, sharedLocalEmbeddings } from "./local.js";
 export { OpenAiCompatEmbeddings } from "./openai-compat.js";
 export { ChainedEmbeddings } from "./chain.js";
 
@@ -188,14 +187,15 @@ function instantiate(link: ResolvedLinkConfig): EmbeddingsClient {
 
 export async function createEmbeddingsClient(config: KernelConfig): Promise<EmbeddingsClient> {
   const cfg = config.embeddings;
+  lastResortClient = null;
 
   // Legacy single-provider escape hatch — preserved so users with an
   // explicit EMBEDDINGS_PROVIDER=local or =lmstudio still get exactly one
   // backend (no surprise chain). The default ("auto") flows through to the
   // chain builder below.
   if (cfg.provider === "local") {
-    const c = new LocalEmbeddings();
-    log.info(`embeddings: local ${c.model} (dim=${c.dim}) [forced]`);
+    const c = sharedLocalEmbeddings();
+    log.info(`embeddings: in-process ${c.model} (dim=${c.dim})`);
     return c;
   }
 
@@ -208,7 +208,7 @@ export async function createEmbeddingsClient(config: KernelConfig): Promise<Embe
     }
     throw new Error(
       `LMStudio embeddings unreachable at ${cfg.baseUrl} or model '${cfg.model}' not loaded. ` +
-      `Switch EMBEDDINGS_PROVIDER to 'auto' to enable /models fallback chain, or 'local' for in-process MiniLM.`,
+      `Switch EMBEDDINGS_PROVIDER to 'auto' to enable /models fallback chain, or 'local' for the in-process model.`,
     );
   }
 
@@ -238,8 +238,8 @@ export async function createEmbeddingsClient(config: KernelConfig): Promise<Embe
   // 3. Auto-discover providers whose keys are present in env even when the
   //    user's /models chain only lists chat-only providers (e.g. claude_code).
   //    Without this, an embeddings-capable NVIDIA / OpenAI key sits idle and
-  //    the chain collapses to the last-resort MiniLM with a 384d index that
-  //    silently re-embeds the whole catalog at the wrong shape.
+  //    the chain collapses to the last-resort in-process model and the cinema
+  //    catalog is re-embedded at another shape.
   //    Order: NVIDIA before OpenAI (NVIDIA's nv-embedqa-e5-v5 has a free tier
   //    and matches the 1024d shape currently in the cinema vector index).
   for (const auto of ["nvidia", "openai"] as const) {
@@ -284,9 +284,10 @@ export async function createEmbeddingsClient(config: KernelConfig): Promise<Embe
     // chain may still try them at embed time, but they probably won't help).
     const fallbacks = builtClients.slice(primaryIdx + 1);
     // Append LocalEmbeddings ONLY when shape-compatible with the primary.
-    // Otherwise it would scribble MiniLM vectors into a non-MiniLM index.
-    if (primary.model === "Xenova/all-MiniLM-L6-v2" && primary.dim === 384) {
-      fallbacks.push(new LocalEmbeddings());
+    // Otherwise it would mix two embedding spaces in one index.
+    const local = sharedLocalEmbeddings();
+    if (primary.model === local.model && primary.dim === local.dim) {
+      fallbacks.push(local);
     }
     if (fallbacks.length === 0) return primary;
     const chained = new ChainedEmbeddings(primary, fallbacks);
@@ -297,14 +298,24 @@ export async function createEmbeddingsClient(config: KernelConfig): Promise<Embe
     return chained;
   }
 
-  // No /models link works → absolute final fallback: in-process MiniLM.
-  // This will produce 384d vectors into a different Neo4j index — the user
-  // is informed via warning so they can fix the upstream.
+  // No /models link works → absolute final fallback: the in-process model.
+  // Rows it embeds carry its model name; when a /models link comes back the
+  // embeddings manager swaps to it and the re-embed queue converts them
+  // (manager.ts, reembed.ts), so nothing stays invisible to search.
+  const fallback = sharedLocalEmbeddings();
   log.warn(
-    `embeddings: every /models embedding link is down. Falling back to local MiniLM (384d). ` +
-    `This will write vectors to a DIFFERENT index than your primary — fix LMStudio / OpenAI / NVIDIA to restore normal search.`,
+    `embeddings: every /models embedding link is down — using the in-process model ${fallback.model} ` +
+    `(dim=${fallback.dim}) until one comes back.`,
   );
-  const fallback = new LocalEmbeddings();
-  log.info(`embeddings: local ${fallback.model} (dim=${fallback.dim}) [last-resort fallback]`);
+  lastResortClient = fallback;
   return fallback;
+}
+
+/** The client the most recent build fell back to, when it did. A local
+ *  instance is shared, so this is about the latest build, not the object. */
+let lastResortClient: EmbeddingsClient | null = null;
+
+/** True when `client` is the auto chain's last resort (every /models link was down at the last build). */
+export function isLastResortClient(client: EmbeddingsClient): boolean {
+  return lastResortClient !== null && client === lastResortClient;
 }

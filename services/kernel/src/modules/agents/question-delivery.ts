@@ -310,7 +310,11 @@ export type HumanChoice =
   | { kind: "dismiss" }
   | { kind: "free"; text: string };
 
-export type ChoiceResult = { ok: true; status: "owed" | "answered" | "dismissed" } | { ok: false; reason: "not_open" | "bad_choice" };
+export type ChoiceResult =
+  | { ok: true; status: "owed" | "answered" | "dismissed" }
+  | { ok: false; reason: "not_open" | "bad_choice" }
+  /** The question's work item moved on since it was asked: dismissed, nothing applied. `detail` says how. */
+  | { ok: false; reason: "superseded"; detail: string };
 
 /**
  * Every operator answer — dashboard, Telegram button, "Q<n> <k>" reply, an
@@ -327,7 +331,11 @@ export function resolveHumanChoice(
 ): ChoiceResult {
   const q = service.getQuestion(id);
   if (!q || (q.status !== "pending" && q.status !== "owed")) return { ok: false, reason: "not_open" };
-  const final = (selected_index: number, selected_option: string, note?: string): ChoiceResult => {
+  // A late "retry the approval" on a question about an MR that had merged since sent its item back to merging.
+  // An answer to a question whose item moved on is refused, and the question leaves the panel.
+  const stale = service.supersedeIfStale(id);
+  if (stale) return { ok: false, reason: "superseded", detail: stale };
+  const final =(selected_index: number, selected_option: string, note?: string): ChoiceResult => {
     // Before the answer is delivered: a stale "keep waiting" letter must not ride along with it.
     if (q.status === "owed") service.markOwedLettersRead(id);
     return answerAndDeliver(service, executor, events, id, { selected_index, selected_option, note, answered_by: "human", source })

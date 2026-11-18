@@ -38,6 +38,14 @@ describe("createRun project gate", () => {
     expect(agents.getRun(run.id)!.project_id).toBe(acme);
   });
 
+  it("names the project a question came from, through its run", () => {
+    const run = agents.createRun({ agent_id: agentId, goal: "x", project_id: acme });
+    expect(agents.projectOfRun(run.id)).toEqual({ id: acme, name: "Acme" });
+    const bare = agents.createRun({ agent_id: agentId, goal: "x" });
+    expect(agents.projectOfRun(bare.id)).toBeNull();
+    expect(agents.projectOfRun("")).toBeNull();
+  });
+
   it("refuses a project not assigned to the agent's office", () => {
     expect(() => agents.createRun({ agent_id: agentId, goal: "x", project_id: kernl }))
       .toThrow(/kernl is not assigned to office Ventas/);

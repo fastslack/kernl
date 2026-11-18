@@ -56,7 +56,7 @@
   import { applyWorldTexture, scaleUV } from './office3d/textures.js';
   import { extWorlds, loadWorldPlugin, worldForKind } from '$lib/world-plugins.js';
   import { takesNoLot } from '$shared/office-lots.js';
-  import type { OffGridSite, WorldHit, WorldHost, WorldPlugin, WorldPluginInstance, WorldViewItem } from '$shared/world-plugin.js';
+  import type { OffGridSite, WorldHit, WorldHost, WorldPlugin, WorldPluginInstance, WorldStats as PluginStats, WorldViewItem } from '$shared/world-plugin.js';
   import { createConstructionDirector } from './office3d/construction/director.js';
   import { createConstructionStage, type ConstructionStage } from './office3d/construction/stage.js';
   import { createDemolitionDirector } from './office3d/construction/demolition.js';
@@ -308,6 +308,15 @@
   let worldOverlayRoot: HTMLElement;
   /** Window commands a plugin registered, to remove them when it unmounts. */
   const worldCommands = new Map<string, string[]>();
+  /** Headline numbers each plugin building publishes for the page's header bar, by kind. */
+  const worldStats = new Map<string, PluginStats>();
+  let worldStatsQueued = false;
+  /** Tell the page the plugins' numbers changed (once per microtask: a rebuild unmounts and remounts in one go). */
+  function queueWorldStats(): void {
+    if (worldStatsQueued) return;
+    worldStatsQueued = true;
+    queueMicrotask(() => { worldStatsQueued = false; dispatch('worldstats', [...worldStats.values()]); });
+  }
   /** Tooltip a plugin asked for under the pointer. */
   let worldTip: { x: number; y: number; text: string } | null = null;
   /** Bumped when a plugin arrives or the manifest's plugin list changes: re-plan and rebuild. */
@@ -826,6 +835,10 @@
       try {
         const inst = plugin.mount({
           host: worldHost(), target: group, site: offGridSites.get(kind) ?? null, overlay: overlay!,
+          publishStats: (stats) => {
+            if (stats) worldStats.set(kind, stats); else worldStats.delete(kind);
+            queueWorldStats();
+          },
           offices: offices.map(o => ({ id: o.id, name: o.name, color: o.color, kind })),
           camera, canvasRect: () => renderer.domElement.getBoundingClientRect(),
         });
@@ -849,6 +862,7 @@
     }
     worldInstances.clear();
     worldCommands.clear();
+    if (worldStats.size) { worldStats.clear(); queueWorldStats(); }
     worldTip = null;
   }
 
@@ -2152,50 +2166,22 @@
   let agentById: Map<string, any> = new Map();
   $: agentById = new Map(agents.map(a => [a.id, a]));
 
+  /** Select an agent from outside the scene (directory, search, toasts). The
+   *  camera stays where the user left it: flying it over framed agents badly
+   *  and took the view away from the user. */
   export function focusAgentById(id: string) {
-    if (!camera || !controls) { selectedAgent = id; return; }
-    const p = deskPos.get(id);
-    if (!p) { selectedAgent = id; return; }
     selectedAgent = id;
-    // Close-up: keep current camera angle, zoom to ~6 units from the desk.
-    const desiredDist = 6;
-    const dx = camera.position.x - controls.target.x;
-    const dy = camera.position.y - controls.target.y;
-    const dz = camera.position.z - controls.target.z;
-    const len = Math.hypot(dx, dy, dz) || 1;
-    const ux = dx / len, uy = dy / len, uz = dz / len;
-    const camX = p.x + ux * desiredDist;
-    const camY = Math.max(1.6, p.y + uy * desiredDist + 1.2);
-    const camZ = p.z + uz * desiredDist;
-    tweenCameraTo(p.x, 1.2, p.z, camX, camY, camZ);
-  }
-
-  /** Fly the camera to a world point keeping the current viewing angle, WITHOUT
-   *  selecting an agent (so it doesn't pop the agent detail panel). Mirrors the
-   *  framing math in focusAgentById. */
-  function flyCameraToPoint(p: { x: number; y: number; z: number } | null) {
-    if (!camera || !controls || !p) return;
-    const desiredDist = 7;
-    const dx = camera.position.x - controls.target.x;
-    const dy = camera.position.y - controls.target.y;
-    const dz = camera.position.z - controls.target.z;
-    const len = Math.hypot(dx, dy, dz) || 1;
-    const camX = p.x + (dx / len) * desiredDist;
-    const camY = Math.max(1.6, p.y + (dy / len) * desiredDist + 1.2);
-    const camZ = p.z + (dz / len) * desiredDist;
-    tweenCameraTo(p.x, 1.2, p.z, camX, camY, camZ);
   }
 
   /** One-click path from the alert pill / red halo to actually handling the
    *  top agent's messages: open My Office on the Questions tab, refresh
-   *  the inbox, and fly the camera to his desk. */
+   *  the inbox. The camera stays where it is. */
   function openTopAgentMessages() {
     selectedAgent = null;
     showMyOfficePanel = true;
     myOfficeTab = 'questions';
     loadOfficeReportsFromApi();
     loadPendingQuestions();
-    flyCameraToPoint(topAgentSeatPos);
   }
 
   /** Recolour the top agent's floor halo to a pulsing RED while they have
@@ -2799,9 +2785,7 @@
         // — swap panels instead of stacking them invisibly.
         showOfficeModal = false;
         selectedAgent = selectedAgent === hoveredAgent ? null : hoveredAgent;
-        // Clicking someone you are already looking at up close only selects them: the camera stays put.
-        // It flies over only from far away, where the agent is a few pixels on screen.
-        if (selectedAgent && agentIsFar(selectedAgent)) focusAgent();
+        // Selecting never moves the camera: it stays where the user left it.
       }
     });
 
@@ -3358,20 +3342,6 @@
       // Fetch failed — don't block the rest of the mount. The user can
       // refrescar manual si quiere reintentar.
     }
-  }
-
-  /** Beyond this camera→agent distance a click on the agent also flies the camera to it (an office fills the screen at ~30-40). */
-  const CLICK_FOCUS_MIN_DISTANCE = 45;
-  function agentIsFar(id: string): boolean {
-    const p = deskPos.get(id);
-    if (!p || !camera) return false;
-    return Math.hypot(camera.position.x - p.x, camera.position.y - 1.2, camera.position.z - p.z) > CLICK_FOCUS_MIN_DISTANCE;
-  }
-
-  function focusAgent() {
-    if (!selectedAgent || !controls) return;
-    const p = deskPos.get(selectedAgent); if (!p) return;
-    tweenCameraTo(p.x, 1.2, p.z, camera.position.x, camera.position.y, camera.position.z);
   }
 
   /**
@@ -5208,7 +5178,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
       officeOf={(id) => flows.find((f) => f.id === agents.find((x) => x.id === id)?.flow_id)?.name ?? ''}
       live={activeCoords[openCoord.roomIdx] === openCoord}
       onClose={() => (openCoord = null)}
-      onGoto={(id) => { openCoord = null; selectedAgent = id; focusAgent(); }}
+      onGoto={(id) => { openCoord = null; selectedAgent = id; }}
       onOutputClick={handleOutputClick}
     />
   {/if}
@@ -5231,9 +5201,8 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     {copy}
     onOutputClick={handleOutputClick}
     selectAgent={(id) => { selectedAgent = id; }}
-    {focusAgent}
     loading={officeLoading || !questionsLoaded}
-    openAgentSettings={(id) => { showMyOfficePanel = false; agentPanel?.showAgentTab(id, 'config'); focusAgent(); }}
+    openAgentSettings={(id) => { showMyOfficePanel = false; agentPanel?.showAgentTab(id, 'config'); }}
     chiefRunning={!!topAgent() && runningAgentIds.has(topAgent()?.id ?? '')}
     openChiefChat={() => { showMyOfficePanel = false; selectedAgent = null; showOfficeModal = true; }}
   />
@@ -5264,7 +5233,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
       <div class="hud-t"><span class="hud-p"></span> WORKING</div>
       {#each [...runningAgentIds] as rid}
         {@const a = agents.find(x => x.id === rid)}
-        {#if a}<div class="hud-i" on:click={() => { selectedAgent = rid; focusAgent(); }} on:keydown role="button" tabindex="0"><span class="hud-d" style="background:{flowColor(rid)}"></span>{a.name}</div>{/if}
+        {#if a}<div class="hud-i" on:click={() => { selectedAgent = rid; }} on:keydown role="button" tabindex="0"><span class="hud-d" style="background:{flowColor(rid)}"></span>{a.name}</div>{/if}
       {/each}
     </div>
   {/if}

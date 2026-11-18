@@ -7,6 +7,122 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-18
+
+### Upgrading from 0.5.1
+
+- **Search by meaning runs inside Kernl by default; LM Studio is no longer
+  needed for it.** The default embeddings provider is now the in-process
+  model `Xenova/paraphrase-multilingual-MiniLM-L12-v2` (384 dimensions, the
+  same weights LM Studio serves as
+  `text-embedding-paraphrase-multilingual-minilm-l12-v2.gguf`). On first start
+  it downloads once (464 MB, into `<data>/data/transformers-cache`), then
+  re-embeds stored learnings, run goals and memory in the background; until a
+  row is done it is still found by its words. To keep the previous behaviour,
+  set `EMBEDDINGS_PROVIDER=auto` (the /models chain) or `lmstudio`.
+
+### Added
+
+- **How each agent's instructions evolved, in the graph.** Every version of an
+  agent's instructions and every improvement cycle are projected into the
+  graph: which version revises which, the cycle that proposed a version, the
+  one it started from, its score before and after, and the failed runs that
+  started it, joined to the runs and lessons already there. The graph explorer
+  shows it; the full text stays in the database.
+- **The in-process embeddings are a first-class provider, chosen in Settings →
+  AI.** A note under the connections names the model, the device it runs on
+  and why, and how many rows are still being re-embedded; its picker switches
+  between "On this computer", "Model chain" and "LM Studio only"
+  (`EMBEDDINGS_PROVIDER` = `local`, `auto`, `lmstudio`). The model is
+  multilingual (most stored memory is Spanish; the old fallback,
+  all-MiniLM-L6-v2, was English-only). `EMBEDDINGS_LOCAL_MODEL` picks
+  `Xenova/multilingual-e5-small` or another ONNX repo, `EMBEDDINGS_LOCAL_DTYPE=q8`
+  a 113 MB model that is faster and slightly less precise.
+- **The device is chosen on its own: GPU when it is faster, CPU otherwise.**
+  Candidates come from the platform and from what the shipped onnxruntime-node
+  carries: CoreML on macOS, DirectML on Windows, CUDA on Linux x64 when its
+  provider library is present. Each is timed once against the CPU and kept
+  only if it wins; the verdict is cached per model and onnxruntime version, a
+  provider that fails to load or to run falls back to the CPU, and the log
+  says which device was picked and why (`embeddings/local: … on CPU — …`).
+  On Apple Silicon the CPU wins: CoreML splits this model into 97 partitions
+  and runs 2.5–5× slower. `EMBEDDINGS_DEVICE` pins one.
+- **Rows embedded by another model are re-embedded in the background.**
+  Searches only compare vectors of the same model, so rows written while
+  another provider served (the fallback during an LM Studio outage, a
+  previous default) were invisible to search by meaning. When the active model
+  changes — a setting, a provider that comes back, a new default — learnings,
+  run goals, agent memory, the brain index and chat memory carrying another
+  model's vectors are embedded again, newest first, and the experience graph
+  picks the new vectors up.
+- **Chat memory and the brain index follow the active model.** Chat memory
+  always embedded with all-MiniLM-L6-v2 whatever /models said, and neither it
+  nor the brain index recorded which model made a vector. Both now record it
+  (`embedding_model` on chat `Memory` nodes, a column on `brain_items`), search
+  only within the active model, and are converted by the re-embed — chat
+  memories written before this release included. A primary whose vectors do
+  not fit chat memory's 384-dimension index (OpenAI's 1536) leaves chat memory
+  on the in-process model.
+- **A work item can be held or snoozed.** Held until lifted or snoozed until
+  a time, with its reason and owner, through the API or three agent tools;
+  lifting it tells the agent named for it (`HOLD-LIFTED`).
+- **Questions remember the state of their work item.** An office orchestrator
+  reports each item's state (`PUT /api/agents/subjects/state`); when the item
+  moves on, open questions asked in another state are dismissed with the
+  reason, and a late answer is refused (409 superseded) instead of acting on
+  an item that is no longer where the question saw it. Offices that report no
+  states behave as before.
+- **Offices declare the letter types they read.** A letter missing a required
+  field is refused to its sender with an example, and asking an open question
+  again returns the existing one instead of filing it twice.
+- **Agents see what was already tried on their issue.** The system prompt
+  lists the latest finished runs on the same issue or its parts, by any
+  agent, with their outcome (`agents.earlierAttempts = false` turns it off),
+  and each run is linked to its work item in the experience graph.
+- **Questions name the project they are about**, beside the agent, in the
+  card and in the inbox.
+- **Extensions can draw their own tools in the agent run views**
+  (`frontend.toolRenderers`); a renderer that fails leaves the plain text.
+- **The sidebar menus can be ordered and hidden** in Settings → General →
+  Menu. Chat and System stay at the bottom, and choosing Personal or Business
+  only hides menus instead of turning extensions off.
+
+### Changed
+
+- **The auto chain notices when a provider comes back.** When every /models
+  embeddings link was down and the in-process model took over, the kernel
+  re-probes every five minutes and switches back (re-embedding what the
+  fallback wrote) instead of staying on the fallback until a restart.
+- **A changed embeddings setting applies without a restart.** Every consumer
+  (agents, tool memory, cinema, RSS ranking, brain) follows the new client.
+- **Every office's Questions tab groups questions by how long they have
+  waited**, like the chief's, which now lists the newest first.
+- **Installs download through lifekernl.com**, which counts them and
+  redirects to the same file on GitHub; `install.sh` falls back to GitHub
+  when the site cannot be reached.
+
+### Fixed
+
+- **"Update to vX" in Extensions updates the extension.** It only re-enabled
+  the installed version, hung on "Installing…" and offered the same update
+  again.
+- **Bundles packed on a Mac install on Linux.** macOS's tar added `._` files
+  that failed the integrity check there.
+- **The dashboard's live socket comes back on its own** after an outage,
+  instead of leaving the tab on polling until it was reloaded.
+- **`backup.sh` backs up a packaged install** (desktop app, deb, rpm), not
+  only a source checkout.
+- **The embeddings provider picked in Settings survives a restart.**
+- **`kernel_agents_inbox_ack` takes one id or a list written as text**,
+  instead of failing and leaving the letter unacked.
+
+### Security
+
+- **Three kernel dependencies move past their open CVEs:** protobufjs 7.6.6
+  (CVE-2026-41242 and five more), tar 7.5.23 (CVE-2026-59873 and four more)
+  and proxy-addr 2.0.8 (CVE-2026-90711). The kernel never sets `trust proxy`,
+  so the proxy-addr one had nothing to exploit here.
+
 ## [0.5.1] - 2026-11-13
 
 ### Upgrading from 0.5.0

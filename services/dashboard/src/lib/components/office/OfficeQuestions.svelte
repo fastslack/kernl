@@ -1,13 +1,13 @@
 <!--
   OfficeQuestions — what this office is waiting on from the operator: its
-  questions in "Te toca" (owed) and still to answer (pending), with the same
-  card and buttons as the chief's office. The list is the panel's (it also
+  open questions grouped by how long they have waited (QuestionAgeGroups),
+  with the same card and buttons as the chief's office. The list is the panel's (it also
   feeds the tab's counter); every write here ends in onChanged so it reloads.
 -->
 <script lang="ts">
 	import { t } from '$lib/i18n/index.js';
 	import { urlForOption } from '$lib/agent-helpers.js';
-	import QuestionList from '../../../routes/agents-flow/QuestionList.svelte';
+	import QuestionAgeGroups from '../../../routes/agents-flow/QuestionAgeGroups.svelte';
 	import type { PendingQuestion } from '../../../routes/agents-flow/world-types.js';
 
 	export let questions: PendingQuestion[] = [];
@@ -16,7 +16,6 @@
 	export let onChanged: () => void = () => {};
 
 	$: owed = questions.filter((q) => q.status === 'owed');
-	$: pending = questions.filter((q) => q.status !== 'owed');
 	const nameOf = (id: string) => agentNames[id] ?? id.slice(0, 8);
 
 	let busy: Record<string, boolean> = {};
@@ -68,25 +67,18 @@
 	<div class="oq-empty">{$t('office.chief.no_questions')}</div>
 {/if}
 
-{#if owed.length > 0}
-	<div class="oq-title">{$t('office.chief.owed_title', { n: String(owed.length) })}</div>
-	<div class="oq-list">
-		<QuestionList questions={owed} open={questions} {nameOf} colorOf={() => color} {busy} {send}
-			onAnswer={answer} onDismiss={dismiss} onFree={free} onTake={take} onDone={done} />
+{#if questions.length > 0}
+	<div class="oq-title">
+		{$t('office.chief.needs_answer', { n: String(questions.length) })}
+		{#if owed.length > 0}<span class="oq-owed">{$t('office.chief.owed_title', { n: String(owed.length) })}</span>{/if}
 	</div>
-{/if}
-
-{#if pending.length > 0}
-	<div class="oq-title">{$t('office.chief.needs_answer', { n: String(pending.length) })}</div>
-	<div class="oq-list">
-		<QuestionList questions={pending} open={questions} {nameOf} colorOf={() => color} {busy} {send}
-			onAnswer={answer} onDismiss={dismiss} onFree={free} onTake={take} onDone={done} />
-	</div>
+	<QuestionAgeGroups {questions} open={questions} {nameOf} colorOf={() => color} {busy} {send}
+		onAnswer={answer} onDismiss={dismiss} onFree={free} onTake={take} onDone={done} />
 {/if}
 
 <style>
 	.oq-empty { padding: 24px 16px; text-align: center; color: #6a6f82; font: 500 12px 'Manrope', sans-serif; }
 	.oq-title { margin: 14px 0 8px; color: #f0b874; font: 700 10px 'JetBrains Mono', monospace; letter-spacing: .08em; text-transform: uppercase; }
 	.oq-title:first-child { margin-top: 0; }
-	.oq-list { display: flex; flex-direction: column; gap: 10px; }
+	.oq-owed { margin-left: 8px; padding: 1px 7px; border: 1px solid rgba(240,184,116,.35); border-radius: 999px; font-size: 9px; }
 </style>

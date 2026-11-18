@@ -25,6 +25,8 @@
   import AgentActionBody from './AgentActionBody.svelte';
   import { agentActionOf } from '$lib/agent-actions.js';
   import StepPayload from './StepPayload.svelte';
+  import ExtToolRender from '$lib/components/agent/ExtToolRender.svelte';
+  import { extToolRenderers, rendererFor, parseToolInput } from '$lib/tool-renderers.js';
   import ToolName from '$lib/components/agent/ToolName.svelte';
 
   /** Lifetime counters for the selected agent, or null while unknown. */
@@ -244,6 +246,13 @@
                                 {#if mail}<button class="email-view-link" on:click|stopPropagation={() => onOpenEmail(mail)}>📧 Ver email</button>{/if}
                               </div>
                               <div class="hs-use-body">
+                                {#if rendererFor(u.fullName, $extToolRenderers)}
+                                  <!-- A tool an extension draws itself (lib/tool-renderers.ts), above the raw payloads. -->
+                                  <ExtToolRender info={rendererFor(u.fullName, $extToolRenderers)} input={{
+                                    tool_name: u.fullName, phase: u.result ? 'result' : 'call', input: parseToolInput(u.call?.tool_input ?? null),
+                                    text: u.result?.tool_output ?? '', is_error: !u.ok, surface: 'history',
+                                  }} />
+                                {/if}
                                 {#if u.call}
                                   <StepPayload detail={historyStepDetail(u.call)} copyText={u.call.tool_input ?? ''} {onOutputClick} />
                                 {/if}

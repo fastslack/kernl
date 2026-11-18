@@ -9,7 +9,7 @@
    * event, the expand state, the delta/token chips and the run totals had no
    * reader anywhere else.
    */
-  import type { AgentFlowEvent } from '$lib/stores.js';
+  import { wsConnected, type AgentFlowEvent } from '$lib/stores.js';
   import CopyTextBtn from '$lib/components/CopyTextBtn.svelte';
   import { fmtClock } from '$lib/display-format.js';
   import { liveStepHtml } from '$lib/step-view.js';
@@ -29,6 +29,8 @@
   import ToolName from '$lib/components/agent/ToolName.svelte';
   import { liveEventDetail } from '$lib/live-event-detail.js';
   import LiveEventDetail from './LiveEventDetail.svelte';
+  import ExtToolRender from '$lib/components/agent/ExtToolRender.svelte';
+  import { extToolRenderers, rendererFor, parseToolInput } from '$lib/tool-renderers.js';
 
   /** Name of the selected agent, for the hero header. */
   export let agentName = '';
@@ -166,8 +168,14 @@
           <span class="live-now-halo"></span>
         </div>
         <div class="live-now-body">
-          <div class="live-now-lbl">warming up</div>
-          <div class="live-now-txt">Agent just started — waiting for the first step…</div>
+          {#if $wsConnected}
+            <div class="live-now-lbl">warming up</div>
+            <div class="live-now-txt">Agent just started — waiting for the first step…</div>
+          {:else}
+            <!-- Steps only arrive over the live socket; without it this would wait forever. -->
+            <div class="live-now-lbl">{$t('live.offline.lbl')}</div>
+            <div class="live-now-txt">{$t('live.offline.txt')}</div>
+          {/if}
         </div>
       </div>
     {/if}
@@ -280,6 +288,17 @@
             {@const _cid = emailCommId(e.data.tool_name, String(e.data.content_preview ?? e.data.result ?? ''))}
             {#if _cid}
               <button class="email-view-link" on:click|stopPropagation={() => onOpenEmail(_cid)} title="Ver el email enviado (de/para/asunto/cuerpo)">📧 Ver email</button>
+            {/if}
+          {/if}
+          {#if etype === 'tool_call' && e.data.tool_name}
+            <!-- A tool an extension draws itself (lib/tool-renderers.ts): shown open, the call and then its result. -->
+            {@const _rinfo = rendererFor(String(e.data.tool_name), $extToolRenderers)}
+            {#if _rinfo}
+              <ExtToolRender info={_rinfo} input={{
+                tool_name: String(e.data.tool_name), phase: res ? 'result' : 'call',
+                input: parseToolInput(e.data.content_preview), text: res ? String(res.e.data.content_preview ?? '') : '',
+                is_error: resBad, surface: 'live',
+              }} />
             {/if}
           {/if}
           {#if detail && isOpen}

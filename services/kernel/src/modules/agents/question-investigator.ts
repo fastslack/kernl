@@ -132,7 +132,6 @@ export function investigatorDefinition(
     variables: {
       __sandbox_driver__: "none",
       __permission_mode__: "dontAsk",
-      __self_improve__: "false",
     } as Record<string, string>,
     model: "",
     model_chain: chain,

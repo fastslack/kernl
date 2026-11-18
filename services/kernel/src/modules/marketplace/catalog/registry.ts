@@ -159,6 +159,26 @@ export class CatalogRegistry {
     if (!item) throw new Error(`Catalog item not found: ${idOrSlug}`);
 
     if (isInstalledStatus(item.status)) {
+      // A newer version in the catalog: this is an update, not a re-enable. The dashboard's "Update to vX" button
+      // lands here, and returning the installed row left it on the old version while the card offered the same
+      // update again.
+      if (item.update_available) {
+        if (item.origin.provider === STORE_PROVIDER_NAME) {
+          if (!this.storeInstaller) throw new Error("Store install path not wired — no license service attached");
+          return this.storeInstaller(item.slug); // installFromStore updates an existing install in place
+        }
+        const remote = this.providers.find(
+          (p): p is RemoteProvider => p.name === item.origin.provider && p instanceof RemoteProvider,
+        );
+        if (remote) {
+          const dl = await remote.downloadBundle(item.slug);
+          try {
+            return (await this.opts.extensionService.update(dl.bundlePath, item.origin.source, { remoteWatermark: dl.watermark })).extension;
+          } finally {
+            await RemoteProvider.cleanupBundle(dl.bundlePath);
+          }
+        }
+      }
       // Already installed — just flip to active.
       const row = item.installed_id
         ? this.opts.extensionService.get(item.installed_id)

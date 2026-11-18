@@ -76,6 +76,8 @@ export interface UpsertItemInput {
   sourceId: string;
   text: string;
   embedding: number[];
+  /** Model that made `embedding`; defaults to the service's client. */
+  embeddingModel?: string;
   sourceUpdatedAt?: string | null;
 }
 
@@ -106,12 +108,13 @@ export class BrainService {
     const buf = floatArrayToBlob(input.embedding);
     this.db
       .prepare(
-        "INSERT INTO brain_items (id, kind, source_table, source_id, text, embedding, weight, source_updated_at, created_at, updated_at, last_seen_at)\n" +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)\n" +
+        "INSERT INTO brain_items (id, kind, source_table, source_id, text, embedding, embedding_model, weight, source_updated_at, created_at, updated_at, last_seen_at)\n" +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)\n" +
           "ON CONFLICT(source_table, source_id) DO UPDATE SET\n" +
           "  kind = excluded.kind,\n" +
           "  text = excluded.text,\n" +
           "  embedding = excluded.embedding,\n" +
+          "  embedding_model = excluded.embedding_model,\n" +
           "  source_updated_at = excluded.source_updated_at,\n" +
           "  updated_at = excluded.updated_at",
       )
@@ -122,6 +125,7 @@ export class BrainService {
         input.sourceId,
         input.text,
         buf,
+        input.embeddingModel ?? this.embeddings.model,
         WEIGHT_BASELINE,
         input.sourceUpdatedAt ?? null,
         now,
@@ -185,11 +189,12 @@ export class BrainService {
     const hybrid = args.hybrid ?? true;
     const cosW = args.cosineWeight ?? 0.7;
     const LEXICAL_RESCUE = 0.5; // include strong lexical matches below the cosine floor
+    const model = this.embeddings.model;
     const queryVec = args.queryVector ?? (await this.embeddings.embed([args.query], { inputType: "query" }))[0];
     const goalKeywords = hybrid ? extractKeywords(args.query) : new Set<string>();
 
     let sql =
-      "SELECT id, kind, source_table, source_id, text, embedding, weight, source_updated_at, created_at, updated_at, last_seen_at FROM brain_items";
+      "SELECT id, kind, source_table, source_id, text, embedding, embedding_model, weight, source_updated_at, created_at, updated_at, last_seen_at FROM brain_items";
     const params: unknown[] = [];
     if (args.kinds && args.kinds.length > 0) {
       sql += ` WHERE kind IN (${args.kinds.map(() => "?").join(",")})`;
@@ -199,13 +204,14 @@ export class BrainService {
 
     const hits: RecallHit[] = [];
     for (const row of rows) {
-      const vec = blobToFloatArray(row.embedding);
-      const sim = cosine(queryVec, vec);
+      // Another model's vector lives in another space: words only, until re-embedded.
+      const sameSpace = !row.embedding_model || row.embedding_model === model;
+      const sim = sameSpace ? cosine(queryVec, blobToFloatArray(row.embedding)) : 0;
       const lex = hybrid && goalKeywords.size > 0 ? scoreRelevance(goalKeywords, row.text) : 0;
       // Gate: clear the semantic floor, or be a strong lexical match.
       if (sim < threshold && lex < LEXICAL_RESCUE) continue;
       const relevance = hybrid ? cosW * sim + (1 - cosW) * lex : sim;
-      const { embedding: _omit, ...item } = row;
+      const { embedding: _omit, embedding_model: _model, ...item } = row;
       hits.push({
         item: item as BrainItem,
         similarity: sim,
@@ -295,6 +301,7 @@ export class BrainService {
 
 interface RawItemRow extends BrainItem {
   embedding: Buffer | Uint8Array;
+  embedding_model: string;
 }
 
 // ── Vector helpers (little-endian Float32, same as tool_memory) ──────

@@ -1,9 +1,9 @@
 /**
  * Edition: whether this Kernl runs as a personal assistant or a business one.
  *
- * The choice decides which free extensions start active and what context the
- * agents get. It never blocks anything — every extension can still be turned
- * on by hand. State lives in `edition_state` (created by the extensions
+ * The choice decides which sidebar menus start hidden and what context the
+ * agents get. It never turns an extension off and never blocks anything — a
+ * hidden menu comes back from Settings → General → Menu. State lives in `edition_state` (created by the extensions
  * module's migrations), not app_settings: ConfigService.set mirrors every key
  * into .env and process.env, which this has no business doing.
  */

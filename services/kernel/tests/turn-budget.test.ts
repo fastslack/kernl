@@ -4,8 +4,8 @@ import { TurnBudgets, letterKind, turnBudget } from "../assets/extensions/agents
 
 describe("letterKind", () => {
   it("is the kind of the first letter a wake names", () => {
-    expect(letterKind('You have 2 unacknowledged letter(s) in your office inbox: "REVISAR-MR web#2720:a-c" (id 1); "JOB-OK qa_controls web#2720" (id 2).')).toBe("REVISAR-MR");
-    expect(letterKind('Inbox wake-up: Host just sent you "CERRAR web#2740" (id 9).')).toBe("CERRAR");
+    expect(letterKind('You have 2 unacknowledged letter(s) in your office inbox: "REVISAR-MR app#2720:a-c" (id 1); "JOB-OK qa_controls app#2720" (id 2).')).toBe("REVISAR-MR");
+    expect(letterKind('Inbox wake-up: Host just sent you "CERRAR app#2740" (id 9).')).toBe("CERRAR");
   });
   it("is null for goals that are not letters", () => {
     expect(letterKind("Ronda del vigía: hay issues nuevos")).toBeNull();

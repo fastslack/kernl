@@ -92,7 +92,7 @@ Once running, try these via Claude or the dashboard:
 | **agents** | AI agents with scheduling, triggers, and learning |
 | **dashboard** | Web UI + life intelligence (weather, AQI, moon, clocks) |
 
-Additional Pro extensions (trading, web-intel, graph-intel, mesh, federation)
+Additional Pro extensions (web-intel, DevOps, Cloudflare and the offices)
 are distributed separately with a [Kernl Pro license](https://lifekernl.com/pricing).
 
 ## Optional Features

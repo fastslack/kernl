@@ -177,6 +177,15 @@ const frontendSchema = z.object({
   pages: z.array(frontendPageSchema).optional(),
   /** 3D world plugins: buildings this extension adds to the office world. */
   worlds: z.array(frontendWorldSchema).max(4).optional(),
+  /** Renderers for this extension's tools in the agent run views (see assets/extensions/_shared/tool-renderer.ts). */
+  toolRenderers: z.array(z.object({
+    /** Tool names it draws, e.g. ["kernel_devops_e2e_run"]. */
+    tools: z.array(z.string().regex(/^[\w.:-]{1,128}$/)).min(1).max(32),
+    /** Bundle path relative to the extension dir, e.g. "frontend/entry.js". */
+    entry: safeRelPathSchema,
+    /** The bundle's export to call (default "mountTool"). */
+    export: z.string().regex(/^[A-Za-z_$][\w$]{0,63}$/).optional(),
+  })).max(4).optional(),
 });
 
 

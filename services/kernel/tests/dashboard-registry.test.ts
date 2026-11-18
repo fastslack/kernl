@@ -244,3 +244,30 @@ describe("extension page bundles: cache key", () => {
     expect(new DashboardRegistry().getManifest(svc).extPages[0].version).toBe("1.2.3");
   });
 });
+
+describe("extension tool renderers", () => {
+  const svcOf = (...rows: Array<{ slug: string; frontend: unknown }>) => ({
+    list: () => rows.map((r) => ({ slug: r.slug, manifest_json: JSON.stringify({ slug: r.slug, version: "2.0.0", frontend: r.frontend }) })),
+  }) as unknown as ExtensionServiceLike;
+
+  it("lists each extension's renderer with its tools, entry relative to frontend/ and the export to call", () => {
+    const m = new DashboardRegistry().getManifest(svcOf({
+      slug: "devops",
+      frontend: { toolRenderers: [{ tools: ["kernel_devops_e2e_run", "kernel_devops_e2e_inspect"], entry: "frontend/entry.js" }] },
+    }));
+    expect(m.extToolRenderers).toEqual([
+      { slug: "devops", entry: "entry.js", version: "2.0.0", export: "mountTool", tools: ["kernel_devops_e2e_run", "kernel_devops_e2e_inspect"] },
+    ]);
+  });
+
+  it("a tool keeps its first renderer, and bad names or exports are dropped", () => {
+    const m = new DashboardRegistry().getManifest(svcOf(
+      { slug: "a", frontend: { toolRenderers: [{ tools: ["t1"], entry: "frontend/a.js", export: "drawIt" }] } },
+      { slug: "b", frontend: { toolRenderers: [{ tools: ["t1", "t2", "bad name"], entry: "b.js", export: "not valid!" }] } },
+    ));
+    expect(m.extToolRenderers).toEqual([
+      { slug: "a", entry: "a.js", version: "2.0.0", export: "drawIt", tools: ["t1"] },
+      { slug: "b", entry: "b.js", version: "2.0.0", export: "mountTool", tools: ["t2"] },
+    ]);
+  });
+});

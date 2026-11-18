@@ -5,7 +5,7 @@ import { isoNow } from "../../core/helpers.js";
 import { zodToJsonSchema } from "../../core/zod-to-json.js";
 import type { ToolDefinition, ToolResult } from "../../core/types.js";
 import type { KernelConfig, KernelLanguage } from "../../core/config.js";
-import { isProviderExhausted, markProviderExhausted } from "../../core/llm/chat-adapters.js";
+import { isProviderExhausted, isQuotaExhaustion, markProviderExhausted } from "../../core/llm/chat-adapters.js";
 import * as providerHealth from "../../core/llm/provider-health.js";
 import type { ChatLlmProvider } from "../../core/llm/chat-adapters.js";
 import type { ChatMessage } from "../chat/types.js";
@@ -145,10 +145,6 @@ function isRetryableChainError(err: unknown): boolean {
   return false;
 }
 
-/** Subset of retryable errors that should also mark the provider as globally exhausted. */
-function isProviderQuotaError(msg: string): boolean {
-  return /insufficient_quota|exceeded your current quota|credit balance|API error 429|API error 402/i.test(msg);
-}
 
 /** Run-level quota check that triggers the cycle-through-all-providers retry. */
 function isQuotaErrorMessage(errorMsg: string): boolean {
@@ -952,7 +948,7 @@ export class AgentExecutor {
         const toLabel = `${toEntry.provider.name}/${toEntry.model || "(default)"}`;
         const reason = innerErr instanceof Error ? innerErr.message : String(innerErr);
         log.warn(`Agent "${agent.name}": ${fromLabel} failed (${reason.slice(0, 100)}), falling back to ${toLabel}`);
-        if (isProviderQuotaError(reason)) markProviderExhausted(entry.provider.name);
+        if (isQuotaExhaustion(reason)) markProviderExhausted(entry.provider.name);
         recorder.emit("agent:flow:fallback_used", {
           from_provider: entry.provider.name, from_model: entry.model,
           to_provider: toEntry.provider.name, to_model: toEntry.model,
@@ -1040,9 +1036,7 @@ export class AgentExecutor {
       } catch (retryErr) {
         const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
         log.warn(`Agent "${agent.name}": ${candidate.name} also failed: ${retryMsg.slice(0, 100)}`);
-        if (retryMsg.includes("insufficient_quota") || retryMsg.includes("429") || retryMsg.includes("credit balance")) {
-          markProviderExhausted(candidate.name);
-        }
+        if (isQuotaExhaustion(retryMsg)) markProviderExhausted(candidate.name);
         continue; // try next provider
       }
     }

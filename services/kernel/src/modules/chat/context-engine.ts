@@ -1,6 +1,6 @@
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import { log } from "../../core/logger.js";
-import { LocalEmbeddings } from "../../core/embeddings/local.js";
+import { embeddingsForChat } from "../../core/embeddings/manager.js";
 import {
   KnowledgeService,
   type MemoryNode,
@@ -36,7 +36,8 @@ export interface ScoredMemory extends MemoryNode {
 
 export class ContextEngine {
   private piiFilter: PiiFilter;
-  private embedder = new LocalEmbeddings();
+  /** The active embeddings client when it fits the chat index (core/embeddings/manager.ts). */
+  private get embedder() { return embeddingsForChat(); }
 
   constructor(
     private knowledge: KnowledgeService,
@@ -69,14 +70,17 @@ export class ContextEngine {
     }
 
     try {
-      // Step 1: Embed the message (LocalEmbeddings uses the same model as graph-intel)
-      const vectors = await this.embedder.embed([message]);
+      // Step 1: Embed the message with the client chat memory follows (manager.ts)
+      const embedder = this.embedder;
+      const vectors = await embedder.embed([message], { inputType: "query" });
       const vector: number[] = vectors[0];
 
-      // Step 2: Vector search on Memory embeddings → top-30
+      // Step 2: Vector search on Memory embeddings → top-30, same model only
       const rawMemories = await this.knowledge.findSimilarMemories(
         vector,
         30,
+        undefined,
+        embedder.model,
       );
 
       if (rawMemories.length === 0) {

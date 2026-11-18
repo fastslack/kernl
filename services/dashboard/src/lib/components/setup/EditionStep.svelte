@@ -23,6 +23,7 @@
     try {
       const summary = await setEdition(mode);
       if (summary.failed.length) console.warn('[edition] some extensions did not switch', summary.failed);
+      window.dispatchEvent(new CustomEvent('edition:changed'));
       dispatch('done', mode);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);

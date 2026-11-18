@@ -4,7 +4,13 @@ import { apiFetchRaw, readApiError } from '$lib/api.js';
 export type Audience = 'personal' | 'business';
 export type EditionMode = Audience;
 
-export interface EditionStatus { mode: EditionMode | null; legacy: boolean; parked: number }
+export interface EditionStatus {
+  mode: EditionMode | null;
+  legacy: boolean;
+  parked: number;
+  /** Sidebar groups this edition hides by default; older kernels omit it. */
+  hiddenGroups?: string[];
+}
 export interface EditionSummary extends EditionStatus {
   activated: string[];
   deactivated: string[];

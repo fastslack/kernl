@@ -296,10 +296,14 @@ export async function packBundle(
 
   // Build the tarball. `-C sourceDir .` packs the directory contents
   // (not the directory itself) — no wrapper folder inside.
+  // COPYFILE_DISABLE: macOS's tar otherwise stores each file's extended
+  // attributes as an AppleDouble `._<name>` member. Its own tar hides them
+  // again on extract, but GNU tar writes them out as files, so a bundle packed
+  // on a Mac failed the integrity check on every Linux install.
   await execFileAsync(
     tarBinary(),
     tarArgs("c", outPath, ["-C", sourceDir, "."]),
-    { timeout: 60_000 },
+    { timeout: 60_000, env: { ...process.env, COPYFILE_DISABLE: "1" } },
   );
 
   const { size } = await stat(outPath);

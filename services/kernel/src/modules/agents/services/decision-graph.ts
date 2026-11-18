@@ -4,7 +4,7 @@
  *   (q:AgentQuestion {id, flow_id, category, subject_key, status, text,
  *                     asked_at, answered_at, answer, answered_by, via, actor})
  *   (q)-[:ASKED_BY]->(:Agent {id})          (q)-[:IN_RUN]->(:AgentRun {id})
- *   (q)-[:ABOUT]->(w:WorkItem {key})        (w)-[:PART_OF]->(:WorkItem {key})   web#2653:a-b → web#2653
+ *   (q)-[:ABOUT]->(w:WorkItem {key})        (w)-[:PART_OF]->(:WorkItem {key})   app#2653:a-b → app#2653
  *   (q)-[:DECIDED_BY]->(:DecisionMaker {id, via})
  *   (q)-[:DECIDED_WHILE]->(e:EnvFact)       the environment problems open when it was answered
  *   (e:EnvFact {id, flow_id, key, valid_from, valid_to})

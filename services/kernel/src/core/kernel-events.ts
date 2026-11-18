@@ -372,6 +372,9 @@ export interface KernelEvents {
   // Config module
   "config:changed": ConfigChangedPayload;
 
+  // Embeddings — rows re-embedded under the active model (core/embeddings/reembed.ts)
+  "embeddings:reembedded": { table: string; ids: string[]; model: string };
+
   // Contact module
   "contact.interaction": ContactInteractionPayload;
 

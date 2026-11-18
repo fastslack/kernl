@@ -147,6 +147,11 @@ export interface KernelConfig {
      * driver; without one it does nothing. ON by default, AGENTS_SHARED_LEARNINGS=0 turns it off.
      */
     sharedLearnings?: boolean;
+    /**
+     * Earlier attempts — put in the prompt what the office already tried on
+     * the issue the goal names (experience graph). ON unless set to false.
+     */
+    earlierAttempts?: boolean;
   };
   telegram: {
     enabled: boolean;
@@ -232,11 +237,10 @@ export interface KernelConfig {
     socketPath: string;
   };
   // Embeddings — generic vector encoder used by graph-intel, cinema, and
-  // any future module that needs semantic search. Provider auto-detect:
-  // tries LMStudio first (configurable URL/model), falls back to a local
-  // transformers.js MiniLM if LMStudio isn't reachable.
+  // any future module that needs semantic search. Default: the in-process
+  // multilingual model (core/embeddings/local.ts), GPU when faster, else CPU.
   embeddings: {
-    /** "auto" (lmstudio→local), "lmstudio" (fail loud if down), "local" (force MiniLM). */
+    /** "local" (default, in-process), "auto" (/models chain → local), "lmstudio" (LM Studio only, fail loud). */
     provider: "auto" | "lmstudio" | "local";
     /** OpenAI-compatible base URL (must include /v1). */
     baseUrl: string;
@@ -337,6 +341,21 @@ export function resolveSecureBind(
  */
 export function defaultTimezone(): string {
   return process.env.TIMEZONE || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+/**
+ * The embeddings settings from the environment. Called again once the stored
+ * settings are restored (bootstrap/stored-settings.ts): a provider picked in
+ * Settings → AI lives in app_settings, which opens after loadConfig runs.
+ */
+export function embeddingsConfigFromEnv(env: NodeJS.ProcessEnv = process.env): KernelConfig["embeddings"] {
+  const v = (env.EMBEDDINGS_PROVIDER ?? "local").trim().toLowerCase();
+  return {
+    provider: v === "lmstudio" || v === "auto" ? v : "local",
+    baseUrl: env.EMBEDDINGS_BASE_URL ?? "http://127.0.0.1:1234/v1",
+    model: env.EMBEDDINGS_MODEL ?? "text-embedding-bge-m3",
+    dim: parseInt(env.EMBEDDINGS_DIM ?? "1024", 10),
+  };
 }
 
 export function loadConfig(): KernelConfig {
@@ -563,15 +582,7 @@ export function loadConfig(): KernelConfig {
       socketPath: process.env.RUST_BRIDGE_SOCKET
         ?? (process.platform === "win32" ? "\\\\.\\pipe\\mtw-rust" : "/tmp/mtw-rust.sock"),
     },
-    embeddings: {
-      provider: (() => {
-        const v = (process.env.EMBEDDINGS_PROVIDER ?? "auto").toLowerCase();
-        return v === "lmstudio" || v === "local" ? v : "auto";
-      })(),
-      baseUrl: process.env.EMBEDDINGS_BASE_URL ?? "http://127.0.0.1:1234/v1",
-      model: process.env.EMBEDDINGS_MODEL ?? "text-embedding-bge-m3",
-      dim: parseInt(process.env.EMBEDDINGS_DIM ?? "1024", 10),
-    },
+    embeddings: embeddingsConfigFromEnv(),
     fsCommander: {
       allowedRoots: (process.env.FS_COMMANDER_ALLOWED_ROOTS ?? "")
         .split(",")

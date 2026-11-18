@@ -58,7 +58,9 @@ export function classifyModel(slug: string, modelId: string): ModelTraits {
   if (/(rerank|reranker)/i.test(id)) {
     return { chat: false, reranker: true };
   }
-  if (/(guard|moderation|nemoguard|llamaguard|shield|safety|classifier)/i.test(id)) {
+  // `detector`: NVIDIA lists ai-synthetic-video-detector and similar among its
+  // models; probed as chat it answered 429 on every boot.
+  if (/(guard|moderation|nemoguard|llamaguard|shield|safety|classifier|detector)/i.test(id)) {
     return { chat: false, safety: true };
   }
   // Specialized scientific / domain models — not general chat

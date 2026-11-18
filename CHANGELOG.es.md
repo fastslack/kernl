@@ -7,6 +7,130 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-18
+
+### Actualizar desde 0.5.1
+
+- **La búsqueda por significado corre dentro de Kernl por defecto; ya no hace
+  falta LM Studio para eso.** El proveedor de embeddings por defecto ahora es
+  el modelo local `Xenova/paraphrase-multilingual-MiniLM-L12-v2` (384
+  dimensiones, los mismos pesos que LM Studio sirve como
+  `text-embedding-paraphrase-multilingual-minilm-l12-v2.gguf`). En el primer
+  arranque se descarga una vez (464 MB, en `<data>/data/transformers-cache`) y
+  después vuelve a procesar en segundo plano los aprendizajes, los objetivos de
+  las corridas y la memoria guardados; mientras una fila no está lista, se la
+  sigue encontrando por sus palabras. Para quedarte como antes, poné
+  `EMBEDDINGS_PROVIDER=auto` (la cadena de /models) o `lmstudio`.
+
+### Agregado
+
+- **Cómo evolucionaron las instrucciones de cada agente, en el grafo.** Cada
+  versión de las instrucciones de un agente y cada ciclo de mejora se proyectan
+  al grafo: qué versión revisa a cuál, el ciclo que propuso una versión, de
+  cuál partió, su puntaje antes y después, y las corridas fallidas que lo
+  dispararon, unidos a las corridas y lecciones que ya estaban ahí. Se ve en el
+  explorador del grafo; el texto completo sigue en la base de datos.
+- **Los embeddings locales son un proveedor más, que se elige en Ajustes →
+  IA.** Una nota debajo de las conexiones muestra el modelo, en qué
+  dispositivo corre y por qué, y cuántas filas faltan reprocesar; su selector
+  cambia entre «En este equipo», «Cadena de modelos» y «Solo LM Studio»
+  (`EMBEDDINGS_PROVIDER` = `local`, `auto`, `lmstudio`). El modelo es
+  multilingüe (casi toda la memoria guardada está en castellano; el respaldo
+  anterior, all-MiniLM-L6-v2, solo entendía inglés). `EMBEDDINGS_LOCAL_MODEL`
+  elige `Xenova/multilingual-e5-small` u otro repositorio ONNX, y
+  `EMBEDDINGS_LOCAL_DTYPE=q8` un modelo de 113 MB, más rápido y un poco menos
+  preciso.
+- **El dispositivo se elige solo: la GPU cuando es más rápida, si no la CPU.**
+  Los candidatos salen de la plataforma y de lo que trae el onnxruntime-node
+  que se distribuye: CoreML en macOS, DirectML en Windows, CUDA en Linux x64
+  cuando está su biblioteca. Cada uno se mide una vez contra la CPU y se queda
+  solo si gana; el resultado se guarda por modelo y versión de onnxruntime, un
+  proveedor que no carga o falla al correr vuelve a la CPU, y el log dice qué
+  dispositivo se eligió y por qué (`embeddings/local: … on CPU — …`). En Apple
+  Silicon gana la CPU: CoreML parte este modelo en 97 particiones y corre de
+  2,5 a 5 veces más lento. `EMBEDDINGS_DEVICE` fija uno.
+- **Las filas procesadas con otro modelo se reprocesan en segundo plano.** La
+  búsqueda solo compara vectores del mismo modelo, así que lo que se escribió
+  mientras servía otro proveedor (el respaldo durante una caída de LM Studio,
+  un modelo por defecto anterior) quedaba invisible para la búsqueda por
+  significado. Cuando cambia el modelo activo —un ajuste, un proveedor que
+  vuelve, un nuevo valor por defecto— los aprendizajes, objetivos, la memoria
+  de los agentes, el índice de brain y la memoria del chat con vectores de otro
+  modelo se procesan de nuevo, primero los más nuevos, y el grafo de
+  experiencia toma los vectores nuevos.
+- **La memoria del chat y el índice de brain siguen al modelo activo.** La
+  memoria del chat siempre usaba all-MiniLM-L6-v2, dijera lo que dijera
+  /models, y ni ella ni el índice de brain guardaban qué modelo hizo cada
+  vector. Ahora los dos lo guardan (`embedding_model` en los nodos `Memory` del
+  chat, una columna en `brain_items`), buscan solo dentro del modelo activo y
+  el reprocesado los convierte, incluidas las memorias del chat escritas antes
+  de esta versión. Si el proveedor principal da vectores que no entran en el
+  índice de 384 dimensiones de la memoria del chat (los 1536 de OpenAI), la
+  memoria del chat sigue con el modelo local.
+- **Un ítem de trabajo se puede retener o posponer.** Retenido hasta que se
+  libere o pospuesto hasta una hora, con su motivo y responsable, por la API o
+  con tres herramientas de agente; al liberarlo se avisa al agente indicado
+  (`HOLD-LIFTED`).
+- **Las preguntas recuerdan el estado de su ítem.** El orquestador de una
+  oficina informa el estado de cada ítem (`PUT /api/agents/subjects/state`);
+  cuando el ítem avanza, las preguntas abiertas hechas en otro estado se
+  descartan con el motivo, y una respuesta tardía se rechaza (409 superseded)
+  en vez de actuar sobre un ítem que ya no está donde lo vio la pregunta. Las
+  oficinas que no informan estados siguen como antes.
+- **Las oficinas declaran los tipos de carta que leen.** Una carta a la que le
+  falta un campo obligatorio se le devuelve al remitente con un ejemplo, y
+  repetir una pregunta abierta devuelve la que ya existe en vez de duplicarla.
+- **Los agentes ven lo que ya se intentó en su issue.** El prompt de sistema
+  lista las últimas corridas terminadas sobre el mismo issue o sus partes, de
+  cualquier agente, con su resultado (se apaga con
+  `agents.earlierAttempts = false`), y cada corrida queda ligada a su ítem en
+  el grafo de experiencia.
+- **Las preguntas nombran el proyecto del que hablan**, junto al agente, en la
+  tarjeta y en la bandeja.
+- **Las extensiones pueden dibujar sus propias herramientas en las vistas de
+  corridas** (`frontend.toolRenderers`); si el dibujo falla queda el texto.
+- **Los menús de la barra lateral se pueden ordenar y ocultar** en Ajustes →
+  General → Menú. Chat y Sistema quedan abajo, y elegir Personal o Negocio
+  solo oculta menús en vez de apagar extensiones.
+
+### Cambiado
+
+- **La cadena automática se da cuenta cuando vuelve un proveedor.** Si todos
+  los enlaces de embeddings de /models estaban caídos y entró el modelo local,
+  el kernel vuelve a probarlos cada cinco minutos y regresa al proveedor
+  (reprocesando lo que escribió el respaldo), en vez de quedarse en el
+  respaldo hasta reiniciar.
+- **Un cambio en los ajustes de embeddings se aplica sin reiniciar.** Todos
+  los que los usan (agentes, memoria de herramientas, cine, ranking de RSS,
+  brain) pasan al cliente nuevo.
+- **La pestaña Preguntas de cada oficina agrupa por cuánto llevan
+  esperando**, como la del chief, que ahora muestra primero las más nuevas.
+- **Las instalaciones descargan a través de lifekernl.com**, que las cuenta y
+  redirige al mismo archivo en GitHub; `install.sh` vuelve a GitHub si el
+  sitio no responde.
+
+### Corregido
+
+- **"Actualizar a vX" en Extensiones actualiza la extensión.** Solo
+  reactivaba la versión instalada, se quedaba en "Instalando…" y volvía a
+  ofrecer la misma actualización.
+- **Los paquetes armados en una Mac se instalan en Linux.** El tar de macOS
+  agregaba archivos `._` que ahí fallaban la verificación de integridad.
+- **El socket en vivo del dashboard vuelve solo** después de un corte, en vez
+  de dejar la pestaña consultando hasta recargarla.
+- **`backup.sh` respalda una instalación empaquetada** (app de escritorio,
+  deb, rpm), no solo un checkout del código.
+- **El proveedor de embeddings elegido en Ajustes sobrevive a un reinicio.**
+- **`kernel_agents_inbox_ack` acepta un id o una lista escrita como texto**,
+  en vez de fallar y dejar la carta sin confirmar.
+
+### Seguridad
+
+- **Tres dependencias del kernel pasan sus CVE abiertas:** protobufjs 7.6.6
+  (CVE-2026-41242 y cinco más), tar 7.5.23 (CVE-2026-59873 y cuatro más) y
+  proxy-addr 2.0.8 (CVE-2026-90711). El kernel nunca activa `trust proxy`, así
+  que la de proxy-addr no tenía nada que explotar acá.
+
 ## [0.5.1] - 2026-11-13
 
 ### Actualizar desde 0.5.0

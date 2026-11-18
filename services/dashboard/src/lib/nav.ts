@@ -84,17 +84,7 @@ export function buildNav(m: NavManifest, base: NavGroup[] = NAV_GROUPS): BuiltNa
 				order: g.order,
 			});
 		}
-		if (added.length > 0) {
-			const withOrder = nextGroups.map(g => ({
-				...g,
-				order:
-					g.order ??
-					(g.id === 'system' ? 9999 : g.id === 'people' ? 250 : 500),
-			}));
-			nextGroups = [...withOrder, ...added].sort(
-				(a, b) => ((a.order ?? 500) - (b.order ?? 500))
-			);
-		}
+		nextGroups.push(...added);
 	}
 
 	if (m.navItems?.length) {
@@ -138,6 +128,15 @@ export function buildNav(m: NavManifest, base: NavGroup[] = NAV_GROUPS): BuiltNa
 	// `system` group is always kept — it's the admin surface (Settings,
 	// Extensions, Marketplace) needed to install more, and never empties.
 	nextGroups = nextGroups.filter(g => g.id === 'system' || g.views.length > 0);
+
+	// Sort once, after every group exists. Sorting only the declared groups
+	// left a group created above for an undeclared `item.group` (a manifest
+	// with Home items but no Home group) appended after System, and the shell
+	// pins whatever comes last to the bottom of the sidebar as System.
+	// System is last whatever order a manifest gives it.
+	nextGroups = nextGroups
+		.map(g => ({ ...g, order: g.order ?? (g.id === 'system' ? 9999 : g.id === 'people' ? 250 : 500) }))
+		.sort((a, b) => (a.id === 'system' ? Infinity : a.order!) - (b.id === 'system' ? Infinity : b.order!));
 
 	const viewToGroup: Record<string, string> = {};
 	for (const g of nextGroups) for (const v of g.views) viewToGroup[v.id] = g.id;

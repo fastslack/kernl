@@ -33,33 +33,33 @@ describe.skipIf(!relateClientInstalled())("decisions in the built-in graph", () 
     const ask = (from: string, text: string, subject: string, category: string) =>
       s.createQuestion({ from_agent_id: from, flow_id: "acme", question: text, options: OPTS, for_operator: true, subject_key: subject, category }).id;
 
-    const a = ask(closer, "web#2653:a-b: el Cerrador no lo cierra", "web#2653:a-b", "closer-blocked");
+    const a = ask(closer, "app#2653:a-b: el Cerrador no lo cierra", "app#2653:a-b", "closer-blocked");
     s.answerQuestion(a, { selected_index: 0, selected_option: OPTS[0].label, answered_by: "human", source: { via: "whatsapp", actor: "whatsapp:549" } });
     db.run("UPDATE agent_questions SET created_at = '2026-10-28T10:00:00.000Z', answered_at = '2026-10-28T10:00:40.000Z' WHERE id = ?", [a]);
 
-    s.envFacts.report({ flow_id: "acme", key: "dev-e2e", description: "el E2E cae en su preparación", by: "agent:x", blocked: { agent_id: resolver, subject_key: "web#2653:c" } });
+    s.envFacts.report({ flow_id: "acme", key: "dev-e2e", description: "el E2E cae en su preparación", by: "agent:x", blocked: { agent_id: resolver, subject_key: "app#2653:c" } });
     db.run("UPDATE agent_env_facts SET valid_from = '2026-10-29T08:00:00.000Z'");
-    const b = ask(resolver, "web#2653:c: el Resolver no puede seguir", "web#2653:c", "resolver-blocked");
+    const b = ask(resolver, "app#2653:c: el Resolver no puede seguir", "app#2653:c", "resolver-blocked");
     s.answerQuestion(b, { selected_index: 1, selected_option: OPTS[1].label, answered_by: "human", source: { via: "host-ops" } });
     db.run("UPDATE agent_questions SET created_at = '2026-10-29T09:00:00.000Z', answered_at = '2026-10-29T09:30:00.000Z' WHERE id = ?", [b]);
-    const c = ask(resolver, "web#2700: otro issue", "web#2700", "resolver-blocked");
+    const c = ask(resolver, "app#2700: otro issue", "app#2700", "resolver-blocked");
 
     expect(await dg.sync()).toBe(3);
-    const hist = (await dg.subjectHistory("web#2653"))!;
+    const hist = (await dg.subjectHistory("app#2653"))!;
     expect(hist.map((h) => [h.subject_key, h.answer, h.via, h.env_open])).toEqual([
-      ["web#2653:a-b", "Reabrir con los pendientes", "whatsapp", []],
-      ["web#2653:c", "Cerrar igual", "host-ops", ["dev-e2e"]],
+      ["app#2653:a-b", "Reabrir con los pendientes", "whatsapp", []],
+      ["app#2653:c", "Cerrar igual", "host-ops", ["dev-e2e"]],
     ]);
     expect(hist[0].asked_by).toBe(closer);
-    expect((await dg.subjectHistory("web#2653:c"))!.length).toBe(2); // a part leads to its whole issue
-    expect((await dg.subjectHistory("web#2700"))!.map((h) => h.id)).toEqual([c]);
+    expect((await dg.subjectHistory("app#2653:c"))!.length).toBe(2); // a part leads to its whole issue
+    expect((await dg.subjectHistory("app#2700"))!.map((h) => h.id)).toEqual([c]);
 
     // Parts hang from their issue; the parked part points at the environment problem; times are datetimes.
     const r = (await g.run(
-      `MATCH (p:WorkItem {key: 'web#2653'})<-[:PART_OF]-(w:WorkItem) OPTIONAL MATCH (w)-[:BLOCKED_BY]->(e:EnvFact)
+      `MATCH (p:WorkItem {key: 'app#2653'})<-[:PART_OF]-(w:WorkItem) OPTIONAL MATCH (w)-[:BLOCKED_BY]->(e:EnvFact)
        RETURN w.key AS part, e.key AS env ORDER BY part`,
     )).records.map((x) => [x.get("part"), x.get("env")]);
-    expect(r).toEqual([["web#2653:a-b", null], ["web#2653:c", "dev-e2e"]]);
+    expect(r).toEqual([["app#2653:a-b", null], ["app#2653:c", "dev-e2e"]]);
     const t = (await g.run("MATCH (q:AgentQuestion {id: $id}) RETURN valueType(q.answered_at) AS t, q.answered_at AS at", { id: a })).records[0];
     expect(String(t.get("t"))).toStartWith("ZONED DATETIME");
     expect(t.get("at")).toBe("2026-10-28T10:00:40.000Z");

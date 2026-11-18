@@ -2,7 +2,7 @@
 import type { ChatMessage, ChatCompletionResult, ChatCompletionOptions, ToolUseBlock } from "./chat-types.js";
 import { ADAPTER_TIMEOUT_MS, truncateTools, type ChatLlmProvider } from "./chat-provider.js";
 import { retryWithBackoff } from "./retry.js";
-import { markProviderExhausted } from "./provider-quota.js";
+import { isQuotaExhaustion, markProviderExhausted } from "./provider-quota.js";
 
 // ── Claude ───────────────────────────────────────────
 
@@ -80,10 +80,9 @@ export class ChatClaudeProvider implements ChatLlmProvider {
 
     if (!resp.ok) {
       const errBody = await resp.text().catch(() => "");
-      if (resp.status === 429 || resp.status === 402 || errBody.includes("credit balance") || errBody.includes("billing")) {
-        markProviderExhausted("claude");
-      }
-      throw new Error(`Claude API error ${resp.status}: ${errBody}`);
+      const message = `Claude API error ${resp.status}: ${errBody}`;
+      if (isQuotaExhaustion(message)) markProviderExhausted("claude");
+      throw new Error(message);
     }
 
     const data = (await resp.json()) as {

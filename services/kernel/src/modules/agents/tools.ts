@@ -818,6 +818,45 @@ export function agentsTools(
       },
     }),
 
+    // ── kernel_agents_learning_audit ──────────────
+    defineTool({
+      name: "kernel_agents_learning_audit",
+      description:
+        "Where a lesson came from and how far it went: who learned it and from which run, every run that carried it " +
+        "since (agent, outcome, own or shared), and the lessons those runs produced. Use it when a lesson looks wrong, " +
+        "to see what it may have influenced before deactivating or correcting it.",
+      schema: z.object({
+        learning_id: z.string().describe("Lesson id (agent_learnings)"),
+        limit: z.number().int().min(1).max(100).optional().describe("Runs to list (default 20)"),
+      }),
+      handler: async (input) => {
+        const graph = service.getExperienceGraph();
+        if (!graph?.available) return errorResult("The experience graph is not available (no graph driver).");
+        const a = await graph.learningAudit(input.learning_id);
+        if (!a) return errorResult("No lesson with that id in the experience graph (it syncs a few minutes after it is learned).");
+        const limit = input.limit ?? 20;
+        const ok = a.readers.filter((r) => r.status === "completed").length;
+        const lines = [
+          `## Lesson ${a.learning_id} — ${a.active ? "active" : "inactive"}, confidence ${a.confidence.toFixed(2)}`,
+          `[${a.type}] ${a.content}`,
+          "",
+          `**Learned by** ${a.owner || "?"}${a.created ? ` on ${a.created.slice(0, 16).replace("T", " ")}` : ""}` +
+            (a.source ? `, from run ${a.source.run} (${a.source.status}): ${a.source.goal.slice(0, 160).replace(/\s+/g, " ")}` : ", source run unknown"),
+          "",
+          `**Carried by ${a.readers.length} run(s)** — ${ok} completed, ${a.readers.length - ok} failed` +
+            (a.readers.length > limit ? ` (newest ${limit} shown)` : ""),
+          ...a.readers.slice(0, limit).map((r) =>
+            `- ${r.at.slice(0, 16).replace("T", " ")} · ${r.agent} · ${r.status}${r.shared ? " · shared" : ""} · run ${r.run}`),
+          "",
+          a.children.length
+            ? `**Lessons born from runs that carried it (${a.children.length})** — review them too if this one is wrong:`
+            : "**No lesson came out of the runs that carried it.**",
+          ...a.children.map((c) => `- ${c.id} ${c.active ? "" : "(inactive) "}${c.content.slice(0, 160).replace(/\s+/g, " ")}`),
+        ];
+        return textResult(lines.join("\n"));
+      },
+    }),
+
     // ── kernel_agents_list_triggers ──────────────────
     defineTool({
       name: "kernel_agents_list_triggers",
@@ -1224,7 +1263,7 @@ export function agentsTools(
         })).min(2).max(4).describe("2 to 4 options, your preferred one first."),
         meeting_id: z.string().optional().describe("If the question came out of a meeting, reference its id."),
         for_operator: z.boolean().optional().describe("Only the operator can decide or do this (approve a risky MR, set something in an environment, a product decision): skip the chief."),
-        subject: z.string().optional().describe("What the question is about, as a key: an issue and its part (`web#2653:a-b`), an MR, a ticket. Taken from the question text when omitted."),
+        subject: z.string().optional().describe("What the question is about, as a key: an issue and its part (`app#2653:a-b`), an MR, a ticket. Taken from the question text when omitted."),
         category: z.string().optional().describe("The kind of question, the same slug every time for the same kind (`approve-mr`, `closer-blocked`, `env-down`). Past decisions are matched within a category."),
         env: z.string().optional().describe("When the question is about the environment being broken (DEV down, a missing credential): its key, e.g. `dev-e2e`. If that problem is already open you join it and nobody is asked again."),
         ...CALLER_AGENT_ID_FIELD,
@@ -1427,7 +1466,7 @@ export function agentsTools(
           schema: z.object({
             key: z.string().describe("Short stable key of the problem, e.g. `dev-e2e`."),
             description: z.string().optional().describe("What is broken, as you saw it (first reporter's text is kept)."),
-            subject: z.string().optional().describe("What you parked because of it, e.g. `web#2653:a-b`."),
+            subject: z.string().optional().describe("What you parked because of it, e.g. `app#2653:a-b`."),
             ...CALLER_AGENT_ID_FIELD,
           }),
           handler: async (input) => {
@@ -1488,10 +1527,10 @@ export function agentsTools(
         defineTool({
           name: "kernel_agents_subject_history",
           description:
-            "Read-only. Everything asked and decided about an issue and all its parts (`web#2653` covers `web#2653:a-b`…), oldest first: " +
+            "Read-only. Everything asked and decided about an issue and all its parts (`app#2653` covers `app#2653:a-b`…), oldest first: " +
             "who asked, the answer, who decided it and through what channel, and which environment problems were open at the time. " +
             "Read it before asking about a subject again.",
-          schema: z.object({ subject: z.string().describe("An issue or one of its parts, e.g. `web#2653` or `web#2653:a-b`."), limit: z.number().int().optional() }),
+          schema: z.object({ subject: z.string().describe("An issue or one of its parts, e.g. `app#2653` or `app#2653:a-b`."), limit: z.number().int().optional() }),
           handler: async ({ subject, limit }) => {
             if (!service.decisionGraph) return errorResult("The decision graph is not available.");
             const rows = await service.decisionGraph.subjectHistory(subject, Math.min(Math.max(limit ?? 100, 1), 500));
@@ -1703,15 +1742,87 @@ export function agentsTools(
         "Acknowledge office-inbox letters you have finished handling. Unacknowledged letters are " +
         "handed to you again by the inbox sweeper (up to 3 times), so ack every letter you completed.",
       schema: z.object({
-        message_ids: z.array(z.string()).min(1).describe("Inbox message ids (from kernel_agents_inbox)"),
+        // A list written as one string ("a, b") is read as the list it means:
+        // agents send it that way often enough to fail the run's last step.
+        message_ids: z
+          .preprocess((v) => (typeof v === "string" ? v.split(/[\s,]+/).filter(Boolean) : v), z.array(z.string()))
+          .optional()
+          .describe("Inbox message ids (from kernel_agents_inbox)"),
+        message_id: z.string().optional().describe("A single inbox message id — the same as message_ids: [id]"),
         ...CALLER_AGENT_ID_FIELD,
       }),
       handler: async (input) => {
         const callerId = resolveCallerAgentId(input);
         if (!callerId) return errorResult("Caller agent context missing — kernel_agents_inbox_ack is only usable from an agent run.");
-        const acked = service.ackInboxFor(callerId, input.message_ids);
+        const ids = [...(input.message_ids ?? []), ...(input.message_id ? [input.message_id] : [])];
+        // An answer the agent can act on, not a schema error in the kernel's log.
+        if (ids.length === 0) return errorResult("Pass message_ids: the ids of the letters you handled, as kernel_agents_inbox lists them.");
+        const acked = service.ackInboxFor(callerId, ids);
         if (acked === 0) return errorResult("None of those ids are open letters addressed to you (wrong ids, someone else's letters, or already archived).");
         return textResult(`Acknowledged ${acked} letter(s).`);
+      },
+    }),
+
+    // ── kernel_agents_holds_list / hold_place / hold_lift ─
+    defineTool({
+      name: "kernel_agents_holds_list",
+      description:
+        "List the work items your office keeps from moving right now: held until someone lifts it, or snoozed until a " +
+        "time, each with its reason and who placed it. Leave a held item where it is.",
+      schema: z.object({
+        subject_key: z.string().optional().describe("Only this item, e.g. app#42"),
+        ...CALLER_AGENT_ID_FIELD,
+      }),
+      handler: async (input) => {
+        const caller = service.getAgent(resolveCallerAgentId(input) ?? "");
+        if (!caller) return errorResult("Caller agent context missing — kernel_agents_holds_list is only usable from an agent run.");
+        const holds = service.holds.active(caller.flow_id ?? "", input.subject_key);
+        if (holds.length === 0) return textResult("Nothing is held or snoozed in your office.");
+        return textResult(holds.map((h) =>
+          `- ${h.subject_key}: ${h.kind}${h.until ? ` until ${h.until}` : ""} — ${h.reason} (by ${h.owner || "?"}, ${h.created_at}; id ${h.id})`).join("\n"));
+      },
+    }),
+
+    defineTool({
+      name: "kernel_agents_hold_place",
+      description:
+        "Keep a work item of your office from moving: kind 'hold' until someone lifts it, or 'snooze' until a time " +
+        "(until, or minutes). Say why. It replaces the item's current hold. The operator sees it and can lift it; " +
+        "you get a HOLD-LIFTED letter when someone does.",
+      schema: z.object({
+        subject_key: z.string().describe("The item, e.g. app#42"),
+        kind: z.enum(["hold", "snooze"]),
+        reason: z.string().describe("Why it waits, in one sentence the operator understands"),
+        until: z.string().optional().describe("Snooze only: ISO time it ends"),
+        minutes: z.number().optional().describe("Snooze only: how long, instead of until"),
+        ...CALLER_AGENT_ID_FIELD,
+      }),
+      handler: async (input) => {
+        const caller = service.getAgent(resolveCallerAgentId(input) ?? "");
+        if (!caller) return errorResult("Caller agent context missing — kernel_agents_hold_place is only usable from an agent run.");
+        try {
+          const h = service.placeSubjectHold({
+            flow_id: caller.flow_id ?? "", subject_key: input.subject_key, kind: input.kind, reason: input.reason,
+            owner: caller.name, until: input.until ?? null, minutes: input.minutes, notify_agent_id: caller.id,
+          });
+          return textResult(`${h.subject_key} is ${h.kind === "hold" ? "held" : `snoozed until ${h.until}`} (id ${h.id}).`);
+        } catch (err) {
+          return errorResult(err instanceof Error ? err.message : String(err));
+        }
+      },
+    }),
+
+    defineTool({
+      name: "kernel_agents_hold_lift",
+      description: "Lift a hold or snooze of your office (id from kernel_agents_holds_list) once the item can move again.",
+      schema: z.object({ hold_id: z.string(), ...CALLER_AGENT_ID_FIELD }),
+      handler: async (input) => {
+        const caller = service.getAgent(resolveCallerAgentId(input) ?? "");
+        if (!caller) return errorResult("Caller agent context missing — kernel_agents_hold_lift is only usable from an agent run.");
+        const hold = service.holds.get(input.hold_id);
+        if (!hold || hold.flow_id !== (caller.flow_id ?? "")) return errorResult("No hold with that id in your office.");
+        const lifted = service.liftSubjectHold(hold.id, caller.name);
+        return lifted ? textResult(`Lifted the ${lifted.kind} on ${lifted.subject_key}.`) : errorResult("That hold is no longer active.");
       },
     }),
 

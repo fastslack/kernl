@@ -286,10 +286,11 @@ export async function askMemory(
     const r = await runVectorSearch(g, {
         index: MEMORY_VECTOR_INDEX, label: "Memory", alias: "node", k: "$k", vector: "$vector",
         filters: { module: "'chat'" },
+        where: "node.embedding_model = $model",
       }, (clause) => `${clause}
        RETURN node.id AS id, node.episode_id AS episode_id, node.role AS role,
               node.content AS content, node.created_at AS created_at, elementId(node) AS el, score`,
-      { k: LEG_SIZE, vector: v },
+      { k: LEG_SIZE, vector: v, model: chatClient.model },
     );
     // queryNodes reports 0.5 for orthogonal vectors: below that is unrelated.
     return r.records

@@ -7,18 +7,18 @@ import type { AgentQuestion } from "../src/modules/agents/service.js";
 
 const q: AgentQuestion = {
   id: "q1", from_agent_id: "a1", flow_id: "", meeting_id: "", run_id: "",
-  question: "¿El profesional ve «rechazado» cuando el familiar rechaza? (web#2595, api!95)",
-  context: "El MR api!95 cambia toLink en app/services/family.js:120.",
+  question: "¿El usuario ve «rechazado» cuando el invitado rechaza? (app#2595, api!95)",
+  context: "El MR api!95 cambia toLink en app/services/invites.js:120.",
   options: [{ label: "Mostrar rechazado" }, { label: "Mostrar pendiente" }, { label: "Ocultar" }, { label: "Preguntar" }],
   status: "pending", selected_option: "", selected_index: -1, answered_note: "", answered_at: null,
   answered_by: "", chief_note: "Es una decisión de privacidad", triage_started_at: null, created_at: "2026-10-14T03:00:00Z",
   opinion_status: "", opinion_run_id: "", opinion: null, opinion_error: "", opinion_at: null, owed_at: null, reminded_at: null, for_operator: false,
-  subject_key: "web#2595", category: "", answered_via: "", answered_actor: "",
+  subject_key: "app#2595", category: "", answered_via: "", answered_actor: "", subject_state: "", superseded_reason: "",
 };
 
 describe("buildInvestigationGoal", () => {
   const repos = [
-    { name: "web", remote_url: "git@gitlab.com:acme/acme-web.git" },
+    { name: "app", remote_url: "git@gitlab.com:acme/acme-web.git" },
     { name: "api", remote_url: "https://gitlab.com/acme/api-server.git" },
   ];
   const goal = buildInvestigationGoal(q, { name: "Resolver" }, parseQuestionRefs(q.question, q.chief_note, q.context), repos);
@@ -31,20 +31,20 @@ describe("buildInvestigationGoal", () => {
   });
 
   it("maps each reference to its forge project so the investigator knows what to read first", () => {
-    expect(goal).toContain('issue web#2595: project "gitlab.com/acme/acme-web", number 2595');
+    expect(goal).toContain('issue app#2595: project "gitlab.com/acme/acme-web", number 2595');
     expect(goal).toContain('MR api!95: project "gitlab.com/acme/api-server", number 95');
-    expect(goal).toContain("archivo app/services/family.js:120");
+    expect(goal).toContain("archivo app/services/invites.js:120");
   });
 
   it("lists the other open questions with their options, not itself, each cut short", () => {
     const others = [
       { id: "q1", agent: "Resolver", question: "self", options: ["A"] },
-      { id: "q2", agent: "Acme Integrador", question: "web#2595 (web!311): espera al operador", options: ["Reanudar", "Lo veo yo"] },
+      { id: "q2", agent: "Acme Integrador", question: "app#2595 (app!311): espera al operador", options: ["Reanudar", "Lo veo yo"] },
       { id: "q3", agent: "QA", question: "y".repeat(1000), options: ["Sí"] },
     ];
     const g = buildInvestigationGoal(q, undefined, parseQuestionRefs(""), [], others);
     expect(g).toContain("Otras preguntas abiertas");
-    expect(g).toContain("- question_id q2 — Acme Integrador: web#2595 (web!311): espera al operador");
+    expect(g).toContain("- question_id q2 — Acme Integrador: app#2595 (app!311): espera al operador");
     expect(g).toContain("    2. Lo veo yo");
     expect(g).not.toContain("question_id q1 —");
     expect(g).not.toContain("y".repeat(401));

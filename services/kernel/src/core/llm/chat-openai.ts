@@ -6,7 +6,7 @@ import { kernelMessagesToOpenAi } from "./chat-messages.js";
 import { applyModelQuirks } from "./provider-catalog.js";
 import { stripReasoning } from "./strip-reasoning.js";
 import { retryWithBackoff } from "./retry.js";
-import { markProviderExhausted } from "./provider-quota.js";
+import { isQuotaExhaustion, markProviderExhausted } from "./provider-quota.js";
 
 // ── OpenAI ───────────────────────────────────────────
 
@@ -82,11 +82,11 @@ export class ChatOpenAiProvider implements ChatLlmProvider {
 
     if (!resp.ok) {
       const errBody = await resp.text().catch(() => "");
-      // Detect quota exhaustion → mark provider so resolveProvider falls back
-      if (resp.status === 429 || resp.status === 402 || errBody.includes("insufficient_quota") || errBody.includes("exceeded your current quota")) {
-        markProviderExhausted(this.name);
-      }
-      throw new Error(`${this.name} API error ${resp.status}: ${errBody}`);
+      const message = `${this.name} API error ${resp.status}: ${errBody}`;
+      // Out of quota for the day → bench the provider so resolveProvider falls
+      // back. A plain 429 is a rate limit and only backs off (provider-health).
+      if (isQuotaExhaustion(message)) markProviderExhausted(this.name);
+      throw new Error(message);
     }
 
     const data = (await resp.json()) as {

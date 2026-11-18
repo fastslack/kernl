@@ -26,6 +26,7 @@ import { auditHostPaths } from "./host-path-audit.js";
 import { agentsTools } from "./tools.js";
 import { AgentExperienceGraph } from "./services/experience-graph.js";
 import { DecisionGraph } from "./services/decision-graph.js";
+import { EvolutionGraph } from "./services/evolution-graph.js";
 import type { GraphDriver } from "../../core/db-drivers/graph-driver.js";
 import { auditTools } from "./audit-tools.js";
 import { createAnalysisResourceProvider, createSkillResourceProvider } from "./resources.js";
@@ -112,10 +113,13 @@ export function createAgentsModule(): AgentsModule {
   let hostPathAuditTimer: ReturnType<typeof setTimeout> | null = null;
   let experienceSyncTimer: ReturnType<typeof setTimeout> | null = null;
   let experienceSyncHandler: ((payload: unknown) => void) | null = null;
+  let reembeddedHandler: ((payload: { table: string; ids: string[]; model: string }) => void) | null = null;
   let evalFailingHandler: ((payload: unknown) => void) | null = null;
   let eventsRef: ModuleContext["events"] | null = null;
   let decisionGraph: DecisionGraph | null = null;
   let decisionSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  let evolutionSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  let evolutionSyncEvery: ReturnType<typeof setInterval> | null = null;
   const decisionSyncHandlers: Array<[string, (p: unknown) => void]> = [];
   /** Unsubscribes from graphReplaced(): both projections start over on a new store. */
   const graphReplacedUnsubs: Array<() => void> = [];
@@ -180,6 +184,12 @@ export function createAgentsModule(): AgentsModule {
         experienceSyncHandler = () => scheduleSync(5_000);
         eventsRef = ctx.events;
         ctx.events.on("agent:flow:run_completed", experienceSyncHandler);
+        // Learnings re-embedded under a new model reach the graph on the next
+        // pass (other tables' batches carry nothing the graph holds).
+        reembeddedHandler = (payload) => {
+          if (payload?.table === "agent_learnings") scheduleSync(5_000);
+        };
+        ctx.events.on("embeddings:reembedded", reembeddedHandler);
         graphReplacedUnsubs.push(onGraphReplaced(() => scheduleSync(1_000)));
         scheduleSync(15_000);
       }
@@ -282,6 +292,27 @@ export function createAgentsModule(): AgentsModule {
         eventsRef = ctx.events;
         graphReplacedUnsubs.push(onGraphReplaced(() => schedule(1_000)));
         schedule(20_000);
+      }
+
+      // Instruction versions and improvement cycles in the graph
+      // (evolution-graph.ts). Both tables are small and a pass that finds
+      // nothing changed costs two COUNTs, so a timer is enough.
+      {
+        const eg = new EvolutionGraph(ctx.sqlite, () => ctx.graph);
+        const schedule = (delayMs: number) => {
+          if (evolutionSyncTimer) return;
+          evolutionSyncTimer = setTimeout(() => {
+            evolutionSyncTimer = null;
+            eg.sync()
+              .then((n) => { if (n > 0) log.debug(`evolution graph: ${n} version(s) and cycle(s) projected`); })
+              .catch((err) => log.debug(`evolution graph: sync failed — ${err instanceof Error ? err.message : String(err)}`));
+          }, delayMs);
+          evolutionSyncTimer.unref?.();
+        };
+        evolutionSyncEvery = setInterval(() => schedule(0), 5 * 60_000);
+        evolutionSyncEvery.unref?.();
+        graphReplacedUnsubs.push(onGraphReplaced(() => schedule(1_000)));
+        schedule(25_000);
       }
 
       // Answers filed while the asker was busy: relaunch it once its run ends,
@@ -482,10 +513,15 @@ export function createAgentsModule(): AgentsModule {
     async shutdown() {
       for (const off of graphReplacedUnsubs.splice(0)) off();
       if (decisionSyncTimer) clearTimeout(decisionSyncTimer);
+      if (evolutionSyncTimer) clearTimeout(evolutionSyncTimer);
+      if (evolutionSyncEvery) clearInterval(evolutionSyncEvery);
       for (const [name, fn] of decisionSyncHandlers) eventsRef?.off(name as never, fn as never);
       if (hostPathAuditTimer) clearTimeout(hostPathAuditTimer);
       if (experienceSyncTimer) clearTimeout(experienceSyncTimer);
-      if (experienceSyncHandler) eventsRef?.off("agent:flow:run_completed", experienceSyncHandler);
+      if (experienceSyncHandler) {
+        eventsRef?.off("agent:flow:run_completed", experienceSyncHandler);
+        if (reembeddedHandler) eventsRef?.off("embeddings:reembedded", reembeddedHandler);
+      }
       if (evalFailingHandler) eventsRef?.off("agent:eval:failing", evalFailingHandler);
       agentScheduler?.stop();
       questionTriager?.stop();

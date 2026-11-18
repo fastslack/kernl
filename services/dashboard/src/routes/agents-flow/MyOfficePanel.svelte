@@ -8,6 +8,7 @@
   // lands back in AgentWorld3D. What only this panel uses (the open report,
   // its full text, the fixer picker, the per-question busy flags) lives here.
   import { slide } from 'svelte/transition';
+  import { sortByWaiting } from '$lib/office/question-age.js';
   import { quintOut } from 'svelte/easing';
   import { rpcOrCall } from '$lib/ws.js';
   import { isLlmConfigError, LLM_SETTINGS_HREF } from '$lib/llm-error.js';
@@ -20,7 +21,7 @@
   import { confirm as confirmDialog } from '$shared/feedback';
   import { groupReports, reportKey, plainPreview, type ReportGroup } from '$lib/office/report-groups.js';
   import OfficeQuestionCard from './OfficeQuestionCard.svelte';
-  import QuestionList from './QuestionList.svelte';
+  import QuestionAgeGroups from './QuestionAgeGroups.svelte';
   import FailureGroupCard from './FailureGroupCard.svelte';
   import KernlBugsTab from './KernlBugsTab.svelte';
   import { bugsApi } from '$lib/kernl-bugs.js';
@@ -73,7 +74,6 @@
   export let onOutputClick: (e: MouseEvent) => void;
   /** "Go to agent desk": select the agent, then fly the camera to it. */
   export let selectAgent: (id: string) => void;
-  export let focusAgent: () => void;
   /** The backlog or the questions are still loading: show a skeleton, never
    *  "all clear" — an empty list before the data arrives is not good news. */
   export let loading = false;
@@ -258,6 +258,9 @@
     for (const it of items) await sendChoice(it.q, it.choice);
   }
   $: openQuestions = [...owedQuestions, ...pendingQuestions];
+
+  /** The overview strip shows the two newest, not the two the kernel listed first. */
+  $: pendingNewest = sortByWaiting(pendingQuestions);
   const markDone = (q: PendingQuestion, note: string) =>
     sendChoice(q, { kind: 'done', ...(note.trim() ? { note: note.trim() } : {}) });
   async function dismissQuestion(q: PendingQuestion) {
@@ -477,7 +480,6 @@
     selectAgent(openReport.agentId);
     showMyOfficePanel = false;
     openReport = null;
-    focusAgent();
   }
 </script>
 
@@ -512,7 +514,7 @@
             {$t('office.chief.talk')}
           </button>
           <button class="mo-btn mo-btn-primary" type="button" title={$t('office.chief.open_agent_title')}
-                  on:click={() => { selectAgent(chief.id); showMyOfficePanel = false; focusAgent(); }}>
+                  on:click={() => { selectAgent(chief.id); showMyOfficePanel = false; }}>
             {$t('office.chief.open_agent')} →
           </button>
         {/if}
@@ -595,7 +597,7 @@
             {/if}
           </div>
           <div class="bq-list">
-            {#each pendingQuestions.slice(0, 2) as q (q.id)}
+            {#each pendingNewest.slice(0, 2) as q (q.id)}
               <OfficeQuestionCard {q} agentName={agentNameOf(q.from_agent_id)} color={flowColor(q.from_agent_id)}
                                   busy={!!questionSubmitting[q.id]}
                                   onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree}
@@ -650,19 +652,8 @@
         {/if}
 
       {:else if myOfficeTab === 'questions'}
-        <!-- ═══ QUESTIONS ═══ -->
-        {#if owedQuestions.length > 0}
-          <div class="or-section">
-            <span class="or-section-title or-section-q">{$t('office.chief.owed_title', { n: String(owedQuestions.length) })}</span>
-          </div>
-          <div class="bq-list">
-            <QuestionList questions={owedQuestions} open={openQuestions} nameOf={agentNameOf} colorOf={flowColor}
-                          busy={questionSubmitting} send={sendChoice}
-                          onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree}
-                          onTake={takeIt} onDone={markDone} />
-          </div>
-        {/if}
-        {#if loading && pendingQuestions.length === 0}
+        <!-- ═══ QUESTIONS, newest first, grouped by how long they have waited ═══ -->
+        {#if loading && openQuestions.length === 0}
           <div class="mo-skel" role="status" aria-live="polite" aria-label={$t('office.chief.loading')}>
             <div class="mo-skel-h"><span class="mo-spin" aria-hidden="true"></span>{$t('office.chief.loading')}</div>
             {#each [0, 1, 2] as n (n)}
@@ -673,23 +664,31 @@
               </div>
             {/each}
           </div>
-        {:else if pendingQuestions.length === 0}
-          {#if owedQuestions.length === 0}<div class="or-empty">{$t('office.chief.no_questions')}</div>{/if}
+        {:else if openQuestions.length === 0}
+          <div class="or-empty">{$t('office.chief.no_questions')}</div>
           {#if triageCount > 0}
             <div class="or-section-hint mo-center">{$t('office.chief.status_triage', { n: String(triageCount) })}</div>
           {/if}
         {:else}
           <div class="or-section">
-            <span class="or-section-title or-section-q">{$t('office.chief.needs_answer', { n: String(pendingQuestions.length) })}</span>
-            <button class="mo-bulk-btn mo-bulk-dismiss" on:click={() => dismissAllQuestions()} disabled={bulkBusy}>
-              {bulkBusy ? '…' : $t('office.chief.dismiss_all', { n: String(pendingQuestions.length) })}
-            </button>
+            <span class="or-section-title or-section-q">{$t('office.chief.needs_answer', { n: String(openQuestions.length) })}</span>
+            {#if owedQuestions.length > 0}
+              <span class="mo-owed-chip" title={$t('office.q_age.owed_hint')}>{$t('office.chief.owed_title', { n: String(owedQuestions.length) })}</span>
+            {/if}
+            {#if pendingQuestions.length > 0}
+              <button class="mo-bulk-btn mo-bulk-dismiss" on:click={() => dismissAllQuestions()} disabled={bulkBusy}>
+                {bulkBusy ? '…' : $t('office.chief.dismiss_all', { n: String(pendingQuestions.length) })}
+              </button>
+            {/if}
           </div>
-          <div class="bq-list">
-            <QuestionList questions={pendingQuestions} open={openQuestions} nameOf={agentNameOf} colorOf={flowColor}
-                          busy={questionSubmitting} send={sendChoice}
-                          onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree}
-                          onTake={takeIt} onDone={markDone} />
+          {#if triageCount > 0}
+            <div class="or-section-hint mo-age-triage">{$t('office.chief.status_triage', { n: String(triageCount) })}</div>
+          {/if}
+          <div class="mo-age-groups">
+            <QuestionAgeGroups questions={openQuestions} open={openQuestions} nameOf={agentNameOf} colorOf={flowColor}
+                               busy={questionSubmitting} send={sendChoice}
+                               onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree}
+                               onTake={takeIt} onDone={markDone} />
           </div>
         {/if}
         {#if chiefAnswered.length > 0}
@@ -896,7 +895,6 @@
             selectAgent(openReport.agentId);
             showMyOfficePanel = false;
             openReport = null;
-            focusAgent();
           }
         }}>
           {$t('office.chief.go_to_agent')} →
@@ -1122,6 +1120,14 @@
   .or-section-title.or-section-fail{color:#ef5d6e}
   .or-section-title.or-section-q{color:#f0b874}
   .or-section-hint{font:500 9px 'JetBrains Mono',monospace;color:#5a5f7a}
+
+  /* ── Questions grouped by age (QuestionAgeGroups) ── */
+  .mo-owed-chip{
+    font:600 9px 'JetBrains Mono',monospace;color:#f0b874;text-transform:uppercase;letter-spacing:.5px;
+    border:1px solid rgba(240,184,116,.35);border-radius:999px;padding:1px 7px;
+  }
+  .mo-age-triage{padding:2px 14px 0}
+  .mo-age-groups{padding:0 14px 12px}
 
   /* ── Top-agent question cards ─────────────────────── */
   .bq-list{ display:flex; flex-direction:column; gap:10px; padding:0 14px 12px; }  .bq-from-dot{ width:7px; height:7px; border-radius:50%; }

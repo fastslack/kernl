@@ -111,6 +111,17 @@ describe("caller-aware agent tools over the MCP path", () => {
     expect(text(res)).toContain("Acknowledged 1");
   });
 
+  it("inbox_ack takes one id, or a list written as text, and answers plainly when there is none", async () => {
+    const a = mk("Sender");
+    const b = mk("Receiver");
+    const one = service.postToColleague({ from_agent_id: a.id, to_agent_id: b.id, subject: "uno", body: "x" }).message!.id;
+    const two = service.postToColleague({ from_agent_id: a.id, to_agent_id: b.id, subject: "dos", body: "x" }).message!.id;
+    const three = service.postToColleague({ from_agent_id: a.id, to_agent_id: b.id, subject: "tres", body: "x" }).message!.id;
+    expect(text(await callOverMcp("kernel_agents_inbox_ack", { message_id: one }, b.id))).toContain("Acknowledged 1");
+    expect(text(await callOverMcp("kernel_agents_inbox_ack", { message_ids: `${two}, ${three}` }, b.id))).toContain("Acknowledged 2");
+    expect(text(await callOverMcp("kernel_agents_inbox_ack", {}, b.id))).toMatch(/Pass message_ids/);
+  });
+
   it("inbox_ack without any caller errors", async () => {
     const tool = tools.find((t) => t.name === "kernel_agents_inbox_ack")!;
     const res = await tool.handler(tool.inputSchema.parse({ message_ids: ["x"] }) as any);

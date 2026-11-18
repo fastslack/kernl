@@ -71,8 +71,66 @@ export interface WorldHost {
   invalidate(): void;
 }
 
+/**
+ * A plugin building's headline numbers, shown by the core in the page's
+ * header bar next to the building's own (agents, working, runs today) instead
+ * of floating over the canvas. The core draws them; the plugin only says what
+ * they are and republishes when they change.
+ */
+export type WorldStatTone = 'cyan' | 'violet' | 'green' | 'amber' | 'neutral';
+export interface WorldStatMetric {
+  key: string;
+  /** Already formatted (the plugin knows its locale and units). */
+  value: string;
+  label: string;
+  tone?: WorldStatTone;
+  /** Shown in the compact (narrow) layout; the first metric when none is marked. */
+  primary?: boolean;
+  title?: string;
+}
+/** A connector or feed the building depends on. */
+export interface WorldStatStatus {
+  key: string;
+  label: string;
+  state: 'ok' | 'connecting' | 'error' | 'off';
+  /** A number next to the label, e.g. "12"; `stale` when it is the last good value of a failing feed. */
+  value?: string;
+  unit?: string;
+  stale?: boolean;
+  /** Short state word drawn when the state is not ok, e.g. "error". */
+  badge?: string;
+  title?: string;
+}
+export interface WorldStatAction {
+  key: string;
+  label: string;
+  icon?: string;
+  title?: string;
+  /** A toggle that is on. */
+  pressed?: boolean;
+  run(): void;
+}
+export interface WorldStats {
+  title: string;
+  /** A live badge ("EN VIVO") or a demo one; nothing when absent. */
+  badge?: { text: string; tone: 'live' | 'demo' };
+  metrics: WorldStatMetric[];
+  statuses?: WorldStatStatus[];
+  actions?: WorldStatAction[];
+  /** A line instead of the metrics while there is nothing to show yet. */
+  waiting?: string;
+  /** Fly the camera to the building (a click on the stats). */
+  focus?(): void;
+}
+
 export interface WorldMountContext {
   host: WorldHost;
+  /**
+   * Show the building's numbers in the page's header bar (null clears them).
+   * Absent on cores older than this contract: the plugin then draws them on
+   * `overlay` itself.
+   */
+  publishStats?(stats: WorldStats | null): void;
   /** Group to add the building to (removed and disposed by the core on rebuild). */
   target: any;
   site: OffGridSite | null;

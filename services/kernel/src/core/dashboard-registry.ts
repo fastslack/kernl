@@ -68,6 +68,12 @@ export interface DashboardManifest {
    * imports `/ext-assets/<slug>/<entry>?v=<version>` when an office of one of
    * `kinds` exists. Contract: assets/extensions/_shared/world-plugin.ts.
    */
+  /**
+   * Result renderers of active extensions (`frontend.toolRenderers`): for the named tools, the agent run views (LIVE,
+   * HISTORY) import `/ext-assets/<slug>/<entry>?v=<version>` and call its `export` (default "mountTool") to draw the
+   * call and its result instead of the plain text. Contract: assets/extensions/_shared/tool-renderer.ts.
+   */
+  extToolRenderers: Array<{ slug: string; entry: string; version: string; export: string; tools: string[] }>;
   extWorlds: Array<{
     slug: string;
     entry: string;
@@ -283,6 +289,7 @@ export class DashboardRegistry {
     const agentPanelTabs = [...this.agentPanelTabs];
     const extPages: DashboardManifest["extPages"] = [];
     const extWorlds: DashboardManifest["extWorlds"] = [];
+    const extToolRenderers: DashboardManifest["extToolRenderers"] = [];
 
     if (extensionService) {
       try {
@@ -304,6 +311,7 @@ export class DashboardRegistry {
                   channels?: string[];
                   fullBleed?: boolean;
                 }>;
+                toolRenderers?: Array<{ tools?: string[]; entry?: string; export?: string }>;
                 worlds?: Array<{
                   entry?: string;
                   kinds?: Array<{ id: string; offGrid?: boolean; labels?: Record<string, string> }>;
@@ -359,6 +367,18 @@ export class DashboardRegistry {
                 version: stamp(w.entry.replace(/^frontend\//, "")),
                 kinds: w.kinds.filter((k: { id: string }) => typeof k?.id === "string"),
               });
+            }
+
+            // Tool result renderers (entry relative to frontend/, like pages). A tool another extension already
+            // renders keeps its first renderer.
+            for (const r of frontend.toolRenderers ?? []) {
+              if (!r?.entry || !Array.isArray(r.tools)) continue;
+              const taken = new Set(extToolRenderers.flatMap((x) => x.tools));
+              const tools = r.tools.filter((t): t is string => typeof t === "string" && /^[\w.:-]{1,128}$/.test(t) && !taken.has(t));
+              if (!tools.length) continue;
+              const entry = r.entry.replace(/^frontend\//, "");
+              const exp = typeof r.export === "string" && /^[A-Za-z_$][\w$]{0,63}$/.test(r.export) ? r.export : "mountTool";
+              extToolRenderers.push({ slug: row.slug, entry, version: stamp(entry), export: exp, tools });
             }
 
             // Merge groups (first writer wins — hardcoded and already-seen groups protected).
@@ -434,6 +454,7 @@ export class DashboardRegistry {
       agentPanelTabs,
       extPages,
       extWorlds,
+      extToolRenderers,
     };
   }
 

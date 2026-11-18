@@ -27,7 +27,7 @@ Kernl is a **local-first, self-hosted** personal life management server. Your da
 - **SQLite database**: `./data/kernel.db` (configurable via `SQLITE_PATH`)
 - **Graph**: a local file (`data/graph`, Relate) inside the kernel — or, if you add it, a local Neo4j container. Never cloud
 - **Attachments**: `./data/attachments/` directory
-- **Embeddings**: Computed locally using `Xenova/all-MiniLM-L6-v2` ONNX model (no cloud inference)
+- **Embeddings**: Computed locally by default with the `Xenova/paraphrase-multilingual-MiniLM-L12-v2` ONNX model (no cloud inference). Only if you set `EMBEDDINGS_PROVIDER=auto` and connect a cloud provider that offers embeddings (OpenAI, NVIDIA) is text sent to it for embedding
 
 All data resides on your machine. There is no cloud storage, no remote database, no data replication to external services.
 

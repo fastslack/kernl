@@ -1,6 +1,7 @@
 <script lang="ts">
   import '../app.css';
   import { setExtWorlds } from '$lib/world-plugins.js';
+  import { setExtToolRenderers } from '$lib/tool-renderers.js';
   import { onMount, onDestroy, tick } from 'svelte';
   import { goto, beforeNavigate, afterNavigate } from '$app/navigation';
   import { page } from '$app/stores';
@@ -10,6 +11,8 @@
   import { extPages as extPagesStore, extPagesReady } from '$lib/ext-host.js';
   import { NAV_GROUPS, VIEWS, VIEW_TO_GROUP, SUB_TAB_LABELS, type NavGroup, type NavView } from '$lib/constants.js';
   import { railViewsFor, buildNav, activeTabId } from '$lib/nav.js';
+  import { fetchEdition } from '$lib/edition.js';
+  import { applyNavPrefs, parseNavPrefs, shellNavGroups, EMPTY_NAV_PREFS, NAV_LAYOUT_KEY, SHOW_TOOLS_KEY, type NavPrefs } from '$lib/nav-prefs.js';
   import SideNav from '$lib/components/SideNav.svelte';
   import type { SideNavItem } from '$lib/components/SideNav.svelte';
   import CommandPalette from '$lib/components/CommandPalette.svelte';
@@ -113,7 +116,7 @@
     label: viewLabel(v),
     icon: v.icon,
   }));
-  $: sysGroup = navGroups[navGroups.length - 1];
+  $: sysGroup = navGroups.find((g) => g.id === 'system') ?? navGroups[navGroups.length - 1];
 
   // ── Nav labels ──────────────────────────────────────────────────
   // Group and view labels arrive from manifests as plain English strings —
@@ -191,19 +194,28 @@
 
   // Re-subscribe page channels when WS (re)connects
   onWsConnected(() => subscribePageChannels());
-  // Tools is hidden from the sidebar unless Settings → General turns it on
-  // (DASHBOARD_SHOW_TOOLS_MENU). Its pages still open by URL.
+  // Settings → General → Menu: which groups show at the top of the sidebar and
+  // in what order (DASHBOARD_NAV_LAYOUT). Tools is hidden unless turned on
+  // (DASHBOARD_SHOW_TOOLS_MENU). A hidden group's pages still open by URL.
   let showToolsMenu = false;
+  let navPrefs: NavPrefs = EMPTY_NAV_PREFS;
+  let editionHidden: string[] = [];
   async function loadShellPrefs() {
+    // The edition hides the other audience's menus by default (Personal / Empresa).
+    fetchEdition().then((s) => { editionHidden = s.hiddenGroups ?? []; }).catch(() => { /* older kernel: none */ });
     try {
       const res = await fetch('/api/settings/catalog');
       if (!res.ok) return;
       const data = await res.json();
-      const item = (data?.settings ?? []).find((s: { key: string }) => s.key === 'DASHBOARD_SHOW_TOOLS_MENU');
-      showToolsMenu = item?.value === 'true';
+      const value = (key: string) =>
+        (data?.settings ?? []).find((s: { key: string }) => s.key === key)?.value as string | undefined;
+      showToolsMenu = value(SHOW_TOOLS_KEY) === 'true';
+      navPrefs = parseNavPrefs(value(NAV_LAYOUT_KEY));
     } catch { /* offline: keep the default */ }
   }
-  $: mainGroups = navGroups.slice(0, -1).filter((g) => g.id !== 'tools' || showToolsMenu);
+  $: topGroups = navGroups.filter((g) => g !== sysGroup);
+  $: shellNavGroups.set(topGroups.map((g) => ({ id: g.id, label: groupLabel(g), icon: g.icon })));
+  $: mainGroups = applyNavPrefs(topGroups, navPrefs, editionHidden).filter((g) => g.id !== 'tools' || showToolsMenu);
 
   // Items may declare a `path` override (absolute URL, possibly with query
   // string). When present, we navigate there instead of the implicit `/${id}`.
@@ -464,6 +476,7 @@
     refreshManifest();
     void loadShellPrefs();
     window.addEventListener('settings:saved', loadShellPrefs);
+    window.addEventListener('edition:changed', loadShellPrefs);
     // Re-apply the manifest whenever an extension is enabled/disabled/uninstalled.
     // The /extensions page dispatches this event after each mutation.
     onManifestChangeRef = () => refreshManifest();
@@ -494,7 +507,10 @@
     if (typeof window !== 'undefined' && onManifestChangeRef) {
       window.removeEventListener('manifest:refresh', onManifestChangeRef);
     }
-    if (typeof window !== 'undefined') window.removeEventListener('settings:saved', loadShellPrefs);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('settings:saved', loadShellPrefs);
+      window.removeEventListener('edition:changed', loadShellPrefs);
+    }
     musicBridgeDispose?.();
   });
   // Non-reactive reference so onDestroy can reach the handler.
@@ -550,6 +566,7 @@
     // 4. Publish extension page bundles for the [...ext] host route.
     extPagesStore.set(Array.isArray(m.extPages) ? m.extPages : []);
     setExtWorlds(m.extWorlds);
+    setExtToolRenderers(m.extToolRenderers);
     extPagesReady.set(true);
 
     navGroups = nav.navGroups;

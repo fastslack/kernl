@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdir, writeFile, rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { gunzipSync } from "node:zlib";
 import {
   packBundle,
   unpackBundle,
@@ -49,7 +51,34 @@ afterAll(async () => {
   await rm(workRoot, { recursive: true, force: true }).catch(() => {});
 });
 
+/** Member names straight from the tar headers — macOS's own tar hides `._*` when listing. */
+function rawMembers(archive: Buffer): string[] {
+  const tar = gunzipSync(archive);
+  const names: string[] = [];
+  for (let off = 0; off + 512 <= tar.length; ) {
+    const name = tar.subarray(off, off + 100).toString("utf8").replace(/\0.*$/s, "");
+    if (!name) break;
+    const size = parseInt(tar.subarray(off + 124, off + 136).toString("utf8").replace(/\0.*$/s, "").trim() || "0", 8);
+    names.push(name);
+    off += 512 + Math.ceil(size / 512) * 512;
+  }
+  return names;
+}
+
 describe("bundle pack/unpack", () => {
+  it.skipIf(process.platform !== "darwin")("packs no AppleDouble ._ members on macOS (GNU tar would extract them)", async () => {
+    const dir = join(workRoot, "xattr-src");
+    await mkdir(join(dir, "backend"), { recursive: true });
+    await writeFile(join(dir, "extension.json"), JSON.stringify(minimalManifest, null, 2));
+    await writeFile(join(dir, "backend/index.js"), "export {};\n");
+    execFileSync("xattr", ["-w", "com.kernl.test", "1", join(dir, "backend/index.js")]);
+    const out = join(workRoot, "xattr.kernl");
+    await packBundle(dir, out);
+    const names = rawMembers(await readFile(out));
+    expect(names.some((n) => n.endsWith("index.js"))).toBe(true);
+    expect(names.filter((n) => n.split("/").pop()!.startsWith("._"))).toEqual([]);
+  });
+
   it("packs a valid source dir and stamps sha256", async () => {
     const bundlePath = join(workRoot, "sample.kernlext");
     const { sha256, sizeBytes } = await packBundle(staging, bundlePath);
