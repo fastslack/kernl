@@ -116,6 +116,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`kernel_agents_inbox_ack` takes one id or a list written as text**,
   instead of failing and leaving the letter unacked.
 
+### Security
+
+- **Three kernel dependencies move past their open CVEs:** protobufjs 7.6.6
+  (CVE-2026-41242 and five more), tar 7.5.23 (CVE-2026-59873 and four more)
+  and proxy-addr 2.0.8 (CVE-2026-90711). The kernel never sets `trust proxy`,
+  so the proxy-addr one had nothing to exploit here.
+
 ## [0.5.1] - 2026-11-13
 
 ### Upgrading from 0.5.0
