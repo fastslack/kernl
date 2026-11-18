@@ -33,9 +33,9 @@
 cask "kernl" do
   arch arm: "arm64", intel: "x64"
 
-  version "0.5.1"
-  sha256 arm:   "35d49db9fc4125d7c132b9a55fccf59119ac370e2685500bb175015381526764",
-         intel: "f7a987dbe1e6d32fb21915a624f41cea93ca969a5400810e12e1bf2c46edf42e"
+  version "0.5.2"
+  sha256 arm:   "1e3c720635f7814dc7b3e048356f8630bbe8cdce055d5519ee61bc7c83259317",
+         intel: "807423e7b58a6ab7ef2b80fe0ac668dcd93fba7ff3e338cc63b179fcccdb66fa"
 
   # Through lifekernl.com, which counts the download (?ref=homebrew) and
   # redirects to the same .dmg on GitHub; the sha256 above is still checked
