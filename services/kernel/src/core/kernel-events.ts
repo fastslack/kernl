@@ -299,6 +299,11 @@ export interface KernelEvents {
   // Reminders module
   "reminder.fired": { reminder: ReminderRecord };
 
+  /** A provider was connected, reconfigured or removed, or a Claude account
+   *  changed. Anyone holding its own provider map rebuilds it now: one built
+   *  at boot keeps a provider connected later as unavailable. */
+  "llm.providers.changed": { reason: string };
+
   // Agents module
   "agent.run.started": AgentRunPayload;
   "agent.run.completed": AgentRunPayload & { durationMs: number; success: boolean };

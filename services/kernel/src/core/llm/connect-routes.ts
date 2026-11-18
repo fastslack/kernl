@@ -335,9 +335,17 @@ export function registerConnectRoutes(server: KernelHttpServer, deps: ConnectDep
 
   server.route<{ links?: unknown }>("PUT", "/api/llm/chain", ({ body }) => {
     if (!Array.isArray(body.links)) throw new HttpError(400, "links must be an array");
+    // One provider may appear more than once, each time with another model
+    // (backups within NVIDIA); the same provider+model twice is one link.
+    const seen = new Set<string>();
     const links = body.links.map((l) => {
       const o = (l && typeof l === "object" ? l : {}) as Record<string, unknown>;
-      return { provider: canonicalSlug(String(o.provider ?? "")), model: String(o.model ?? "") };
+      return { provider: canonicalSlug(String(o.provider ?? "")), model: String(o.model ?? "").trim() };
+    }).filter((l) => {
+      const key = `${l.provider}::${l.model}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     });
     if (links.some((l) => !getCatalogEntry(l.provider))) throw new HttpError(400, "unknown provider in chain");
     deps.setChain(links);

@@ -256,6 +256,17 @@ export function createAgentAdvancedModule(): AgentAdvancedModule {
       reflectionOptimizer.setConfig(ctx.config);
       agentsModule.registerReflectionOptimizer(reflectionOptimizer);
 
+      // The map above is a boot-time snapshot: adapters read their keys when
+      // built. A provider connected afterwards stayed unavailable here — a
+      // NVIDIA-only install kept grading every run on a logged-out Claude Code
+      // while its agents already ran on NVIDIA — until the next restart.
+      ctx.events.on("llm.providers.changed", () => {
+        const fresh = createChatProviders({ claudeCode: ctx.config.claudeCode });
+        evalService.setProviders(fresh, evalProvider, evalModel);
+        meetingExecutor.setProviders(fresh, defaultProvider);
+        reflectionOptimizer.setProviders(fresh, evalProvider);
+      });
+
       // ── Office structure seeders ──
       // These ran historically inside the bootstrap `wireServices` stage; we
       // own them now. Order matters: reorg first so later seeders see the

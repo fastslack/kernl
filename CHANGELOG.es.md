@@ -92,6 +92,11 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 - **Los menús de la barra lateral se pueden ordenar y ocultar** en Ajustes →
   General → Menú. Chat y Sistema quedan abajo, y elegir Personal o Negocio
   solo oculta menús en vez de apagar extensiones.
+- **Modelos de respaldo dentro de un mismo proveedor.** En Ajustes → IA,
+  "+ Modelo" en un proveedor agrega otro de sus modelos como respaldo
+  ("respaldo 1", "respaldo 2"), con Quitar y Reordenar como cualquier otro
+  eslabón. Hasta ahora solo Claude Code aceptaba más de uno, así que una
+  instalación solo con NVIDIA no tenía ningún respaldo.
 
 ### Cambiado
 
@@ -123,6 +128,13 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 - **El proveedor de embeddings elegido en Ajustes sobrevive a un reinicio.**
 - **`kernel_agents_inbox_ack` acepta un id o una lista escrita como texto**,
   en vez de fallar y dejar la carta sin confirmar.
+- **Conectar un proveedor llega a agent-advanced sin reiniciar.** La
+  autoevaluación, las reuniones y la reflexión se quedaban con los proveedores
+  que encontraban al arrancar, así que en una instalación solo con NVIDIA cada
+  evaluación seguía yendo a un Claude Code sin sesión y fallaba hasta el
+  próximo reinicio.
+- **El chat usa todos los modelos de respaldo de un proveedor.** Se quedaba
+  con el primer modelo de cada proveedor de la cadena y salteaba el resto.
 
 ### Seguridad
 

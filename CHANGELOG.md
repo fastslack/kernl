@@ -86,6 +86,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The sidebar menus can be ordered and hidden** in Settings → General →
   Menu. Chat and System stay at the bottom, and choosing Personal or Business
   only hides menus instead of turning extensions off.
+- **Backup models within one provider.** In Settings → AI, "+ Model" on a
+  provider adds another of its models as a fallback ("backup 1", "backup
+  2"), with Remove and Reorder like any other link. Until now only Claude
+  Code took more than one, so a setup with only NVIDIA had no backup at all.
 
 ### Changed
 
@@ -115,6 +119,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The embeddings provider picked in Settings survives a restart.**
 - **`kernel_agents_inbox_ack` takes one id or a list written as text**,
   instead of failing and leaving the letter unacked.
+- **Connecting a provider reaches agent-advanced without a restart.**
+  Auto-evaluation, meetings and reflection kept the providers they found at
+  boot, so on an install with only NVIDIA every evaluation still went to a
+  signed-out Claude Code and failed until the next restart.
+- **The chat uses every backup model of a provider.** It kept only the first
+  model of each provider in the chain and skipped the rest.
 
 ### Security
 

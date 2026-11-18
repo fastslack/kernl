@@ -6,7 +6,7 @@
  */
 
 import { modelIds } from "./llm-models.js";
-import type { ClaudeAccount } from "./claude-accounts.js";
+import type { ClaudeAccount, ConnectionLine } from "./claude-accounts.js";
 
 export type ErrorCode = "auth" | "quota" | "model" | "timeout" | "no_tools" | "unreachable" | "no_session" | "network" | "unknown";
 export type Group = "free" | "local" | "paid" | "subscription";
@@ -285,4 +285,65 @@ export function connectionRows(providers: CatalogProvider[], chain: ChainLink[])
     .map((p, i) => ({ p, i }))
     .sort((a, b) => rank(a.p.slug) - rank(b.p.slug) || a.i - b.i)
     .map((x) => x.p);
+}
+
+/**
+ * Backup models within one provider (NVIDIA's model A, then its model B):
+ * every chain link of `slug` after its first, with its place in the chain.
+ * The first link is the provider's own row, whose model is `provider.model`.
+ */
+export function extraModelLinks(chain: ChainLink[], slug: string): Array<{ model: string; index: number }> {
+  const out: Array<{ model: string; index: number }> = [];
+  let first = true;
+  chain.forEach((l, index) => {
+    if (l.provider !== slug) return;
+    if (first) { first = false; return; }
+    out.push({ model: l.model, index });
+  });
+  return out;
+}
+
+/**
+ * Adds `model` of `slug` as a backup, right after that provider's last link,
+ * so a provider's models stay together and the order of the others is kept.
+ * Unchanged when the model is empty or already in the chain for that provider
+ * (`current` is the model of the provider's first link when it names none).
+ */
+export function addModelLink(chain: ChainLink[], slug: string, model: string, current = ""): ChainLink[] {
+  const out = chain.map((l) => ({ ...l }));
+  const m = model.trim();
+  if (!m) return out;
+  const mine = out.filter((l) => l.provider === slug);
+  if (mine.some((l, i) => (l.model || (i === 0 ? current : "")) === m)) return out;
+  let at = -1;
+  out.forEach((l, i) => { if (l.provider === slug) at = i; });
+  const link = { provider: slug, model: m };
+  if (at === -1) out.push(link);
+  else out.splice(at + 1, 0, link);
+  return out;
+}
+
+/** Drops the link at `index`; out of range returns an unchanged copy. */
+export function removeLinkAt(chain: ChainLink[], index: number): ChainLink[] {
+  return chain.filter((_, i) => i !== index).map((l) => ({ ...l }));
+}
+
+/**
+ * The connection lines with each provider's backup models right below its
+ * last row (after any extra Claude Code accounts). `n` numbers them from 1.
+ */
+export function withBackupModels(lines: ConnectionLine[], chain: ChainLink[]): ConnectionLine[] {
+  const out: ConnectionLine[] = [];
+  lines.forEach((line, i) => {
+    out.push(line);
+    const next = lines[i + 1];
+    if (next && next.provider.slug === line.provider.slug) return;
+    extraModelLinks(chain, line.provider.slug).forEach((b, k) => {
+      out.push({
+        key: `${line.provider.slug}:model:${b.index}`, provider: line.provider, account: null,
+        index: -1, extra: true, multi: false, backup: { ...b, n: k + 1 },
+      });
+    });
+  });
+  return out;
 }
