@@ -232,6 +232,17 @@ BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 git show-ref --verify --quiet "refs/heads/$STABLE_BRANCH" \
   || die "no local $STABLE_BRANCH branch — create it from origin/$STABLE_BRANCH first"
 
+CURRENT="$(current_version)"
+[[ "$CURRENT" != "$VERSION" ]] || die "$PKG is already $VERSION"
+# Sort check rather than a numeric compare so 0.2.10 > 0.2.9 holds.
+[[ "$(printf '%s\n%s\n' "$CURRENT" "$VERSION" | sort -V | tail -1)" == "$VERSION" ]] \
+  || die "$VERSION is older than the current $CURRENT"
+
+git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && die "tag $TAG already exists locally"
+if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
+  die "tag $TAG already exists on the remote"
+fi
+
 # A local stable left behind (0.5.0 found it 360 commits back) would take the
 # release merge on an old base, and its push would be refused. Catch up while
 # it is only behind; stop if it went its own way.
