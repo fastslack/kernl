@@ -297,6 +297,9 @@ export async function initHttpAndMcp(args: {
         reloadLlmClient(config);
         markLlmReadinessStale(why);
         priceRoutes.refreshSoon(why);
+        // Extensions keep their own maps (agent-advanced: eval, meetings,
+        // reflection) and cannot be reached from here.
+        void events.emit("llm.providers.changed", { reason: why }).catch(() => { /* a listener's failure is its own */ });
       };
 
       registerLlmReadinessRoutes(httpServer);
