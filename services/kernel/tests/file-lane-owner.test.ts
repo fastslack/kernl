@@ -19,7 +19,7 @@ function setup() {
   const mac = NostrIdentity.fromEd25519Seed(new Uint8Array(randomBytes(32)));
   friends.add({ npub: mac.npub(), petname: "Mac M4", trust: "trusted" });
   const store = new TransferStore(db);
-  const dataDir = mkdtempSync(join(tmpdir(), "own-"));
+  const dataDir = realpathSync(mkdtempSync(join(tmpdir(), "own-")));
   const receiver = new TransferReceiver({ store, friends, dataDir, freeBytes: () => 1e12 });
   const peer = { post: async () => ({ ok: false, status: 0 }), get: async () => ({ ok: false, status: 0 }), putBinary: async () => ({ ok: false, status: 0 }) };
   const worker = new TransferWorker({ store, peer: peer as never, dataDir });
