@@ -16,7 +16,9 @@
 # Si querés rebuildear todo (kernel + dashboard) en un comando:
 #   `npm run reload:all`
 
-FROM nginx:alpine
+# 1.31.9 or later: fixes the HTTP/2, HTTP/3, resolver and mail-proxy CVEs of
+# 2026-11-18 (CVE-2026-123007, -123633, -123634, -121810, -113425).
+FROM nginx:1.31.9-alpine
 
 # Fallback content por si el volumen no se monta — lleva un index básico.
 RUN mkdir -p /usr/share/nginx/html && \
