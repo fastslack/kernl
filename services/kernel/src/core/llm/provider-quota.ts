@@ -86,6 +86,18 @@ export function markProviderExhausted(providerName: string): void {
   );
 }
 
+/**
+ * Does this error mean the account is out of quota for the day, as opposed to
+ * "slow down"? Only the first earns markProviderExhausted, which benches the
+ * provider until the next UTC day. A bare 429 is a rate limit: provider-health
+ * already backs off from it for seconds to minutes. Treating every 429 as
+ * exhaustion benched NVIDIA all day: one 429 from a probe of a model it lists
+ * but does not serve as chat, a minute after the daily reset.
+ */
+export function isQuotaExhaustion(message: string): boolean {
+  return providerHealth.classifyError(message) === "exhausted";
+}
+
 /** Check if a provider has been marked as quota-exhausted. */
 export function isProviderExhausted(providerName: string): boolean {
   return _quotaExhausted.has(providerName);

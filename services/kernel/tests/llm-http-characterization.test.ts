@@ -455,7 +455,7 @@ describe("ChatOpenAiProvider request", () => {
     });
   });
 
-  it("errors as `<name> API error <status>: <body>`; 402 / 429 / quota mark the provider exhausted", async () => {
+  it("errors as `<name> API error <status>: <body>`; 402 / quota mark the provider exhausted, a bare 429 does not", async () => {
     stubFetch([{ status: 402, body: "pay up" }]);
     const p = new ChatOpenAiProvider("key", "https://api.openai.com/v1", "gpt-4o-mini", "openai");
     await expect(p.chatCompletion([{ role: "user", content: "q" }])).rejects.toThrow("openai API error 402: pay up");
@@ -470,6 +470,17 @@ describe("ChatOpenAiProvider request", () => {
     const n = new ChatOpenAiProvider("key", "https://n.test/v1", "m", "nvidia");
     await expect(n.chatCompletion([{ role: "user", content: "q" }])).rejects.toThrow("nvidia API error 500: plain");
     expect(isProviderExhausted("nvidia")).toBe(false);
+
+    // NVIDIA's rate limit: once benched the whole provider for the day.
+    stubFetch([{ status: 429, body: '{"status":429,"title":"Too Many Requests"}' }]);
+    const r = new ChatOpenAiProvider("key", "https://n.test/v1", "m", "nvidia");
+    await expect(r.chatCompletion([{ role: "user", content: "q" }])).rejects.toThrow("nvidia API error 429");
+    expect(isProviderExhausted("nvidia")).toBe(false);
+
+    stubFetch([{ status: 429, body: "You exceeded your current quota" }]);
+    const q = new ChatOpenAiProvider("key", "https://g.test/v1", "m", "gemini");
+    await expect(q.chatCompletion([{ role: "user", content: "q" }])).rejects.toThrow("gemini API error 429");
+    expect(isProviderExhausted("gemini")).toBe(true);
   });
 });
 
@@ -571,7 +582,7 @@ describe("adapter 429 backoff", () => {
     expect(isProviderExhausted("openai")).toBe(false);
   });
 
-  it("without Retry-After waits 2s then 4s, gives up after 3 attempts and marks exhausted", async () => {
+  it("without Retry-After waits 2s then 4s, gives up after 3 attempts — a rate limit, not exhausted", async () => {
     const seen = stubFetch([{ status: 429, body: "limit" }]);
     const waits: number[] = [];
     const p = new ChatClaudeProvider("k");
@@ -579,7 +590,8 @@ describe("adapter 429 backoff", () => {
     expect(seen).toHaveLength(3);
     expect(waits).toEqual([2000, 4000]);
     expect(delays).toEqual([2000, 4000]);
-    expect(isProviderExhausted("claude")).toBe(true);
+    // A bare 429 backs off in provider-health; only billing benches it for the day.
+    expect(isProviderExhausted("claude")).toBe(false);
   });
 
   it("Retry-After: 0 retries immediately", async () => {

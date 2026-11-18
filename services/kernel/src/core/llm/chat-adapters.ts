@@ -29,6 +29,7 @@ export {
   initProviderStatus,
   markProviderExhausted,
   isProviderExhausted,
+  isQuotaExhaustion,
   clearProviderExhausted,
 } from "./provider-quota.js";
 export { resolveProviderFor, resolveProvider } from "./provider-resolution.js";

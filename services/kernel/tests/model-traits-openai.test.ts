@@ -56,3 +56,13 @@ describe("classifyModel — OpenAI non-chat endpoints", () => {
     });
   }
 });
+
+describe("classifyModel — NVIDIA detectors", () => {
+  // Probed as chat on every boot, it answered 429 and benched NVIDIA for the day.
+  it("keeps nvidia/ai-synthetic-video-detector out of the chat list", () => {
+    expect(classifyModel("nvidia", "nvidia/ai-synthetic-video-detector").chat).toBe(false);
+  });
+  it("still treats Nemotron as chat", () => {
+    expect(classifyModel("nvidia", "nvidia/nemotron-3-ultra-550b-a55b").chat).toBe(true);
+  });
+});
