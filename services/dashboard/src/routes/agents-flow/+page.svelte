@@ -31,6 +31,7 @@
   import { errorMessage } from '$lib/office/office-errors.js';
   import { fetchPanelOffices } from '$lib/panels/client.js';
   import { anchorMap } from '$lib/panels/anchors.js';
+  import { goalBadge } from '$lib/goal-parts.js';
 
   // ── Types ──────────────────────────────────────
   interface AgentData {
@@ -56,7 +57,7 @@
   interface ScheduleData { id: string; agent_id: string; interval_ms: number; cron_expression?: string; active?: number; next_run_at: string; }
   interface RunData {
     id: string; agent_id: string; trigger_type: string;
-    status: string; steps_count: number; tokens_used: number; created_at: string;
+    status: string; steps_count: number; tokens_used: number; created_at: string; goal?: string;
   }
   interface StatsData { total_runs: number; completed: number; failed: number; success_rate: number; }
   interface FlowData {
@@ -279,6 +280,21 @@
   // The Deployer "runs" while a deploy is in flight on the host (approve-fix/batch), even
   // when it isn't a Kernl agent_run → so the 3D world animates it when you deploy.
   $: hostDeployerId = hostDeploying ? (agents.find(a => a.name === 'Deployer')?.id ?? null) : null;
+  // What each working agent is on, for the WORKING list: the goal of its open
+  // run, from the live run_started when this tab saw it, else from the poll.
+  $: workingOn = (() => {
+    const out = new Map<string, { tag: string; title: string }>();
+    for (const e of flowEvents) {
+      const aid = String(e.data.agent_id ?? '');
+      if (e.event !== 'agent:flow:run_started' || !aid || out.has(aid) || !liveRunningAgents.has(aid)) continue;
+      const goal = String(e.data.goal ?? '').trim();
+      if (goal) out.set(aid, goalBadge(goal));
+    }
+    for (const r of runs) {
+      if (r.status === 'running' && r.goal && !out.has(r.agent_id)) out.set(r.agent_id, goalBadge(r.goal));
+    }
+    return out;
+  })();
   $: effectiveRunning = new Set([...runningAgents, ...liveRunningAgents,
       ...(hostResolverId ? [hostResolverId] : []), ...(hostDeployerId ? [hostDeployerId] : [])]);
 
@@ -856,6 +872,7 @@
           {dataError}
           flowEvents={$agentFlowEvents}
           runningAgentIds={effectiveRunning}
+          {workingOn}
           {stats}
           on:refresh={refresh}
           on:officeclick={(e) => openPanel(e.detail.flowId)}

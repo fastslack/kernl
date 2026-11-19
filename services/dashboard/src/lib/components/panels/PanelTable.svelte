@@ -9,6 +9,10 @@
    * A view that declares `actions` gets those buttons on every row (a record action keyed "up:{{key}}" shows as
    * an arrow), and one that declares `action` lets rows be dragged; the drop runs it with { key, pos }. The new
    * order shows at once and holds until the office's data catches up with it.
+   *
+   * A row that carries an `agent` (who is working it right now) says so without the view listing the field: a
+   * chip with the agent's name in the row's name column, the row lit, and a "working now" strip above the table
+   * with one chip per agent → row. Empty `agent` means nobody is on it.
    */
   import { createEventDispatcher } from 'svelte';
   import { locale } from '$lib/i18n/index.js';
@@ -90,6 +94,10 @@
   const isOn = (f: Filter, g: Filter) => JSON.stringify(f) === JSON.stringify(g);
   function toggle(g: Filter) { filter = isOn(filter, g) ? null : g; }
 
+  // Who works what right now (see the header comment): only when the view does not show `agent` as a column.
+  $: showAgent = !fields.some((f) => f.key === 'agent');
+  $: busyRows = showAgent ? ordered.filter((r) => cell(r.agent) !== '') : [];
+
   const open = (r: Record<string, unknown>) => view.detail && dispatch('open', String(r.key ?? ''));
   // The wide column is the row's name: the field with a second line (sub), else the first one that is not a number.
   // 28/10: a leading position number (#) took 26% of an office's queue while the issue's name was cut off.
@@ -129,6 +137,17 @@
   </div>
 {/if}
 
+{#if busyRows.length}
+  <div class="pt-now" role="group" aria-label={en ? 'Working now' : 'Trabajando ahora'}>
+    <span class="pt-now-h"><i aria-hidden="true"></i>{en ? 'Working now' : 'Trabajando ahora'}</span>
+    {#each busyRows as r (r.key)}
+      <button type="button" class="pt-now-i" title={`${cell(r.agent)} → ${cell(r.key)}${cell(r.title) ? ' · ' + cell(r.title) : ''}`} on:click={() => open(r)}>
+        <span class="pt-now-a">{cell(r.agent)}</span><span aria-hidden="true">→</span><b>{cell(r.key)}</b>
+      </button>
+    {/each}
+  </div>
+{/if}
+
 {#if moveMsg}<div class="pt-movemsg" role="alert">{moveMsg}</div>{/if}
 <div class="pt-wrap">
   <table class="pt" class:pt--open={!!view.detail}>
@@ -139,6 +158,7 @@
         <tr tabindex="0" on:click={() => open(r)} on:keydown={(e) => e.key === 'Enter' && open(r)}
           class:pt-dragging={dragKey === String(r.key ?? '')} class:pt-over={overKey === String(r.key ?? '') && dragKey !== overKey}
           class:pt-busy={busyKey === String(r.key ?? '')}
+          class:pt-worked={showAgent && cell(r.agent) !== ''}
           draggable={canDrag}
           on:dragstart={(e) => { dragKey = String(r.key ?? ''); e.dataTransfer?.setData('text/plain', dragKey); }}
           on:dragover|preventDefault={() => { if (dragKey) overKey = String(r.key ?? ''); }}
@@ -165,6 +185,9 @@
                   <span class="pt-num" class:pt-num--zero={Number(text) === 0}>{text}</span>
                 {:else}
                   {text}
+                {/if}
+                {#if showAgent && f.key === mainKey && cell(r.agent)}
+                  <span class="pt-agent" title={en ? 'Working on it now' : 'Lo está trabajando ahora'}><i aria-hidden="true"></i>{cell(r.agent)}</span>
                 {/if}
               </div>
               {#if sub}
@@ -266,11 +289,29 @@
   .pt tbody tr.pt-dragging { opacity: .45; }
   .pt tbody tr.pt-over { box-shadow: inset 0 2px 0 #22D3EE; }
   .pt tbody tr.pt-busy { opacity: .7; }
+  /* Who works what right now. */
+  .pt-now { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; padding: 7px 10px; border-radius: 10px;
+    background: color-mix(in srgb, #34D399 7%, var(--surface-1)); border: 1px solid color-mix(in srgb, #34D399 30%, var(--border)); }
+  .pt-now-h { display: inline-flex; align-items: center; gap: 6px; margin-right: 4px; font: 800 9.5px 'Manrope', sans-serif;
+    text-transform: uppercase; letter-spacing: .06em; color: #34D399; }
+  .pt-now-h i, .pt-agent i { width: 7px; height: 7px; border-radius: 50%; background: #34D399; box-shadow: 0 0 8px #34D399; animation: pt-pulse 1.6s ease-in-out infinite; flex: none; }
+  .pt-now-i { display: inline-flex; align-items: center; gap: 5px; min-height: 26px; padding: 0 10px; border-radius: 999px; cursor: pointer;
+    font: 600 11px 'Manrope', sans-serif; color: var(--text-2); background: var(--surface-2); border: 1px solid color-mix(in srgb, #34D399 35%, var(--border));
+    transition: background .15s, border-color .15s; max-width: 100%; }
+  .pt-now-i:hover { background: color-mix(in srgb, #34D399 14%, var(--surface-2)); border-color: #34D399; }
+  .pt-now-i:focus-visible { outline: 2px solid #34D399; outline-offset: 2px; }
+  .pt-now-a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--text-1); }
+  .pt-now-i b { font: 800 11px 'JetBrains Mono', monospace; color: #34D399; white-space: nowrap; }
+  .pt-agent { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; padding: 1px 8px; border-radius: 999px; vertical-align: 1px;
+    font: 700 10px 'Manrope', sans-serif; color: #a7f3d0; background: color-mix(in srgb, #34D399 14%, transparent); border: 1px solid color-mix(in srgb, #34D399 40%, transparent); }
+  .pt tbody tr.pt-worked { background: linear-gradient(90deg, color-mix(in srgb, #34D399 9%, transparent), transparent 60%); box-shadow: inset 3px 0 0 #34D399; }
+  @keyframes pt-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
   .pt-movemsg { margin-top: 8px; padding: 6px 10px; border-radius: 8px; font: 600 11.5px 'Manrope', sans-serif; color: #fecdd3; background: rgba(244,63,94,.12); border: 1px solid rgba(244,63,94,.35); }
   .pt-empty { text-align: center; padding: 28px 10px !important; color: var(--text-3) !important; }
   .pt-empty :global(svg) { display: block; margin: 0 auto 6px; color: #A78BFA; }
   @media (prefers-reduced-motion: reduce) {
     .pt tbody tr, .pt-q, .pt-facet { transition: none; }
     .pt-facet:hover { transform: none; }
+    .pt-now-h i, .pt-agent i { animation: none; }
   }
 </style>

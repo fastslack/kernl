@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { goalParts, extractJsonObject } from "./goal-parts.js";
+import { goalParts, extractJsonObject, goalBadge } from "./goal-parts.js";
 import { liveEventDetail } from "./live-event-detail.js";
 import { liveStepSummary, liveStepTags, liveStepCategory } from "./live-steps.js";
 
@@ -19,6 +19,11 @@ describe("goalParts", () => {
 
   it("finds a bare object too", () => {
     expect(extractJsonObject('do this {"a":1,"b":"x"} then')?.data).toEqual({ a: 1, b: "x" });
+  });
+
+  it("fits a chip: first two fields and the title", () => {
+    expect(goalBadge(GOAL)).toEqual({ tag: "web #42", title: "Fix the login button" });
+    expect(goalBadge("ship it")).toEqual({ tag: "", title: "ship it" });
   });
 
   it("leaves a plain goal alone", () => {

@@ -110,3 +110,12 @@ export function goalParts(goal: string): GoalParts {
   }
   return { title: ellipsize(title, 200), tags, data, prose };
 }
+
+/**
+ * What a run is about, in a chip's room: its input's first two short fields
+ * ("web #2903") and its title. `tag` is empty for a goal with no JSON input.
+ */
+export function goalBadge(goal: string): { tag: string; title: string } {
+  const g = goalParts(goal);
+  return { tag: g.tags.slice(0, 2).map((t) => t.v).join(' '), title: g.title };
+}
