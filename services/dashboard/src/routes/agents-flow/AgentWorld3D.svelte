@@ -86,6 +86,8 @@
     CoordInfo, ActiveCoord, MeetingChatLine,
   } from './world-types.js';
   import CoordinationCard from './CoordinationCard.svelte';
+  import WorkingHud, { type WorkingItem } from './WorkingHud.svelte';
+  import { liveEventType, liveStepIcon, liveStepLabel, liveStepSummary, runTokensTotal } from '$lib/live-steps.js';
 
   export let agents: WorldAgent[] = [];
   export let chains: WorldChain[] = [];
@@ -1321,6 +1323,30 @@
   }
 
   function flowColor(aid: string) { return resolveFlowColor(aid, agents, flows); }
+  // The WORKING list: every running agent, with the issue its run names as a chip or, without one, what it does.
+  $: hudItems = [...runningAgentIds].flatMap((rid): WorkingItem[] => {
+    const a = agents.find((x) => x.id === rid);
+    if (!a) return [];
+    const on = workingOn.get(rid);
+    // Its current run, from the live buffer (newest first): the newest event's run, all of it.
+    const mine = flowEvents.filter((e) => e.data.agent_id === rid);
+    const runId = mine.find((e) => e.data.run_id)?.data.run_id;
+    const run = runId ? mine.filter((e) => e.data.run_id === runId) : mine;
+    const started = run.find((e) => liveEventType(e) === 'run_started') ?? run[run.length - 1];
+    const newest = run[0];
+    const flow = flows.find((f) => f.id === a.flow_id);
+    const exec = a.executor_type === 'claude_code' ? 'Claude Code' : a.provider || '';
+    return [{
+      id: rid, name: a.name, color: flowColor(rid),
+      tag: on?.tag || undefined, text: on && !on.tag ? on.title : undefined, title: on?.tag ? on.title : undefined,
+      office: flow?.name, officeColor: flow?.color,
+      model: [exec, a.model].filter(Boolean).join(' · ') || undefined,
+      startedAt: started?.ts,
+      last: newest ? { icon: liveStepIcon(liveEventType(newest)), label: liveStepLabel(liveEventType(newest)), text: liveStepSummary(newest), at: newest.ts } : undefined,
+      tools: run.filter((e) => liveEventType(e) === 'tool_call').length,
+      tokens: runTokensTotal(run),
+    }];
+  });
 
   // ── Delivery glue ─────────────────────────────────────────────
   // Patterns that mark a flow as "inbound" — external transports whose agents
@@ -5230,19 +5256,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     on:timemachine
   />
 
-  {#if runningAgentIds.size > 0}
-    <div class="hud">
-      <div class="hud-t"><span class="hud-p"></span> WORKING</div>
-      {#each [...runningAgentIds] as rid}
-        {@const a = agents.find(x => x.id === rid)}
-        {@const on = workingOn.get(rid)}
-        {#if a}<div class="hud-i" on:click={() => { selectedAgent = rid; }} on:keydown role="button" tabindex="0" title={on ? `${a.name} — ${on.tag ? on.tag + ' · ' : ''}${on.title}` : a.name}>
-          <span class="hud-d" style="background:{flowColor(rid)}"></span><span class="hud-n">{a.name}</span>
-          {#if on}<span class="hud-on" class:hud-on--txt={!on.tag}>{on.tag || on.title}</span>{/if}
-        </div>{/if}
-      {/each}
-    </div>
-  {/if}
+  <WorkingHud items={hudItems} on:select={(e) => { selectedAgent = e.detail; }} />
 
   <!-- Draft preview modal — see DraftModal.svelte. handleOutputClick opens
        it when a UUID chip in any run output is clicked. -->
@@ -5274,19 +5288,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     box-shadow:0 6px 18px rgba(0,0,0,.45);transition:border-color .15s,color .15s}
   .construction-skip:hover{color:#ffe7a8;border-color:#f2b705}
   .construction-skip:focus-visible{outline:2px solid #f2b705;outline-offset:2px}
-  .hud{position:absolute;bottom:12px;left:12px;background:rgba(14,16,24,.9);backdrop-filter:blur(12px);border:1px solid rgba(16,185,129,.2);border-radius:10px;padding:10px 14px;z-index:10}
-  .hud-t{display:flex;align-items:center;gap:6px;font:700 8px 'Syne',sans-serif;color:var(--green,#3dd68c);letter-spacing:1.5px;margin-bottom:6px}
-  .hud-p{width:6px;height:6px;border-radius:50%;background:var(--green,#3dd68c);animation:p 1.5s ease-in-out infinite}
-  @keyframes p{0%,100%{opacity:1;box-shadow:0 0 4px var(--green)}50%{opacity:.5;box-shadow:0 0 8px var(--green)}}
-  .hud-i{display:flex;align-items:center;gap:6px;font:500 10px 'Manrope',sans-serif;color:var(--text-2);padding:3px 0;cursor:pointer;transition:color .15s}
-  .hud-i:hover{color:var(--text-1)}
-  .hud-d{width:6px;height:6px;border-radius:50%;flex-shrink:0}
-  .hud{max-width:min(420px,calc(100% - 24px))}
-  .hud-n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-  /* What the agent is on: the issue as a chip, so the list reads "who → what" at a glance. */
-  .hud-on{margin-left:auto;flex-shrink:0;padding:1px 7px;border-radius:999px;white-space:nowrap;
-    font:700 9.5px 'JetBrains Mono',monospace;color:#9de8c0;background:rgba(61,214,140,.12);border:1px solid rgba(61,214,140,.3)}
-  .hud-on--txt{flex-shrink:1;min-width:0;max-width:180px;overflow:hidden;text-overflow:ellipsis;font:600 9.5px 'Manrope',sans-serif;color:#a8b0c8;background:rgba(120,130,160,.1);border-color:rgba(120,130,160,.22)}
 
   /* ── Markdown output (run.result / step.content) ──
      Global, so it styles every `.ip-out-md` pane — the drawer's, My Office's
