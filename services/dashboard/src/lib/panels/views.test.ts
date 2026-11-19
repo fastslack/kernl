@@ -18,4 +18,10 @@ describe("panel views", () => {
     expect(firstView(spec, null)).toBe("issues");
     expect(firstView({ ...spec, views: [] }, null)).toBeNull();
   });
+  it("puts the work queue (a table the operator reorders) first, and opens it", () => {
+    const withQueue = { ...spec, views: [...spec.views, { id: "orden", title: "Orden", component: "table" as const, data: "c:$", action: "mover" }] };
+    expect(tabViews(withQueue).map((v) => v.id)).toEqual(["orden", "issues", "vigia"]);
+    expect(firstView(withQueue, null)).toBe("orden");
+    expect(firstView(withQueue, "issues")).toBe("issues");
+  });
 });
