@@ -14,7 +14,8 @@
    * same table, with the agent's name under the row's name; the rest follow under "queued". Same columns, one
    * header, nothing listed twice. Empty `agent` means nobody is on it.
    *
-   * The search and the quick filters share one bar, so the rows start right under it.
+   * The search and the quick filters share one bar, so the rows start right under it: the filters are one list
+   * (a state and its count per option), not a row of chips that grows with every state.
    */
   import { createEventDispatcher } from 'svelte';
   import { locale } from '$lib/i18n/index.js';
@@ -93,8 +94,12 @@
   }
 
   $: shown = ordered.filter((r) => matches(r, filter) && (!q || JSON.stringify(r).toLowerCase().includes(q.toLowerCase())));
-  const isOn = (f: Filter, g: Filter) => JSON.stringify(f) === JSON.stringify(g);
-  function toggle(g: Filter) { filter = isOn(filter, g) ? null : g; }
+  // The filter list's value: '' for everything, else the filter as JSON (one option per state, plus "no email").
+  $: filterValue = filter ? JSON.stringify(filter) : '';
+  function pick(e: Event) {
+    const v = (e.currentTarget as HTMLSelectElement).value;
+    filter = v ? (JSON.parse(v) as Filter) : null;
+  }
 
   // Who works what right now (see the header comment): only when the view does not show `agent` as a column.
   $: showAgent = !fields.some((f) => f.key === 'agent');
@@ -123,25 +128,24 @@
     <span class="pt-n" title={en ? 'Rows shown' : 'Filas a la vista'}>{shown.length}{#if shown.length !== rows.length}<small>/{rows.length}</small>{/if}</span>
   </label>
   {#if facets.length || noEmail}
-    <div class="pt-facets" role="group" aria-label={en ? 'Quick filters' : 'Filtros rápidos'}>
-      {#each facets as fc (fc.key)}
-        {#each fc.values as [v, n] (v)}
-          {@const g = { key: fc.key, value: v }}
-          <button type="button" class="pt-facet" class:on={isOn(filter, g)} aria-pressed={isOn(filter, g)} style="--tone:{tone(v)}" on:click={() => toggle(g)}>
-            <i aria-hidden="true"></i>{v}<b>{n}</b>
-          </button>
+    <label class="pt-filter" class:on={!!filter} style="--tone:{filter && 'value' in filter ? tone(filter.value) : filter ? RED : '#A78BFA'}">
+      <i aria-hidden="true"></i>
+      <select value={filterValue} on:change={pick} aria-label={en ? 'Filter' : 'Filtrar'}>
+        <option value="">{en ? 'All' : 'Todos'} · {rows.length}</option>
+        {#each facets as fc (fc.key)}
+          {#if facets.length > 1}<option disabled>── {humanize(fc.key)}</option>{/if}
+          {#each fc.values as [v, n] (v)}
+            <option value={JSON.stringify({ key: fc.key, value: v })}>{v.replace(/_/g, ' ')} · {n}</option>
+          {/each}
         {/each}
-      {/each}
-      {#if noEmail && emailField}
-        {@const g = { missing: emailField.key }}
-        <button type="button" class="pt-facet" class:on={isOn(filter, g)} aria-pressed={isOn(filter, g)} style="--tone:{RED}" on:click={() => toggle(g)}>
-          <Icon name="mail" size={11} />{en ? 'No email' : 'Sin email'}<b>{noEmail}</b>
-        </button>
-      {/if}
-      {#if filter}
-        <button type="button" class="pt-clear" on:click={() => (filter = null)} aria-label={en ? 'Clear filter' : 'Quitar filtro'}><Icon name="x" size={11} /></button>
-      {/if}
-    </div>
+        {#if noEmail && emailField}
+          <option value={JSON.stringify({ missing: emailField.key })}>{en ? 'No email' : 'Sin email'} · {noEmail}</option>
+        {/if}
+      </select>
+    </label>
+    {#if filter}
+      <button type="button" class="pt-clear" on:click={() => (filter = null)} aria-label={en ? 'Clear filter' : 'Quitar filtro'} title={en ? 'Clear filter' : 'Quitar filtro'}><Icon name="x" size={11} /></button>
+    {/if}
   {/if}
 </div>
 
@@ -233,22 +237,28 @@
   }
   .pt-n small { opacity: .7; font-size: 9px; }
 
-  .pt-facets { display: contents; }
-  .pt-facet, .pt-clear {
-    display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 999px; cursor: pointer;
-    font: 700 11px 'Manrope', sans-serif; transition: background .2s, border-color .2s, box-shadow .2s, transform .2s ease-out;
+  /* The filters as one list, coloured by the state it shows. */
+  .pt-filter {
+    position: relative; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px 0 10px; border-radius: 8px;
+    background: color-mix(in srgb, var(--tone) 10%, var(--surface-1)); border: 1px solid color-mix(in srgb, var(--tone) 35%, var(--border));
   }
-  .pt-facet {
-    color: color-mix(in srgb, var(--tone) 70%, white); background: color-mix(in srgb, var(--tone) 10%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 35%, transparent);
+  .pt-filter i { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--tone); }
+  .pt-filter.on { border-color: var(--tone); box-shadow: 0 0 0 2px color-mix(in srgb, var(--tone) 20%, transparent); }
+  .pt-filter.on i { box-shadow: 0 0 8px var(--tone); }
+  .pt-filter select {
+    appearance: none; -webkit-appearance: none; border: 0; outline: none; background: none; cursor: pointer; padding-right: 14px;
+    font: 700 11.5px 'Manrope', sans-serif; color: var(--text-1);
+    background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+    background-position: right 4px center, right 0 center; background-size: 4px 4px, 4px 4px; background-repeat: no-repeat;
   }
-  .pt-facet i { width: 7px; height: 7px; border-radius: 50%; background: var(--tone); }
-  .pt-facet b { font-weight: 800; color: var(--text-1); font-variant-numeric: tabular-nums; }
-  .pt-facet:hover { transform: translateY(-1px); background: color-mix(in srgb, var(--tone) 18%, transparent); }
-  .pt-facet.on { color: #fff; background: color-mix(in srgb, var(--tone) 32%, var(--surface-2)); border-color: var(--tone); box-shadow: 0 8px 18px -10px var(--tone); }
-  .pt-facet.on i { box-shadow: 0 0 8px var(--tone); }
-  .pt-facet:focus-visible, .pt-clear:focus-visible { outline: 2px solid var(--tone, #22D3EE); outline-offset: 2px; }
-  .pt-clear { color: var(--text-2); background: var(--surface-2); border: 1px solid var(--border); }
+  .pt-filter select option { color: #111; }
+  .pt-filter:focus-within { outline: 2px solid var(--tone); outline-offset: 1px; }
+  .pt-clear {
+    display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 999px; cursor: pointer;
+    color: var(--text-2); background: var(--surface-2); border: 1px solid var(--border);
+  }
   .pt-clear:hover { color: var(--text-1); }
+  .pt-clear:focus-visible { outline: 2px solid #22D3EE; outline-offset: 2px; }
 
   .pt-wrap { margin-top: 8px; max-height: calc(100vh - 300px); min-height: 240px; overflow-y: auto; overflow-x: hidden; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-1); }
   .pt { width: 100%; table-layout: fixed; border-collapse: collapse; font: 500 12px 'Manrope', sans-serif; }
@@ -313,8 +323,7 @@
   .pt-empty { text-align: center; padding: 28px 10px !important; color: var(--text-3) !important; }
   .pt-empty :global(svg) { display: block; margin: 0 auto 6px; color: #A78BFA; }
   @media (prefers-reduced-motion: reduce) {
-    .pt tbody tr, .pt-q, .pt-facet { transition: none; }
-    .pt-facet:hover { transform: none; }
+    .pt tbody tr, .pt-q { transition: none; }
     .pt-grp--now .pt-grp-h td i, .pt-agent i { animation: none; }
   }
 </style>
