@@ -75,6 +75,9 @@ import {
   readClaudeIdentity,
   beginLlmCall,
   focusSkillFile,
+  settleClaudeStream,
+  spawnClaudeCodeWithFileStdio,
+  CLAUDE_STREAM_AFTER_RESULT_MS,
 } from "@kernl/extension-sdk";
 import { createNativeCodingTools, nativeFallbackBindSource } from "./native-coding-tools.js";
 import { failureNote } from "./failure-note.js";
@@ -245,6 +248,12 @@ function isSafeIdentifier(value: unknown): value is string {
  * memory, and the 2000 this used to cut every longer answer mid-sentence.
  */
 const MEMORY_REPLY_MAX = 20_000;
+
+/** How long a CLI stream may stay open after its result (KERNEL_CLAUDE_STREAM_AFTER_RESULT_MS overrides). */
+function afterResultMs(): number {
+  const raw = Number(process.env.KERNEL_CLAUDE_STREAM_AFTER_RESULT_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : CLAUDE_STREAM_AFTER_RESULT_MS;
+}
 
 const KERNEL_LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "kernel"]);
 
@@ -1164,6 +1173,24 @@ export class ClaudeCodeExecutor {
           .map(h => ({ type: "local" as const, path: h.path }));
       })();
 
+      // Capture the CLI stderr — essential for diagnosing auth/billing failures
+      // (e.g. "Credit balance is too low") that would otherwise stay hidden
+      // behind the generic "process exited with code 1".
+      const onStderr = (data: string) => {
+        const trimmed = data.trim();
+        if (!trimmed) return;
+        stderrLines.push(trimmed);
+        // Cap de 8KB — protege el log si el CLI escupe MB de errores.
+        if (stderrLines.join("\n").length > 8_192) {
+          stderrLines.splice(0, stderrLines.length / 2);
+        }
+      };
+      // The CLI's stdout goes to a file the kernel reads, not to a pipe: under
+      // load the kernel stopped reading a run's stdout pipe (19/11, the result
+      // left unread in the socket) and the run hung. KERNEL_CLAUDE_FILE_STDIO=0
+      // goes back to the SDK's own spawn.
+      const fileStdio = process.env.KERNEL_CLAUDE_FILE_STDIO !== "0";
+
       const options: Options = {
         abortController,
         model: requestedModel,
@@ -1206,18 +1233,11 @@ export class ClaudeCodeExecutor {
         persistSession: resumable,
         pathToClaudeCodeExecutable: executableToUse,
         env: childEnv,
-        // Capture the CLI stderr — essential for diagnosing auth/billing failures
-        // (e.g. "Credit balance is too low") that would otherwise stay hidden
-        // behind the generic "process exited with code 1".
-        stderr: (data) => {
-          const trimmed = data.trim();
-          if (!trimmed) return;
-          stderrLines.push(trimmed);
-          // Cap de 8KB — protege el log si el CLI escupe MB de errores.
-          if (stderrLines.join("\n").length > 8_192) {
-            stderrLines.splice(0, stderrLines.length / 2);
-          }
-        },
+        // The SDK's own spawn feeds `stderr`; the file-backed one, `onStderr`.
+        stderr: onStderr,
+        ...(fileStdio
+          ? { spawnClaudeCodeProcess: (spawnOpts) => spawnClaudeCodeWithFileStdio(spawnOpts, { onStderr }) }
+          : {}),
         // Rules only when there is NO driver — the sandbox already isolates.
         settings: usingSandbox
           ? undefined
@@ -1408,7 +1428,21 @@ export class ClaudeCodeExecutor {
         let deadSession: { message: string; thrown?: unknown } | null = null;
 
         try {
-          for await (const msg of q) {
+          // Never waits on the query forever: agents.stop ends the loop even
+          // when no message comes, and a stream still open a while after its
+          // result is closed (the run has its answer).
+          const stream = settleClaudeStream(q, {
+            signal: abortController.signal,
+            afterResultMs: afterResultMs(),
+            onCut: (why) => {
+              if (why === "no_end_after_result") {
+                log.warn(`ClaudeCodeExecutor: agent "${agent.name}" run ${run.id} — the CLI stream did not end ${Math.round(afterResultMs() / 1000)}s after its result; closing it`);
+              } else {
+                log.info(`ClaudeCodeExecutor: agent "${agent.name}" run ${run.id} — stopped; closing the CLI stream`);
+              }
+            },
+          });
+          for await (const msg of stream) {
             if (abortController.signal.aborted) break;
             if (msg.type === "system" && msg.subtype === "init" && typeof msg.session_id === "string") {
               passSession = msg.session_id;
