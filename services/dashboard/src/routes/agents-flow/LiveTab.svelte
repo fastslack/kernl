@@ -17,7 +17,7 @@
   import {
     liveStepIcon, liveStepLabel, liveEventType, liveEventSummary, fallbackEnds,
     liveStepSummary, liveStepCategory, liveFmtDelta, liveFmtTokens,
-    liveStepTokens, runElapsedMs, runTokensTotal, liveStepTags,
+    liveStepTokens, runElapsedMs, runTokensTotal, liveStepTags, liveResultGist,
     liveStepDeltaMs as liveStepDeltaMsOf,
     liveStepTokensTotal as liveStepTokensTotalOf,
     liveDisplayRows, liveEventKey, summarizeToolResult, liveCallParts, liveResultParts, type LiveRow, type LiveStepRow,
@@ -158,7 +158,7 @@
               {@const hTags = liveStepTags(liveHeadEvent)}
               <div class="live-now-summary">{liveStepSummary(liveHeadEvent)}</div>
               {#if hTags.length}
-                <div class="live-now-tags">{#each hTags as tg, ti (ti)}<span class="live-tag" class:good={tg.tone === 'good'} class:bad={tg.tone === 'bad'}>{#if tg.k}<span class="live-tag-k">{tg.k}</span>{/if}{tg.v}</span>{/each}</div>
+                <div class="live-now-tags">{#each hTags as tg, ti (ti)}<span class="live-tag" class:good={tg.tone === 'good'} class:bad={tg.tone === 'bad'} class:warn={tg.tone === 'warn'}>{#if tg.k}<span class="live-tag-k">{tg.k}</span>{/if}{tg.v}</span>{/each}</div>
               {/if}
             {/if}
           {/if}
@@ -206,6 +206,7 @@
         {#if row.kind === 'tools'}
         {@const newest = row.items[0].e}
         {@const runOpen = openRuns.has(row.key)}
+        {@const ng = liveEventType(newest) === 'tool_result' ? liveResultGist(String(newest.data.content_preview ?? '')) : null}
         <li class="live-step live-step-tool_call live-step-run live-cat-{liveStepCategory(newest)}"
             class:live-step-head={row.items[0].i === 0} class:live-step-open={runOpen}>
           <span class="live-step-dot"></span>
@@ -216,7 +217,12 @@
             <span class="live-run-count" class:bad={row.failed > 0} class:pending={row.pending > 0}>
               {row.pending > 0 ? '…' : row.failed > 0 ? '✗' : '✓'} ×{row.calls}{#if row.failed > 0} · {row.failed} ✗{/if}
             </span>
-            <span class="live-step-text">{liveStepSummary(newest)}</span>
+            {#if ng}
+              {#each ng.chips as c, ci (ci)}<span class="live-tag" class:good={c.tone === 'good'} class:bad={c.tone === 'bad'} class:warn={c.tone === 'warn'}>{#if c.k}<span class="live-tag-k">{c.k}</span>{/if}{c.v}</span>{/each}
+              <span class="live-step-text">{ng.text}</span>
+            {:else}
+              <span class="live-step-text">{liveStepSummary(newest)}</span>
+            {/if}
             <span class="live-step-clock">{fmtClock(newest.ts)}</span>
             <span class="live-step-chev" aria-hidden="true">{runOpen ? '▾' : '▸'}</span>
           </button>
@@ -253,7 +259,9 @@
             {@const isCall = etype === 'tool_call' && !!e.data.tool_name}
             {@const call = isCall ? liveCallParts(String(e.data.tool_name), String(e.data.content_preview ?? '')) : null}
             {@const rp = res ? liveResultParts(summarizeToolResult(String(res.e.data.tool_name ?? ''), String(res.e.data.content_preview ?? ''))) : null}
-            {@const bad = resBad || !!rp?.bad}
+            {@const rg = res ? liveResultGist(String(res.e.data.content_preview ?? '')) : null}
+            {@const bad = resBad || !!rp?.bad || !!rg?.chips.some((c) => c.tone === 'bad')}
+            {@const soloRes = etype === 'tool_result' ? liveResultGist(String(e.data.content_preview ?? '')) : null}
             {@const tags = call ? [] : liveStepTags(e)}
             <span class="live-step-icon">{liveStepIcon(etype)}</span>
             <!-- A call is said by its tool tag; the "CALLING TOOL" pill would
@@ -261,7 +269,10 @@
             {#if !isCall}<span class="live-step-type">{liveStepLabel(etype)}</span>{/if}
             {#if e.data.tool_name}<ToolName name={String(e.data.tool_name)} chipClass="live-step-tool" />{/if}
             {#if isCall}
-              {#if rp}
+              {#if rg}
+                {#each rg.chips as c, ci (ci)}<span class="live-tag" class:good={c.tone === 'good'} class:bad={c.tone === 'bad'} class:warn={c.tone === 'warn'}>{#if c.k}<span class="live-tag-k">{c.k}</span>{/if}{c.v}</span>{/each}
+                {#if !rg.chips.length}<span class="live-res-tag" class:bad>{bad ? '✗' : '✓'}</span>{/if}
+              {:else if rp}
                 <span class="live-res-tag" class:bad title={bad ? 'Failed' : 'Returned'}>{bad ? '✗' : '✓'}{rp.tag ? ' ' + rp.tag : ''}</span>
               {:else}
                 <span class="live-res-tag pending" title="Waiting for the result">…</span>
@@ -269,15 +280,18 @@
             {/if}
             <!-- What it asked → what came back, in as little room as it takes. -->
             {#each tags as tg, ti (ti)}
-              <span class="live-tag" class:good={tg.tone === 'good'} class:bad={tg.tone === 'bad'}>{#if tg.k}<span class="live-tag-k">{tg.k}</span>{/if}{tg.v}</span>
+              <span class="live-tag" class:good={tg.tone === 'good'} class:bad={tg.tone === 'bad'} class:warn={tg.tone === 'warn'}>{#if tg.k}<span class="live-tag-k">{tg.k}</span>{/if}{tg.v}</span>
             {/each}
             {#if call}
               <span class="live-step-text">
-                {#each call.args as a (a.k)}<span class="live-arg"><span class="live-arg-k">{a.k}</span>{a.v}</span>{/each}{call.text}{#if rp?.text}<span class="live-step-res" class:bad>{call.text || call.args.length ? ' → ' : ''}{rp.text}</span>{/if}
+                {call.text}{#if call.text && call.args.length}{' '}{/if}{#each call.args as a (a.k)}<span class="live-arg"><span class="live-arg-k">{a.k}</span>{a.v}</span>{/each}{#if rg ? rg.text : rp?.text}<span class="live-step-res" class:bad>{call.text || call.args.length ? ' → ' : ''}{rg ? rg.text : rp?.text}</span>{/if}
               </span>
             {:else if etype === 'claude_account' || etype === 'claude_account_down'}
               <!-- The account is the chip; only a session that went down needs words. -->
               <span class="live-step-text">{etype === 'claude_account_down' ? 'caída — se saltea por un rato' : ''}</span>
+            {:else if soloRes}
+              {#each soloRes.chips as c, ci (ci)}<span class="live-tag" class:good={c.tone === 'good'} class:bad={c.tone === 'bad'} class:warn={c.tone === 'warn'}>{#if c.k}<span class="live-tag-k">{c.k}</span>{/if}{c.v}</span>{/each}
+              <span class="live-step-text">{soloRes.text}</span>
             {:else}
               <span class="live-step-text">{liveStepSummary(e)}</span>
             {/if}
@@ -604,6 +618,7 @@
   .live-cat-account .live-tag{color:#a8d6ff;background:rgba(124,196,255,.08);border-color:rgba(124,196,255,.22)}
   .live-tag.good{color:#5fdba0;background:rgba(95,219,160,.12);border-color:rgba(95,219,160,.3)}
   .live-tag.bad{color:#ef8090;background:rgba(239,93,110,.14);border-color:rgba(239,93,110,.3)}
+  .live-tag.warn{color:#f5c76a;background:rgba(240,180,76,.12);border-color:rgba(240,180,76,.3)}
   .live-now-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
   .live-step-clock{color:#4a4f6a;font-size:9px;flex-shrink:0}
   .live-step-chev{

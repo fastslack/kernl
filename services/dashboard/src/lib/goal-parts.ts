@@ -14,6 +14,7 @@
  */
 
 import { ellipsize } from './display-format.js';
+import { findJson } from './json-gist.js';
 
 export interface GoalTag { k: string; v: string }
 
@@ -34,46 +35,10 @@ const LINK_RE = /^(https?:\/\/|\/|[a-z]:\\)/i;
 const MAX_TAGS = 4;
 const MAX_TAG_LEN = 28;
 
-/** The end index of the balanced `{…}` starting at `start`, or -1. */
-function balancedEnd(s: string, start: number): number {
-  let depth = 0, inStr = false, esc = false;
-  for (let i = start; i < s.length; i++) {
-    const c = s[i];
-    if (inStr) {
-      if (esc) esc = false;
-      else if (c === '\\') esc = true;
-      else if (c === '"') inStr = false;
-      continue;
-    }
-    if (c === '"') inStr = true;
-    else if (c === '{') depth++;
-    else if (c === '}' && --depth === 0) return i;
-  }
-  return -1;
-}
-
-/** The first JSON object in `text`, fenced or bare, with the text around it. */
+/** The first JSON object in `text`, fenced, bare or cut short, with the text around it. */
 export function extractJsonObject(text: string): { data: Record<string, unknown>; before: string; after: string } | null {
-  const fence = /```(?:json)?\s*(\{[\s\S]*?\})\s*```/i.exec(text);
-  if (fence) {
-    try {
-      const data = JSON.parse(fence[1]);
-      if (data && typeof data === 'object' && !Array.isArray(data)) {
-        return { data, before: text.slice(0, fence.index), after: text.slice(fence.index + fence[0].length) };
-      }
-    } catch { /* fall through to the bare scan */ }
-  }
-  for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
-    const end = balancedEnd(text, start);
-    if (end < 0) break;
-    try {
-      const data = JSON.parse(text.slice(start, end + 1));
-      if (data && typeof data === 'object' && !Array.isArray(data) && Object.keys(data).length > 0) {
-        return { data, before: text.slice(0, start), after: text.slice(end + 1) };
-      }
-    } catch { /* try the next brace */ }
-  }
-  return null;
+  const f = findJson(text);
+  return f ? { data: f.data, before: f.before, after: f.after } : null;
 }
 
 function tidy(s: string): string {

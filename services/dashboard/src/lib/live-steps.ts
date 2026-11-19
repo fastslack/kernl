@@ -20,6 +20,7 @@ import { isAbsoluteHostPath } from './host-path.js';
 import { collapseRepeats } from './collapse-repeats.js';
 import { resultFailed } from './history-steps.js';
 import { goalParts, type GoalTag } from './goal-parts.js';
+import { findJson, gistOf, textGist, type Gist, type GistChip } from './json-gist.js';
 
 export type ToolCategory =
   | 'shell' | 'fs' | 'web' | 'kernel' | 'mcp' | 'think' | 'final'
@@ -38,6 +39,7 @@ export function liveStepIcon(type: string): string {
     case 'claude_account_down': return '⚠️';
     case 'auto_eval_started': return '📝';
     case 'auto_eval': return '📝';
+    case 'auto_eval_skipped': return '⏭';
     case 'learning_created': return '💡';
     case 'learning_deactivated': return '🗑️';
     case 'learning_recalled': return '🧵';
@@ -62,6 +64,7 @@ export function liveStepLabel(type: string): string {
     case 'claude_account_down': return 'account down';
     case 'auto_eval_started': return 'self-grading';
     case 'auto_eval': return 'self-eval';
+    case 'auto_eval_skipped': return 'no self-grading';
     case 'learning_created': return 'lesson learned';
     case 'learning_deactivated': return 'lesson dropped';
     case 'learning_recalled': return 'lessons recalled';
@@ -125,6 +128,7 @@ export function liveEventSummary(e: AgentFlowEvent): string {
   }
   if (t === 'chain_triggered') return `Handoff → ${String(e.data.target_agent_name ?? 'next agent')}`;
   if (t === 'auto_eval_started') return 'Self-grading…';
+  if (t === 'auto_eval_skipped') return 'Skipped for this run';
   if (t === 'auto_eval') {
     const score = Number(e.data.score ?? 0);
     return `Self-graded ${score}/5 — ${String(e.data.outcome ?? '')}`;
@@ -228,6 +232,14 @@ export function toolCategory(toolName: string): ToolCategory {
   return 'tool';
 }
 
+/**
+ * A shell command without the `cd <dir> &&` it opens with: the directory is
+ * where the agent always works, the rest is what it did.
+ */
+export function bareCommand(cmd: string): string {
+  return cmd.trim().replace(/^(?:cd\s+(?:"[^"]*"|'[^']*'|\S+)\s*(?:&&|;)\s*)+/, '');
+}
+
 export function tryParseJson(raw: string): unknown {
   if (!raw) return null;
   try { return JSON.parse(raw); } catch { /* */ }
@@ -282,7 +294,7 @@ export function summarizeToolCall(toolName: string, inputPreview: string): strin
     }
     case 'Bash': {
       const desc = typeof args.description === 'string' ? args.description : '';
-      const cmd = typeof args.command === 'string' ? args.command : '';
+      const cmd = typeof args.command === 'string' ? bareCommand(args.command) : '';
       if (desc) return desc;
       return cmd ? `$ ${ellipsize(cmd, 96)}` : 'shell command';
     }
@@ -415,8 +427,12 @@ export function liveStepSummary(e: AgentFlowEvent): string {
   if (etype === 'tool_result') return summarizeToolResult(toolName, preview);
   // Two lines' worth of prose, markdown marks out: the row wraps instead of
   // cutting the one sentence that says what the agent is doing.
-  if (etype === 'thought') return ellipsize(plainStepText(preview), 260) || 'thinking…';
-  if (etype === 'final') return ellipsize(plainStepText(preview), 260) || 'finalizing…';
+  if (etype === 'thought' || etype === 'final') {
+    // An answer that ends in JSON reads as its words; the JSON's values go to chips (liveStepTags).
+    const g = textGist(preview);
+    const words = g ? (g.prose || g.text) : preview;
+    return ellipsize(plainStepText(words), 260) || (etype === 'final' ? 'finalizing…' : 'thinking…');
+  }
   if (etype === 'rate_limit_wait') return ellipsize(preview, 140) || 'rate-limit cooldown';
   if (etype === 'error') return ellipsize(preview, 140) || 'error';
   // The row says RUN STARTED already: what it is about, not "Started — goal: <wall of JSON>".
@@ -449,7 +465,7 @@ export function liveStepCategory(e: AgentFlowEvent): ToolCategory {
  * Chips a non-tool row shows after its type: the short fields of a run's
  * input, the account a run uses, how a run ended. Empty for everything else.
  */
-export function liveStepTags(e: AgentFlowEvent): Array<GoalTag & { tone?: 'good' | 'bad' }> {
+export function liveStepTags(e: AgentFlowEvent): Array<GoalTag & { tone?: 'good' | 'bad' | 'warn' }> {
   const etype = liveEventType(e);
   if (etype === 'run_started') {
     const goal = String(e.data.goal ?? '').trim();
@@ -464,6 +480,10 @@ export function liveStepTags(e: AgentFlowEvent): Array<GoalTag & { tone?: 'good'
     const steps = Number(e.data.steps_count);
     if (Number.isFinite(steps) && steps > 0) tags.push({ k: 'steps', v: String(steps) });
     return tags;
+  }
+  if (etype === 'final' || etype === 'thought') {
+    const g = textGist(String(e.data.content_preview ?? ''), 3);
+    return g ? g.chips : [];
   }
   if (etype === 'claude_account' || etype === 'claude_account_down') {
     const acct = String(e.data.account ?? e.data.content_preview ?? '').trim();
@@ -714,6 +734,20 @@ export function liveDisplayRows(events: AgentFlowEvent[]): LiveStepRow[] {
  */
 export function liveCallParts(toolName: string, inputPreview: string): { text: string; args: Array<{ k: string; v: string }> } {
   const summary = summarizeToolCall(toolName, inputPreview);
+  // A command handed a JSON argument (`bin/ops op '{"skill":"x","issue":"web#1"}'`): the command,
+  // then the argument's values as chips instead of its quotes.
+  if (toolName === 'Bash' && summary.startsWith('$ ')) {
+    const cmd = bareCommand(String((tryParseJson(inputPreview) as Record<string, unknown> | null)?.command ?? ''));
+    const found = cmd ? findJson(cmd) : null;
+    if (found) {
+      const head = found.before.replace(/\s*'?\s*$/, '').trim();
+      const args = Object.entries(found.data)
+        .filter(([k, v]) => !k.startsWith('_') && (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'))
+        .slice(0, 3)
+        .map(([k, v]) => ({ k, v: ellipsize(String(v), 32) }));
+      if (args.length) return { text: `$ ${ellipsize(head, 80)}`, args };
+    }
+  }
   const short = toolName.replace(/^mcp__.+?__/, '');
   const echoes = [toolName, short].some((n) => n && (summary === n || summary.startsWith(`${n} · `)));
   if (!echoes) return { text: summary, args: [] };
@@ -741,3 +775,26 @@ export function liveResultParts(summary: string): { tag: string; text: string; b
   const text = m ? (m[2] ?? '') : summary;
   return { tag, text, bad: /^\s*(error|failed)\b/i.test(text) };
 }
+
+/**
+ * A tool result that is JSON (or an MCP envelope around JSON), as chips that
+ * say how it went — `✓ ok`, `failed`, `op e2e_run` — and its one sentence.
+ * Null when the result is not JSON, or says nothing a chip could.
+ */
+export function liveResultGist(preview: string): Gist | null {
+  const raw = String(preview ?? '').trim();
+  if (!raw) return null;
+  let text = raw;
+  const env = tryParseJson(raw) as Record<string, unknown> | null;
+  if (env && typeof env === 'object' && Array.isArray(env.content)) {
+    text = (env.content as Array<Record<string, unknown>>)
+      .filter((c) => c && c.type === 'text').map((c) => String(c.text ?? '')).join('\n').trim();
+  }
+  if (!/^[\[{]/.test(text)) return null;
+  const parsed = tryParseJson(text);
+  if (Array.isArray(parsed)) return { chips: [{ k: '', v: `${parsed.length} ${parsed.length === 1 ? 'item' : 'items'}` }], text: '' };
+  const g = parsed && typeof parsed === 'object' ? gistOf(parsed as Record<string, unknown>) : textGist(text);
+  return g && (g.chips.length || g.text) ? { chips: g.chips, text: g.text } : null;
+}
+
+export type { GistChip };
