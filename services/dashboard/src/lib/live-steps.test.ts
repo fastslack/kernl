@@ -211,7 +211,7 @@ describe("liveStepSummary / liveStepCategory", () => {
     expect(liveStepCategory(ev({ type: "tool_call", tool_name: "Bash" }))).toBe("shell");
     expect(liveStepCategory(ev({ type: "thought" }))).toBe("think");
     expect(liveStepCategory(ev({ type: "rate_limit_wait" }))).toBe("error");
-    expect(liveStepCategory(ev({}, "agent:run_started"))).toBe("meta");
+    expect(liveStepCategory(ev({}, "agent:run_started"))).toBe("run");
   });
 });
 

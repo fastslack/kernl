@@ -12,6 +12,7 @@
  */
 
 import type { AgentFlowEvent } from './stores.js';
+import { goalParts } from './goal-parts.js';
 
 export type DetailTone = 'neutral' | 'good' | 'warn' | 'bad';
 
@@ -115,10 +116,19 @@ function build(e: AgentFlowEvent, type: string): DetailSection[] | null {
     case 'run_started': {
       const goal = str(d.goal);
       const builtin = Boolean(d.builtin);
+      const parts = goal ? goalParts(goal) : null;
+      // A goal that carries a JSON input reads as that input laid out field by
+      // field, then the instructions around it — not as one escaped string.
+      const goalSecs: DetailSection[] = !goal
+        ? [{ kind: 'note', body: builtin ? 'Built-in run: native code, no prompt.' : 'Scheduled run with no explicit goal.' }]
+        : parts?.data
+          ? [
+              ...inputSections(parts.data),
+              ...(parts.prose ? [{ kind: 'text', label: 'Instructions', body: parts.prose, markdown: true } as DetailSection] : []),
+            ]
+          : [{ kind: 'text', label: 'Goal', body: goal, markdown: true }];
       return [
-        goal
-          ? { kind: 'text', label: 'Goal', body: goal, markdown: true }
-          : { kind: 'note', body: builtin ? 'Built-in run: native code, no prompt.' : 'Scheduled run with no explicit goal.' },
+        ...goalSecs,
         fields([
           { label: 'Trigger', value: TRIGGERS[str(d.trigger_type)] ?? titleCase(str(d.trigger_type)) },
           runIdField(d),
@@ -268,6 +278,37 @@ function build(e: AgentFlowEvent, type: string): DetailSection[] | null {
     default:
       return fallback(d);
   }
+}
+
+/**
+ * A run's JSON input as sections: short scalars as fields, long text as text,
+ * lists of scalars as lists, and nested objects one level down with their
+ * parent's name in the label. Empty values are left out.
+ */
+export function inputSections(data: Record<string, unknown>, prefix = ''): DetailSection[] {
+  const flat: DetailField[] = [];
+  const blocks: DetailSection[] = [];
+  for (const [key, value] of Object.entries(data)) {
+    if (value === undefined || value === null || value === '' || key.startsWith('_')) continue;
+    const label = !prefix ? titleCase(key) : titleCase(key) === prefix ? prefix : `${prefix} › ${titleCase(key)}`;
+    if (Array.isArray(value)) {
+      if (value.length === 0) continue;
+      if (value.every((v) => typeof v !== 'object' || v === null)) {
+        blocks.push({ kind: 'list', label, items: value.map((v) => ({ text: String(v) })) });
+      } else {
+        blocks.push({ kind: 'text', label, body: '```json\n' + JSON.stringify(value, null, 2) + '\n```', markdown: true });
+      }
+    } else if (typeof value === 'object') {
+      if (prefix) blocks.push({ kind: 'text', label, body: '```json\n' + JSON.stringify(value, null, 2) + '\n```', markdown: true });
+      else blocks.push(...inputSections(value as Record<string, unknown>, titleCase(key)));
+    } else {
+      const s = String(value).trim();
+      if (s.length > 90 || s.includes('\n')) blocks.push({ kind: 'text', label, body: s, markdown: true });
+      else flat.push({ label, value: s, mono: typeof value === 'number' || /^[\w./:-]+$/.test(s) });
+    }
+  }
+  const head = flat.length ? [{ kind: 'fields', fields: flat } as DetailSection] : [];
+  return [...head, ...blocks];
 }
 
 /** Unknown event: show every descriptive field rather than nothing. */

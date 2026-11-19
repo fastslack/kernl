@@ -17,7 +17,7 @@
   import {
     liveStepIcon, liveStepLabel, liveEventType, liveEventSummary, fallbackEnds,
     liveStepSummary, liveStepCategory, liveFmtDelta, liveFmtTokens,
-    liveStepTokens, runElapsedMs, runTokensTotal,
+    liveStepTokens, runElapsedMs, runTokensTotal, liveStepTags,
     liveStepDeltaMs as liveStepDeltaMsOf,
     liveStepTokensTotal as liveStepTokensTotalOf,
     liveDisplayRows, liveEventKey, summarizeToolResult, liveCallParts, liveResultParts, type LiveRow, type LiveStepRow,
@@ -155,7 +155,11 @@
                 <div class="live-now-summary">{#each hc.args as a (a.k)}<span class="live-arg"><span class="live-arg-k">{a.k}</span>{a.v}</span>{/each}{hc.text}</div>
               {/if}
             {:else}
+              {@const hTags = liveStepTags(liveHeadEvent)}
               <div class="live-now-summary">{liveStepSummary(liveHeadEvent)}</div>
+              {#if hTags.length}
+                <div class="live-now-tags">{#each hTags as tg, ti (ti)}<span class="live-tag" class:good={tg.tone === 'good'} class:bad={tg.tone === 'bad'}>{#if tg.k}<span class="live-tag-k">{tg.k}</span>{/if}{tg.v}</span>{/each}</div>
+              {/if}
             {/if}
           {/if}
         </div>
@@ -208,7 +212,6 @@
           <button type="button" class="live-step-summary" aria-expanded={runOpen}
                   title={runTitle(row)} on:click={() => toggleRun(row.key)}>
             <span class="live-step-icon">{liveStepIcon('tool_call')}</span>
-            <span class="live-step-type">{liveStepLabel(row.pending > 0 ? 'tool_call' : 'tool_result')}</span>
             <ToolName name={row.tool} chipClass="live-step-tool" />
             <span class="live-run-count" class:bad={row.failed > 0} class:pending={row.pending > 0}>
               {row.pending > 0 ? '…' : row.failed > 0 ? '✗' : '✓'} ×{row.calls}{#if row.failed > 0} · {row.failed} ✗{/if}
@@ -234,7 +237,7 @@
         {@const res = 'result' in row ? row.result : undefined}
         {@const resBad = !!res && resultFailed(res.e.data.is_error, String(res.e.data.content_preview ?? ''))}
         {@const act = actionOf(row)}
-        <li class="live-step live-step-{etype} live-cat-{ecat}{act ? ` live-action live-action-${act.kind} live-action-${act.outcome}` : ''}" class:live-step-head={i === 0} class:live-step-open={isOpen} class:live-step-in-run={'inRun' in row} class:live-step-quiet={'quiet' in row && row.quiet}>
+        <li class="live-step live-step-{etype} live-cat-{ecat}{act ? ` live-action live-action-${act.kind} live-action-${act.outcome}` : ''}" class:live-step-head={i === 0} class:live-step-open={isOpen} class:live-step-in-run={'inRun' in row} class:live-step-quiet={'quiet' in row && row.quiet} class:live-step-carded={detail !== null}>
           <span class="live-step-dot"></span>
           <button
             type="button"
@@ -251,6 +254,7 @@
             {@const call = isCall ? liveCallParts(String(e.data.tool_name), String(e.data.content_preview ?? '')) : null}
             {@const rp = res ? liveResultParts(summarizeToolResult(String(res.e.data.tool_name ?? ''), String(res.e.data.content_preview ?? ''))) : null}
             {@const bad = resBad || !!rp?.bad}
+            {@const tags = call ? [] : liveStepTags(e)}
             <span class="live-step-icon">{liveStepIcon(etype)}</span>
             <!-- A call is said by its tool tag; the "CALLING TOOL" pill would
                  only repeat it. Every other step keeps its type. -->
@@ -264,13 +268,19 @@
               {/if}
             {/if}
             <!-- What it asked → what came back, in as little room as it takes. -->
-            <span class="live-step-text">
-              {#if call}
+            {#each tags as tg, ti (ti)}
+              <span class="live-tag" class:good={tg.tone === 'good'} class:bad={tg.tone === 'bad'}>{#if tg.k}<span class="live-tag-k">{tg.k}</span>{/if}{tg.v}</span>
+            {/each}
+            {#if call}
+              <span class="live-step-text">
                 {#each call.args as a (a.k)}<span class="live-arg"><span class="live-arg-k">{a.k}</span>{a.v}</span>{/each}{call.text}{#if rp?.text}<span class="live-step-res" class:bad>{call.text || call.args.length ? ' → ' : ''}{rp.text}</span>{/if}
-              {:else}
-                {liveStepSummary(e)}
-              {/if}
-            </span>
+              </span>
+            {:else if etype === 'claude_account' || etype === 'claude_account_down'}
+              <!-- The account is the chip; only a session that went down needs words. -->
+              <span class="live-step-text">{etype === 'claude_account_down' ? 'caída — se saltea por un rato' : ''}</span>
+            {:else}
+              <span class="live-step-text">{liveStepSummary(e)}</span>
+            {/if}
             {/if}
             {#if dt !== null && dt > 50}
               <span class="live-meta-chip live-meta-time" title="Time since the previous event">+{liveFmtDelta(dt)}</span>
@@ -501,6 +511,9 @@
   .live-cat-error  .live-step-dot{background:#ef5d6e}
   .live-cat-meta   .live-step-dot{background:#9aa3c0}
   .live-cat-tool   .live-step-dot{background:#d0b87a}
+  .live-cat-run     .live-step-dot{background:#3dd68c}
+  .live-cat-learn   .live-step-dot{background:#f0b44c}
+  .live-cat-account .live-step-dot{background:#7cc4ff}
   .live-step-run_started .live-step-dot{background:#3dd68c}
   .live-step-run_completed .live-step-dot{background:#78dc8c}
   .live-step-head .live-step-dot{
@@ -545,6 +558,9 @@
   .live-cat-error  .live-step-type{background:rgba(239,93,110,.16);color:#ef8090}
   .live-cat-meta   .live-step-type{background:rgba(154,163,192,.14);color:#9aa3c0}
   .live-cat-tool   .live-step-type{background:rgba(208,184,122,.14);color:#d0b87a}
+  .live-cat-run     .live-step-type{background:rgba(61,214,140,.14);color:#3dd68c}
+  .live-cat-learn   .live-step-type{background:rgba(240,180,76,.14);color:#f0b44c}
+  .live-cat-account .live-step-type{background:rgba(124,196,255,.12);color:#7cc4ff}
   .live-step-tool{
     font:600 10px 'JetBrains Mono',monospace;color:#d0b87a;flex-shrink:0;
     padding:1px 5px;border-radius:3px;background:rgba(208,184,122,.10);
@@ -572,6 +588,23 @@
   .live-step-quiet{opacity:.55}
   .live-step-quiet:hover{opacity:1}
   .live-step-open .live-step-text{-webkit-line-clamp:unset;line-clamp:none;display:block}
+  /* A row that opens into a card of its own keeps its one-glance line: the
+     card below says everything, the row would only say it twice. */
+  .live-step-open.live-step-carded .live-step-text{display:-webkit-box;-webkit-line-clamp:2;line-clamp:2}
+
+  /* Short facts of a non-tool step: the run's input fields, its account, how it ended. */
+  .live-tag{
+    flex-shrink:0;display:inline-flex;align-items:center;gap:4px;margin-top:1px;
+    padding:1px 7px;border-radius:999px;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis;
+    font:600 9.5px 'JetBrains Mono',monospace;
+    color:#c8cee0;background:rgba(120,130,160,.12);border:1px solid rgba(120,130,160,.18);
+  }
+  .live-tag-k{color:#6f7590;font-weight:500}
+  .live-cat-run     .live-tag{color:#9de8c0;background:rgba(61,214,140,.08);border-color:rgba(61,214,140,.22)}
+  .live-cat-account .live-tag{color:#a8d6ff;background:rgba(124,196,255,.08);border-color:rgba(124,196,255,.22)}
+  .live-tag.good{color:#5fdba0;background:rgba(95,219,160,.12);border-color:rgba(95,219,160,.3)}
+  .live-tag.bad{color:#ef8090;background:rgba(239,93,110,.14);border-color:rgba(239,93,110,.3)}
+  .live-now-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
   .live-step-clock{color:#4a4f6a;font-size:9px;flex-shrink:0}
   .live-step-chev{
     color:#6a6f82;font-size:11px;width:14px;text-align:center;flex-shrink:0;

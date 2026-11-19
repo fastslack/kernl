@@ -19,10 +19,11 @@ import { sanitizePreview } from './run-format.js';
 import { isAbsoluteHostPath } from './host-path.js';
 import { collapseRepeats } from './collapse-repeats.js';
 import { resultFailed } from './history-steps.js';
+import { goalParts, type GoalTag } from './goal-parts.js';
 
 export type ToolCategory =
   | 'shell' | 'fs' | 'web' | 'kernel' | 'mcp' | 'think' | 'final'
-  | 'error' | 'meta' | 'tool';
+  | 'error' | 'meta' | 'tool' | 'run' | 'learn' | 'account';
 
 export function liveStepIcon(type: string): string {
   switch (type) {
@@ -418,6 +419,10 @@ export function liveStepSummary(e: AgentFlowEvent): string {
   if (etype === 'final') return ellipsize(plainStepText(preview), 260) || 'finalizing…';
   if (etype === 'rate_limit_wait') return ellipsize(preview, 140) || 'rate-limit cooldown';
   if (etype === 'error') return ellipsize(preview, 140) || 'error';
+  // The row says RUN STARTED already: what it is about, not "Started — goal: <wall of JSON>".
+  if (etype === 'run_started' && !e.data.builtin && String(e.data.goal ?? '').trim()) {
+    return goalParts(String(e.data.goal)).title;
+  }
   // Run lifecycle + meta — defer to the prose helper.
   return liveEventSummary(e);
 }
@@ -431,7 +436,40 @@ export function liveStepCategory(e: AgentFlowEvent): ToolCategory {
   if (etype === 'tool_call' || etype === 'tool_result') {
     return toolCategory(String(e.data.tool_name ?? ''));
   }
+  if (etype === 'run_started' || etype === 'run_completed' || etype === 'chain_triggered') {
+    return etype === 'run_completed' && String(e.data.status ?? 'completed') !== 'completed' ? 'error' : 'run';
+  }
+  if (etype.startsWith('learning_') || etype.startsWith('auto_eval')) return 'learn';
+  if (etype === 'claude_account') return 'account';
+  if (etype === 'claude_account_down') return 'error';
   return 'meta';
+}
+
+/**
+ * Chips a non-tool row shows after its type: the short fields of a run's
+ * input, the account a run uses, how a run ended. Empty for everything else.
+ */
+export function liveStepTags(e: AgentFlowEvent): Array<GoalTag & { tone?: 'good' | 'bad' }> {
+  const etype = liveEventType(e);
+  if (etype === 'run_started') {
+    const goal = String(e.data.goal ?? '').trim();
+    const tags: Array<GoalTag & { tone?: 'good' | 'bad' }> = goal ? goalParts(goal).tags : [];
+    const trig = String(e.data.trigger_type ?? '');
+    if (trig && trig !== 'manual') tags.push({ k: 'via', v: trig });
+    return tags;
+  }
+  if (etype === 'run_completed') {
+    const st = String(e.data.status ?? 'completed');
+    const tags: Array<GoalTag & { tone?: 'good' | 'bad' }> = [{ k: '', v: st === 'completed' ? '✓ ok' : `✗ ${st}`, tone: st === 'completed' ? 'good' : 'bad' }];
+    const steps = Number(e.data.steps_count);
+    if (Number.isFinite(steps) && steps > 0) tags.push({ k: 'steps', v: String(steps) });
+    return tags;
+  }
+  if (etype === 'claude_account' || etype === 'claude_account_down') {
+    const acct = String(e.data.account ?? e.data.content_preview ?? '').trim();
+    return acct ? [{ k: '', v: acct, tone: etype === 'claude_account_down' ? 'bad' : undefined }] : [];
+  }
+  return [];
 }
 
 // ── Meta chips: Δt + token usage ────────────────────────────────────
