@@ -57,6 +57,8 @@
     !f || ('missing' in f ? cell(r[f.missing]) === '' : cell(r[f.key]) === f.value);
   // ── moving rows in place ──
   $: rowActions = flowId ? (view.actions ?? []).filter((a) => actions[a]) : [];
+  // The row buttons stay folded: one header button opens them on every row, so the list keeps its width.
+  let showMoves = false;
   $: dragAction = flowId && view.action && actions[view.action] ? view.action : '';
   /** The order the operator just set, shown until the polled rows arrive in it (or a minute passes). */
   let pending: { keys: string[]; until: number } | null = null;
@@ -152,8 +154,9 @@
 {#if moveMsg}<div class="pt-movemsg" role="alert">{moveMsg}</div>{/if}
 <div class="pt-wrap">
   <table class="pt" class:pt--open={!!view.detail}>
-    <colgroup>{#if canDrag}<col style="width:26px" />{/if}{#each fields as f, i (f.key)}<col style="width:{width(f.key, i)}" />{/each}{#if rowActions.length}<col style="width:{rowActions.length * 30 + 12}px" />{/if}</colgroup>
-    <thead><tr>{#if canDrag}<th aria-label={en ? 'Drag' : 'Arrastrar'}></th>{/if}{#each fields as f (f.key)}<th>{textOf(f.label, $locale) || humanize(f.key)}</th>{/each}{#if rowActions.length}<th>{en ? 'Move' : 'Mover'}</th>{/if}</tr></thead>
+    <colgroup>{#if canDrag}<col style="width:26px" />{/if}{#each fields as f, i (f.key)}<col style="width:{width(f.key, i)}" />{/each}{#if rowActions.length}<col style="width:{showMoves ? rowActions.length * 30 + 12 : 92}px" />{/if}</colgroup>
+    <thead><tr>{#if canDrag}<th aria-label={en ? 'Drag' : 'Arrastrar'}></th>{/if}{#each fields as f (f.key)}<th>{textOf(f.label, $locale) || humanize(f.key)}</th>{/each}{#if rowActions.length}<th class="pt-moves-h"><button type="button" class="pt-moves-toggle" class:on={showMoves} aria-expanded={showMoves}
+      on:click={() => (showMoves = !showMoves)}><Icon name="move" size={11} />{showMoves ? (en ? 'Done' : 'Listo') : (en ? 'Reorder' : 'Ordenar')}</button></th>{/if}</tr></thead>
     {#each groups as grp (grp.id)}
     <tbody class="pt-grp pt-grp--{grp.id}">
       {#if grp.label}
@@ -201,10 +204,12 @@
           {/each}
           {#if rowActions.length}
             <td class="pt-moves">
+              {#if showMoves}
               {#each rowActions as a (a)}
                 <button type="button" class="pt-move" title={textOf(actions[a].label, $locale)} aria-label={`${textOf(actions[a].label, $locale)} ${String(r.key ?? '')}`}
                   disabled={!!busyKey} on:click|stopPropagation={() => rowMove(a, r)}>{actionGlyph(actions[a].key) ?? textOf(actions[a].label, $locale)}</button>
               {/each}
+              {/if}
             </td>
           {/if}
         </tr>
@@ -291,6 +296,14 @@
   .pt-num--zero { color: var(--text-3); font-weight: 600; }
   .pt-none { color: var(--text-3); opacity: .6; }
   .pt-moves { white-space: nowrap; text-align: right; }
+  .pt-moves-h { text-align: right; }
+  .pt-moves-toggle {
+    display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 6px; cursor: pointer;
+    font: inherit; font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--text-2);
+    background: transparent; border: 1px solid var(--border); transition: all .15s;
+  }
+  .pt-moves-toggle:hover, .pt-moves-toggle.on { color: #22D3EE; border-color: color-mix(in srgb, #22D3EE 55%, transparent); background: color-mix(in srgb, #22D3EE 12%, transparent); }
+  .pt-moves-toggle:focus-visible { outline: 2px solid #22D3EE; outline-offset: 2px; }
   .pt-move {
     width: 23px; height: 23px; margin-left: 2px; border-radius: 7px; cursor: pointer; font: 800 13px 'Manrope', sans-serif; line-height: 1;
     color: #22D3EE; background: color-mix(in srgb, #22D3EE 10%, transparent); border: 1px solid color-mix(in srgb, #22D3EE 30%, transparent);

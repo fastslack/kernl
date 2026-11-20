@@ -529,6 +529,11 @@
 						on:click={togglePower}>
 						<span class="op-power-sw" aria-hidden="true"><span></span></span>{$t(office.paused === 1 ? 'office.power.off' : 'office.power.on')}
 					</button>
+					<!-- Export and the DevOps page sit up here as icons: a footer bar took height from the panels. -->
+					{#if traits.devopsLink && $extPages.some((p) => p.view === 'devops')}
+						<a class="op-close op-icon" href="/devops" title={$t('office.panel.devops')} aria-label={$t('office.panel.devops')}><Icon name="server" /></a>
+					{/if}
+					<button class="op-close op-icon" type="button" title={$t('office.panel.export')} aria-label={$t('office.panel.export')} on:click={exportOffice}><Icon name="download" /></button>
 					<button class="op-close" type="button" aria-label={$t('office.common.close')} on:click={() => dispatch('close')}><Icon name="x" /></button>
 				</div>
 				<div class="op-tabs" role="tablist" aria-label={$t('office.panel.tabs_label')}>
@@ -806,16 +811,6 @@
 		{/if}
 	{/if}
 
-	<svelte:fragment slot="foot">
-		{#if office}
-			<div class="op-foot-left">
-				<button class="k-btn k-btn--ghost" type="button" on:click={exportOffice}><Icon name="download" />{$t('office.panel.export')}</button>
-				{#if traits.devopsLink && $extPages.some((p) => p.view === 'devops')}
-					<a class="k-btn k-btn--ghost" href="/devops">{$t('office.panel.devops')}</a>
-				{/if}
-			</div>
-		{/if}
-	</svelte:fragment>
 </Drawer>
 
 {#if office}
@@ -883,6 +878,8 @@
 	}
 	.op-close:hover { color: #F43F5E; border-color: color-mix(in srgb, #F43F5E 45%, transparent); background: color-mix(in srgb, #F43F5E 12%, var(--surface-2)); }
 	.op-close:focus-visible { outline: 2px solid #F43F5E; outline-offset: 2px; }
+	.op-icon:hover { color: var(--text-1); border-color: var(--border-strong, var(--border)); background: var(--surface-3, var(--surface-2)); }
+	.op-icon:focus-visible { outline-color: var(--accent, currentColor); }
 
 	/* ── Tabs: icon + word, the open one a lit pill in the office colour. */
 	.op-tabs { display: flex; gap: 4px; margin-top: 14px; padding-bottom: 10px; overflow-x: auto; scrollbar-width: none; }
@@ -1014,7 +1011,6 @@
 	.op-danger { grid-template-columns: 1fr auto; align-items: center; margin-top: 12px; }
 	.op-danger-txt { display: grid; gap: 4px; }
 	.op-danger .k-help { margin: 0; }
-	.op-foot-left { display: flex; gap: 4px; }
 
 	@keyframes op-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.35); opacity: .7; } }
 	@media (max-width: 760px) { .op-grid2, .op-row2 { grid-template-columns: minmax(0, 1fr); } }
