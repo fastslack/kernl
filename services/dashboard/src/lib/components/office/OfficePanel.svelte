@@ -907,7 +907,7 @@
 	.op-tab-warn { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: #F43F5E; color: #fff; font: 800 10px var(--font-body); box-shadow: 0 0 8px #F43F5E; }
 
 	/* ── Body: every block a card tinted by its own hue. */
-	.op-panels { padding: 14px 0 6px; }
+	.op-panels { padding: 10px 0 6px; }
 	.op-grid2 { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 12px; margin-top: 14px; }
 	.op-section {
 		--hue: #22D3EE;

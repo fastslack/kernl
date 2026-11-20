@@ -98,7 +98,7 @@
           <i aria-hidden="true"></i>{textOf(t.title, $locale)}
         </button>
       {/each}
-      <button role="tab" aria-selected={active === '__activity'} class:on={active === '__activity'} style="--hue:#94A3B8" on:click={() => select('__activity')}>
+      <button role="tab" class="ph-log" aria-selected={active === '__activity'} class:on={active === '__activity'} style="--hue:#94A3B8" on:click={() => select('__activity')}>
         <i aria-hidden="true"></i>{$locale.startsWith('en') ? 'Activity' : 'Actividad'}
       </button>
     </div>
@@ -131,24 +131,34 @@
 {/if}
 
 <style>
-  .ph { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
-  .ph-tabs { display: flex; gap: 6px; flex-wrap: wrap; padding-bottom: 2px; }
+  .ph { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  /* The views read as tabs, not tags: one segmented track, the active segment raised and underlined in its hue. */
+  .ph-tabs {
+    display: flex; align-self: flex-start; max-width: 100%; gap: 2px; padding: 3px; overflow-x: auto; scrollbar-width: none;
+    border-radius: 10px; background: color-mix(in srgb, var(--surface-1) 70%, #000); border: 1px solid var(--border);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, .35);
+  }
+  .ph-tabs::-webkit-scrollbar { display: none; }
   .ph-tabs button {
-    display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 12px; border-radius: 999px; cursor: pointer;
-    font: 700 12px 'Manrope', sans-serif; color: var(--text-2);
-    background: color-mix(in srgb, var(--hue) 6%, var(--surface-1)); border: 1px solid color-mix(in srgb, var(--hue) 20%, var(--border));
-    transition: color .15s, background .2s, border-color .2s, box-shadow .2s, transform .2s ease-out;
+    position: relative; flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px;
+    border: 0; border-radius: 7px; cursor: pointer; white-space: nowrap; background: transparent;
+    font: 600 12px 'Manrope', sans-serif; color: var(--text-3, var(--text-2));
+    transition: color .15s, background .15s, box-shadow .15s;
   }
-  .ph-tabs button i { width: 7px; height: 7px; border-radius: 50%; background: var(--hue); opacity: .65; transition: opacity .2s, box-shadow .2s; }
-  .ph-tabs button:hover { color: var(--text-1); transform: translateY(-1px); border-color: color-mix(in srgb, var(--hue) 50%, var(--border)); background: color-mix(in srgb, var(--hue) 12%, var(--surface-1)); }
+  .ph-tabs button i { width: 6px; height: 6px; border-radius: 50%; background: var(--hue); opacity: .45; transition: opacity .15s, box-shadow .15s; }
+  .ph-tabs button:hover { color: var(--text-1); background: color-mix(in srgb, var(--hue) 8%, transparent); }
+  .ph-tabs button:hover i { opacity: .8; }
   .ph-tabs button.on {
-    color: #fff; border-color: color-mix(in srgb, var(--hue) 70%, transparent);
-    background: linear-gradient(135deg, color-mix(in srgb, var(--hue) 34%, var(--surface-2)), color-mix(in srgb, var(--hue) 14%, var(--surface-2)));
-    box-shadow: 0 8px 20px -10px var(--hue);
+    color: var(--text-1);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--hue) 22%, var(--surface-2)), color-mix(in srgb, var(--hue) 10%, var(--surface-2)));
+    box-shadow: 0 1px 0 rgba(255, 255, 255, .06) inset, 0 2px 8px -3px rgba(0, 0, 0, .6), inset 0 -2px 0 var(--hue);
   }
-  .ph-tabs button.on i { opacity: 1; box-shadow: 0 0 8px var(--hue); }
-  .ph-tabs button:focus-visible { outline: 2px solid var(--hue); outline-offset: 2px; }
-  @media (prefers-reduced-motion: reduce) { .ph-tabs button { transition: none; } .ph-tabs button:hover { transform: none; } }
+  .ph-tabs button.on i { opacity: 1; box-shadow: 0 0 6px var(--hue); }
+  .ph-tabs button:focus-visible { outline: 2px solid var(--hue); outline-offset: -2px; }
+  /* Activity is the panel's log, not one of its views: set apart by a rule. */
+  .ph-tabs button.ph-log { margin-left: 5px; }
+  .ph-tabs button.ph-log::before { content: ''; position: absolute; left: -4px; top: 6px; bottom: 6px; width: 1px; background: var(--border); }
+  @media (prefers-reduced-motion: reduce) { .ph-tabs button { transition: none; } }
   .ph-extra { padding-top: 2px; }
   .ph-err { margin: 0; padding: 6px 10px; border-radius: 6px; background: rgba(240, 71, 112, .12); color: #ff9fb5; font: 500 11.5px 'Manrope', sans-serif; }
 </style>
