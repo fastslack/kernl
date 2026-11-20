@@ -911,7 +911,7 @@
 	.op-grid2 { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 12px; margin-top: 14px; }
 	.op-section {
 		--hue: #22D3EE;
-		display: grid; gap: 12px; align-content: start; margin-top: 14px; padding: 14px 16px; border-radius: 14px;
+		display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-content: start; margin-top: 14px; padding: 14px 16px; border-radius: 14px;
 		background: linear-gradient(160deg, color-mix(in srgb, var(--hue) 9%, var(--surface-1)), var(--surface-1) 55%);
 		border: 1px solid color-mix(in srgb, var(--hue) 26%, var(--border));
 	}

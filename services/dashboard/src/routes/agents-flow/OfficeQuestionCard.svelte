@@ -409,7 +409,7 @@
     border-radius:4px; font:500 11px/1.5 'JetBrains Mono',monospace; color:#8b90af;
     white-space:pre-wrap; word-break:break-word; max-height:160px; overflow-y:auto;
   }
-  .bq-options{ display:grid; grid-template-columns:1fr 1fr; gap:5px; }
+  .bq-options{ display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap:5px; }
   .bq-option{
     display:flex; align-items:center; gap:8px;
     padding:8px 10px; background:#161827; color:#cbd0e8;

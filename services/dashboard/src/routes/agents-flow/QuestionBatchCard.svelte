@@ -86,7 +86,7 @@
 </div>
 
 <style>
-  .qb-card{
+  .qb-card{ min-width:0;
     background:linear-gradient(180deg, rgba(240,184,116,.10) 0%, rgba(240,184,116,.03) 100%);
     border:1px solid rgba(240,184,116,.3); border-left:3px solid #f0b874; border-radius:8px; padding:10px 12px;
   }
