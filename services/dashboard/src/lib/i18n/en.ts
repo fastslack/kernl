@@ -1329,6 +1329,7 @@ const en = {
   "office.chief.q_opinion_loading": "Investigating: reading the issue, the MR and the code before giving an opinion…",
   "office.chief.q_opinion_label": "AI opinion",
   "office.chief.q_opinion_send": "Send this answer",
+  "office.chief.q_send_failed": "Could not send: the kernel did not take that answer. Try another option or a free answer.",
   "office.chief.also_title": "Also settles {n}",
   "office.chief.also_send": "Send to the checked ({n})",
   "office.chief.also_free": "free text",

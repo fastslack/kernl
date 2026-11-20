@@ -19,7 +19,7 @@
   export let colorOf: (agentId: string) => string;
   export let busy: Record<string, boolean> = {};
   export let send: (q: PendingQuestion, choice: Record<string, unknown>) => Promise<boolean>;
-  export let onAnswer: (q: PendingQuestion, idx: number, opt: { label: string; value?: string; url?: string }) => void;
+  export let onAnswer: (q: PendingQuestion, idx: number, opt: { label: string; value?: string; url?: string }) => Promise<boolean> | void;
   export let onDismiss: (q: PendingQuestion) => Promise<void> | void;
   export let onFree: (q: PendingQuestion, text: string) => Promise<boolean>;
   export let onTake: (q: PendingQuestion) => Promise<boolean> | void = () => {};

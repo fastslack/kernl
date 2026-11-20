@@ -12,6 +12,7 @@
   import { onDestroy } from 'svelte';
   import { agentFlowEvents } from '$lib/stores.js';
   import { opinionStepLabel } from '$lib/opinion-progress.js';
+  import { opinionChoice } from '$lib/office/opinion-send.js';
   import type { AgeBucket } from '$lib/office/question-age.js';
   import type { PendingQuestion, QuestionOpinion } from './world-types.js';
 
@@ -19,7 +20,8 @@
   export let agentName: string;
   export let color: string;
   export let busy = false;
-  export let onAnswer: (q: PendingQuestion, idx: number, opt: { label: string; value?: string; url?: string }) => void;
+  /** Resolves false when the kernel refused the answer: the card says so instead of doing nothing. */
+  export let onAnswer: (q: PendingQuestion, idx: number, opt: { label: string; value?: string; url?: string }) => Promise<boolean> | void;
   export let onDismiss: (q: PendingQuestion) => void;
   export let onFree: (q: PendingQuestion, text: string) => Promise<boolean>;
   /** "Lo veo yo": the work is the operator's; the question moves to "Te toca". */
@@ -55,7 +57,9 @@
   async function submitFree(): Promise<void> {
     const text = free.trim();
     if (!text || busy) return;
+    sendFailed = false;
     if (await onFree(q, text)) free = '';
+    else sendFailed = true;
   }
 
   // The AI's own take, offered as a fifth option. Asking starts the kernel's
@@ -157,11 +161,17 @@
   $: if (opStatus !== 'running' && poll) { clearInterval(poll); poll = null; }
   onDestroy(() => { if (poll) clearInterval(poll); });
 
+  /** Set when an answer from this card did not land; cleared on the next try. */
+  let sendFailed = false;
+  async function sent(r: Promise<boolean> | boolean | void): Promise<void> {
+    sendFailed = false;
+    if ((await r) === false) sendFailed = true;
+  }
+
   function takeOpinion(): void {
     if (!opinion || busy) return;
-    // A bare option goes as that option; one with conditions goes as the whole answer.
-    if (pick !== null && !opinion.extends_option && q.options[pick]) onAnswer(q, pick, q.options[pick]);
-    else void onFree(q, opinion.answer);
+    const c = opinionChoice(q, opinion);
+    void sent(c.kind === 'option' ? onAnswer(q, c.index, q.options[c.index]) : onFree(q, c.text));
   }
 
   async function copyAnswer(): Promise<void> {
@@ -227,7 +237,7 @@
     {#each shown as { o: opt, i } (i)}
       {@const optUrl = urlForOption(q, opt)}
       <button class="bq-option" class:bq-option-link={!!optUrl} class:bq-option-pick={pick === i}
-              on:click={() => onAnswer(q, i, opt)}
+              on:click={() => sent(onAnswer(q, i, opt))}
               disabled={busy}
               title={pick === i && opinion?.reasoning ? opinion.reasoning : optUrl ? `Opens ${optUrl}` : opt.label}>
         <span class="bq-option-idx">{i + 1}</span>
@@ -245,10 +255,14 @@
       <div class="bq-done-row">
         <input class="bq-free-input" placeholder={$t('office.chief.done_note')} bind:value={doneNote} disabled={busy}
                aria-label={$t('office.chief.done_note')} />
-        <button class="bq-option bq-done" type="button" on:click={() => onDone(q, doneNote)} disabled={busy}>
+        <button class="bq-option bq-done" type="button" on:click={() => sent(onDone(q, doneNote))} disabled={busy}>
           <span class="bq-option-lbl">{$t('office.chief.done')}</span>
         </button>
       </div>
+    {/if}
+
+    {#if sendFailed && !busy}
+      <div class="bq-opinion-err" role="alert"><p>{$t('office.chief.q_send_failed')}</p></div>
     {/if}
 
     {#if opinion}

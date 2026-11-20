@@ -210,15 +210,15 @@
   const agentNameOf = (id: string) => agents.find(a => a.id === id)?.name ?? id.slice(0, 8);
 
   let questionSubmitting: Record<string, boolean> = {};
-  async function answerQuestion(q: PendingQuestion, idx: number, opt: { label: string; value?: string; url?: string }) {
-    if (questionSubmitting[q.id]) return;
+  async function answerQuestion(q: PendingQuestion, idx: number, opt: { label: string; value?: string; url?: string }): Promise<boolean> {
+    if (questionSubmitting[q.id]) return true;
     // Open the linked URL FIRST (synchronously, inside the user's click event)
     // — popup blockers reject window.open() when it's behind an async await.
     const target = urlForOption(q, opt);
     if (target) {
       window.open(target, '_blank', 'noopener,noreferrer');
     }
-    await sendChoice(q, { kind: 'option', index: idx });
+    return sendChoice(q, { kind: 'option', index: idx });
   }
 
   // One write path for every way of answering. The kernel says where the

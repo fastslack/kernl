@@ -1332,6 +1332,7 @@ const es: Record<I18nKey, string> = {
   "office.chief.q_opinion_loading": "Investigando: lee el issue, el MR y el código antes de opinar…",
   "office.chief.q_opinion_label": "Opinión de la IA",
   "office.chief.q_opinion_send": "Enviar esta respuesta",
+  "office.chief.q_send_failed": "No se pudo enviar: el kernel no aceptó esa respuesta. Probá con otra opción o una respuesta libre.",
   "office.chief.also_title": "También sirve para {n}",
   "office.chief.also_send": "Mandar a las tildadas ({n})",
   "office.chief.also_free": "texto libre",
