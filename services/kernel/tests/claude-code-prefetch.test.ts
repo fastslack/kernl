@@ -21,7 +21,7 @@ describe("Claude Code prompt: the letters, the office and the ticket's dossier c
     await dossiers.afterRun({ scope: flow.id, projectId: null, runId: "r0", agentName: "Ops QA", goal: "web#7", status: "completed", steps: 9, result: "reviewed", error: "" });
     ex.setDossiers(dossiers);
     const goal = `You have 1 unacknowledged letter(s) in your office inbox: "REVISAR-MR web#7" (id ${message!.id}).`;
-    const prompt = (ex as any).buildSystemPrompt(service.getAgent(qa.id), goal, service, null) as string;
+    const prompt = (await (ex as any).buildSystemPrompt(service.getAgent(qa.id), goal, service, null)) as string;
     expect(prompt).toContain("Please review MR !12 at abc123.");
     expect(prompt).toContain("Ops Integrador");
     expect(prompt).toContain(host.id);

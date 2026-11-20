@@ -196,24 +196,31 @@ function build(e: AgentFlowEvent, type: string): DetailSection[] | null {
 
     case 'learning_recalled': {
       const items = Array.isArray(d.items) ? (d.items as Array<Record<string, unknown>>) : [];
+      // The agent's own lessons (own: true) come ranked by the goal; the others from the experience graph.
+      const own = items.length > 0 && items.every((i) => i.own === true);
       return [
         {
-          kind: 'list', label: 'Lessons from other agents',
+          kind: 'list', label: own ? 'Its own lessons, in the prompt' : 'Lessons from other agents',
           items: items.map((i) => ({
             text: str(i.content).replace(/^\[auto\]\s*/, ''),
-            meta: [
+            meta: (i.own === true ? [
+              learningKind(i.learning_type).label,
+              i.confidence !== undefined ? `confidence ${pct(i.confidence)}` : '',
+            ] : [
               str(i.source_agent_name) && `from ${str(i.source_agent_name)}`,
               learningKind(i.learning_type).label,
               `score ${pct(i.score)}`,
               `relevance ${pct(i.relevance)}`,
               num(i.tool_overlap) ? `${int(i.tool_overlap)} shared tools` : '',
               i.same_office ? 'same office' : '',
-            ].filter(Boolean).join(' · '),
+            ]).filter(Boolean).join(' · '),
           })),
         },
         {
           kind: 'note',
-          body: `Found by ${str(d.mode) === 'fulltext' ? 'full-text search' : 'vector search with filters inside the index'} in the agents' experience graph, weighted by the tools and office this agent shares with the one that learned it.`,
+          body: own
+            ? `Ranked by ${str(d.mode) === 'vector' ? 'meaning and keywords' : 'keywords'} against this run's goal; grading credits or blames these, not every lesson the agent has.`
+            : `Found by ${str(d.mode) === 'fulltext' ? 'full-text search' : 'vector search with filters inside the index'} in the agents' experience graph, weighted by the tools and office this agent shares with the one that learned it.`,
         },
         fields([runIdField(d)]),
       ].filter(Boolean) as DetailSection[];

@@ -18,13 +18,43 @@ describe("Claude Code executor and projects", () => {
   });
   afterEach(() => db.close());
 
-  it("the system prompt carries only the run's project learnings", () => {
+  it("the system prompt carries only the run's project learnings", async () => {
     const ex = new ClaudeCodeExecutor() as unknown as {
-      buildSystemPrompt(agent: unknown, goal: string, service: AgentService, projectId?: string | null): string;
+      buildSystemPrompt(agent: unknown, goal: string, service: AgentService, projectId?: string | null, runId?: string): Promise<string>;
     };
-    const prompt = ex.buildSystemPrompt(s.getAgent(agentId)!, "draft", s, "P-ACME");
+    const prompt = await ex.buildSystemPrompt(s.getAgent(agentId)!, "draft", s, "P-ACME");
     expect(prompt).toContain("ACME-LEARN");
     expect(prompt).not.toContain("KERNL-LEARN");
+  });
+
+  it("records for the run the learnings its prompt carried, and says so on the run's timeline", async () => {
+    const events = new EventBus();
+    const recalled: unknown[] = [];
+    events.on("agent:flow:learning_recalled", (p) => { recalled.push(p); });
+    const ex = new ClaudeCodeExecutor() as unknown as {
+      buildSystemPrompt(agent: unknown, goal: string, service: AgentService, projectId: string | null, runId: string, events: EventBus): Promise<string>;
+    };
+    const run = s.createRun({ agent_id: agentId, trigger_type: "manual", goal: "draft" });
+    const prompt = await ex.buildSystemPrompt(s.getAgent(agentId)!, "draft", s, "P-ACME", run.id, events);
+    expect(prompt).toContain("ACME-LEARN");
+    // Grading credits or blames what the prompt carried, not every lesson the agent has.
+    expect((s.getInjectedLearnings(run.id) ?? []).map((l) => l.type)).toEqual(["avoid"]);
+    const logged = s.getEventLog({ run_id: run.id }) as Array<{ event_subtype: string; raw_data: string }>;
+    const row = logged.find((e) => e.event_subtype === "learning_recalled");
+    expect(row).toBeDefined();
+    expect(String(row!.raw_data)).toContain("ACME-LEARN");
+    expect(String(row!.raw_data)).not.toContain("KERNL-LEARN");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(recalled.length).toBe(1);
+  });
+
+  it("without a run nothing is recorded", async () => {
+    const ex = new ClaudeCodeExecutor() as unknown as {
+      buildSystemPrompt(agent: unknown, goal: string, service: AgentService, projectId: string | null): Promise<string>;
+    };
+    await ex.buildSystemPrompt(s.getAgent(agentId)!, "draft", s, "P-ACME");
+    const n = (db.prepare("SELECT count(*) n FROM agent_run_learnings").get() as { n: number }).n;
+    expect(n).toBe(0);
   });
 
   it("projectRunContext returns the block and the home dir to mount, or nothing", () => {

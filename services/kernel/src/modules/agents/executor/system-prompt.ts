@@ -77,6 +77,24 @@ export type SystemPromptStep = (
   ctx: SystemPromptContext,
 ) => string | null | Promise<string | null>;
 
+/**
+ * What the learnings steps read. The native executor passes its whole context; the Claude Code executor, which builds
+ * its own prompt, passes this much (AgentService.promptLearningsFor) and gets the same learnings, recorded the same way.
+ */
+export interface LearningsContext {
+  agent: Agent;
+  service: AgentService;
+  config: KernelConfig | null;
+  lang: KernelLanguage;
+  effectiveGoal: string;
+  projectId: string | null;
+  recorder: Pick<RunRecorder, "runId" | "logEvent" | "emit">;
+  goalVector: number[] | null;
+  cosW?: number;
+  minS?: number;
+}
+type LearningsStep = (ctx: LearningsContext) => string | null | Promise<string | null>;
+
 // ── Steps (in prompt order) ─────────────────────────────────────────────
 
 const basePrompt: SystemPromptStep = (ctx) =>
@@ -167,7 +185,7 @@ const projectContext: SystemPromptStep = (ctx) => {
 // is off, the embeddings client isn't wired, or the embed call fails.
 // Costs ~50-100ms (local MiniLM) / <30ms (LMStudio) per run when enabled.
 // Contributes no text; only awaits when there is an embed call to make.
-const semanticRankingGate: SystemPromptStep = (ctx) => {
+const semanticRankingGate: LearningsStep = (ctx) => {
   const useSemantic = !!ctx.config?.agents?.useSemanticRanking;
   const embedClient = useSemantic ? ctx.service.getEmbeddingsClient() : null;
   const finish = () => {
@@ -188,16 +206,37 @@ const semanticRankingGate: SystemPromptStep = (ctx) => {
 };
 
 // Inject learnings — ranked by relevance to current goal, not blind top-confidence
-const learnings: SystemPromptStep = (ctx) => {
+const learnings: LearningsStep = (ctx) => {
   const { service, agent, effectiveGoal, goalVector, cosW, minS } = ctx;
   const items = goalVector
     ? service.getRelevantLearningsByEmbedding(agent.id, effectiveGoal, goalVector, 15, cosW, minS, ctx.projectId)
     : service.getRelevantLearnings(agent.id, effectiveGoal, 15, ctx.projectId);
   // What this prompt carries is what grading credits or blames (memory-service).
-  try {
-    service.recordInjectedLearnings(ctx.recorder.runId, items.map((l) => l.id), false);
-  } catch (err) {
-    log.debug(`Recording injected learnings failed: ${err instanceof Error ? err.message : String(err)}`);
+  if (ctx.recorder.runId) {
+    try {
+      service.recordInjectedLearnings(ctx.recorder.runId, items.map((l) => l.id), false);
+    } catch (err) {
+      log.debug(`Recording injected learnings failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  // Said on the run's timeline, live and in its history: they rode inside the prompt, where nobody saw them, and an
+  // office whose agents had sixty lessons each read that they never loaded any.
+  if (items.length > 0) {
+    const recalled = items.map((l) => ({
+      learning_id: l.id, source_agent_id: agent.id, source_agent_name: agent.name,
+      learning_type: l.type, content: l.content, confidence: l.confidence, own: true,
+    }));
+    const mode = goalVector ? "vector" : "lexical";
+    try {
+      ctx.recorder.logEvent({
+        event_type: "run", event_subtype: "learning_recalled",
+        detail: `${items.length} of its own learning(s) in the prompt`,
+        raw_data: { items: recalled, mode },
+      });
+      ctx.recorder.emit("agent:flow:learning_recalled", { items: recalled, mode });
+    } catch (err) {
+      log.debug(`Reporting injected learnings failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
   return promptLearningsBlock(ctx.lang, items) || null;
 };
@@ -207,7 +246,7 @@ const learnings: SystemPromptStep = (ctx) => {
 // embeds the goal itself otherwise, and falls back to full-text search when no
 // embeddings client is wired. Never blocks a run: any failure contributes
 // nothing. The injected ids are logged so their effect can be measured.
-export const sharedLearnings: SystemPromptStep = (ctx) => {
+export const sharedLearnings: LearningsStep = (ctx) => {
   if (ctx.config?.agents?.sharedLearnings === false) return null;
   const graph = ctx.service.getExperienceGraph();
   if (!graph?.available) return null;
@@ -248,7 +287,7 @@ export const sharedLearnings: SystemPromptStep = (ctx) => {
         });
       }
       if (items.length === 0) return null;
-      ctx.service.recordInjectedLearnings(ctx.recorder.runId, items.map((i) => i.id), true);
+      if (ctx.recorder.runId) ctx.service.recordInjectedLearnings(ctx.recorder.runId, items.map((i) => i.id), true);
       ctx.recorder.logEvent({
         event_type: "run", event_subtype: "shared_learnings_injected",
         detail: `${items.length} learning(s) from other agents`,
@@ -435,6 +474,19 @@ export const SYSTEM_PROMPT_STEPS: ReadonlyArray<SystemPromptStep> = [
   workspaceMandate,
   styleDirective,
 ];
+
+/**
+ * The learnings blocks of a prompt — the agent's own, ranked by the goal, then what other agents learned in situations
+ * like this one — for an executor that builds its own prompt. Same steps, same recording, as the native prompt.
+ */
+export async function learningsBlocks(ctx: LearningsContext): Promise<string[]> {
+  const out: string[] = [];
+  for (const step of [semanticRankingGate, learnings, sharedLearnings]) {
+    const text = await step(ctx);
+    if (text) out.push(text);
+  }
+  return out;
+}
 
 /**
  * Run the steps in order and join their blocks. Returns the system text and

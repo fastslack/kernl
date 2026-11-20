@@ -135,7 +135,11 @@ export function liveEventSummary(e: AgentFlowEvent): string {
   }
   if (t === 'learning_created') return `Lesson learned: ${String(e.data.content ?? '')}`;
   if (t === 'learning_recalled') {
-    const items = Array.isArray(e.data.items) ? (e.data.items as Array<{ source_agent_name?: unknown }>) : [];
+    const all = Array.isArray(e.data.items) ? (e.data.items as Array<{ source_agent_name?: unknown; own?: unknown }>) : [];
+    const own = all.filter((i) => i.own === true).length;
+    const items = all.filter((i) => i.own !== true);
+    // The agent's own lessons, in its prompt (own: true): said apart from the ones other agents learned.
+    if (own > 0 && items.length === 0) return `Loaded ${own} of its own ${own === 1 ? 'lesson' : 'lessons'}`;
     const from = [...new Set(items.map((i) => String(i.source_agent_name ?? '')).filter(Boolean))].join(', ');
     return `Recalled ${items.length} ${items.length === 1 ? 'lesson' : 'lessons'}${from ? ` from ${from}` : ''}`;
   }

@@ -90,7 +90,6 @@ import { resolveAgentSystemPrompt, resolveAgentLanguage } from "../../../../../s
 import {
   promptTodayDate,
   promptClaudeCodeWorkInstructions,
-  promptLearningsBlock,
   promptStyleDirective,
 } from "../../../../../src/core/i18n/prompts.js";
 import type { WorkspaceService } from "./workspace-service.js";
@@ -801,7 +800,7 @@ export class ClaudeCodeExecutor {
       }
       const vars = this.parseVariables(agent);
       if (officeHomeFlow) await prepareOfficeWorkspace(service, run.id, officeHomeFlow.id, vars);
-      let systemPrompt = this.buildSystemPrompt(agent, goal, service, run.project_id ?? null);
+      let systemPrompt = await this.buildSystemPrompt(agent, goal, service, run.project_id ?? null, run.id, events);
       // When the agent inherited its office home (no per-agent cwd override),
       // tell it where it is and where to persist office knowledge.
       if (officeHomeFlow) {
@@ -2203,7 +2202,10 @@ export class ClaudeCodeExecutor {
     }
   }
 
-  private buildSystemPrompt(agent: Agent, goal: string, service?: AgentService, projectId: string | null = null): string {
+  private async buildSystemPrompt(
+    agent: Agent, goal: string, service?: AgentService, projectId: string | null = null,
+    runId = "", events?: EventBus | null,
+  ): Promise<string> {
     const lang = resolveAgentLanguage(agent, this.configRef);
     const base = resolveAgentSystemPrompt(agent, lang);
     const parts: string[] = [];
@@ -2243,15 +2245,13 @@ export class ClaudeCodeExecutor {
       } catch { /* inbox table missing in tests / fresh DB — non-fatal */ }
     }
 
-    // Inject learnings ranked by relevance to current goal — same closed-loop
-    // the native executor uses (executor.ts:576). Without this, claude_code
-    // agents fly blind: auto-eval may grade their runs but they never see the
-    // accumulated lessons on the next run.
+    // The learnings, as the native prompt has them: its own ranked by the goal (by meaning when semantic ranking is on)
+    // and what other agents learned, recorded for the run so grading credits or blames only what the prompt carried,
+    // and shown on the run's timeline. Done here by hand, they were ranked by keywords only, never recorded (grading
+    // moved every lesson of the agent on each run) and never shown, and the shared ones never came.
     if (service) {
       try {
-        const learnings = service.getRelevantLearnings(agent.id, goal, 15, projectId);
-        const block = promptLearningsBlock(lang, learnings);
-        if (block) parts.push(block);
+        parts.push(...(await service.promptLearningsFor({ agent, runId, goal, projectId, lang, config: this.configRef, events })));
       } catch { /* learnings table missing in tests / fresh DB — non-fatal */ }
     }
 

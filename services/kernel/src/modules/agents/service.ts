@@ -1,6 +1,6 @@
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { EventBus } from "../../core/event-bus.js";
-import type { KernelConfig } from "../../core/config.js";
+import type { KernelConfig, KernelLanguage } from "../../core/config.js";
 import type { ProjectGateLike, SchedulePrecheck } from "./advanced-types.js";
 import { findDuplicateQuestion, DUPLICATE_WINDOW_DAYS, type QuestionJudge } from "./question-dedupe.js";
 import { newId, isoNow } from "../../core/helpers.js";
@@ -192,6 +192,32 @@ export class AgentService {
   private experienceGraph: AgentExperienceGraph | null = null;
   setExperienceGraph(graph: AgentExperienceGraph | null): void { this.experienceGraph = graph; }
   getExperienceGraph(): AgentExperienceGraph | null { return this.experienceGraph; }
+
+  /**
+   * The learnings blocks of a run's prompt, for an executor that builds its own (Claude Code): the agent's own, ranked
+   * by the goal, and what other agents learned. Recorded for the run like the native prompt's, so grading credits or
+   * blames what the prompt carried and not every lesson the agent has, and shown on the run's timeline. Without a run
+   * id nothing is recorded. Every agent of an office running on Claude Code got its lessons with none of that: grading
+   * moved all sixty of an agent's lessons on every run, and the timeline never showed one.
+   */
+  async promptLearningsFor(opts: {
+    agent: Agent; runId: string; goal: string; projectId: string | null;
+    lang: KernelLanguage; config: KernelConfig | null; events?: EventBus | null;
+  }): Promise<string[]> {
+    const { agent, runId, events } = opts;
+    const { learningsBlocks } = await import("./executor/system-prompt.js");
+    return learningsBlocks({
+      agent, service: this, config: opts.config, lang: opts.lang, effectiveGoal: opts.goal, projectId: opts.projectId,
+      goalVector: null,
+      recorder: {
+        runId,
+        logEvent: (fields) => {
+          if (runId) this.logEvent({ run_id: runId, agent_id: agent.id, agent_name: agent.name, ...fields } as Parameters<AgentService["logEvent"]>[0]);
+        },
+        emit: (event, fields) => { events?.emit(event, { agent_id: agent.id, agent_name: agent.name, run_id: runId, ...fields }); },
+      },
+    });
+  }
 
   /** Per-flow say on scheduled slots (SchedulePrecheck). Extensions register theirs on init. */
   private schedulePrechecks = new Map<string, SchedulePrecheck>();

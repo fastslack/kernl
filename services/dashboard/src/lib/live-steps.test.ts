@@ -498,3 +498,18 @@ describe("history filter for step rows", () => {
     expect(lines).toEqual(["Cuenta: «Personal»", "Sesión de «Trabajo» caída — se saltea por un rato"]);
   });
 });
+
+describe("lessons in the prompt", () => {
+  it("says the agent's own apart from the ones other agents learned", () => {
+    const own = ev({ items: [{ own: true, source_agent_name: "Coder" }, { own: true, source_agent_name: "Coder" }] }, "agent:flow:learning_recalled");
+    expect(liveStepSummary(own)).toBe("Loaded 2 of its own lessons");
+    const shared = ev({ items: [{ source_agent_name: "QA" }] }, "agent:flow:learning_recalled");
+    expect(liveStepSummary(shared)).toBe("Recalled 1 lesson from QA");
+  });
+
+  it("a history row of them reads the same as live", () => {
+    const [e] = eventLogToFlowEvents({ event_type: "run", event_subtype: "learning_recalled", detail: "1 of its own learning(s) in the prompt",
+      raw_data: JSON.stringify({ items: [{ own: true, content: "check the preview URL" }], mode: "lexical" }), created_at: "2026-11-20T10:00:00Z" } as never, "r1");
+    expect(liveStepSummary(e)).toBe("Loaded 1 of its own lesson");
+  });
+});

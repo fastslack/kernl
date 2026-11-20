@@ -212,6 +212,69 @@ exports[`AgentExecutor.execute — characterization assembles every system-promp
   ],
   [
     "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "2 of its own learning(s) in the prompt",
+        "event_subtype": "learning_recalled",
+        "event_type": "run",
+        "raw_data": {
+          "items": [
+            {
+              "confidence": 0.8,
+              "content": "Do not guess",
+              "learning_type": "avoid",
+              "own": true,
+              "source_agent_id": "agent-1",
+              "source_agent_name": "Nadia",
+            },
+            {
+              "confidence": 0.55,
+              "content": "Cite sources",
+              "learning_type": "prefer",
+              "own": true,
+              "source_agent_id": "agent-1",
+              "source_agent_name": "Nadia",
+            },
+          ],
+          "mode": "vector",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:learning_recalled",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "items": [
+        {
+          "confidence": 0.8,
+          "content": "Do not guess",
+          "learning_type": "avoid",
+          "own": true,
+          "source_agent_id": "agent-1",
+          "source_agent_name": "Nadia",
+        },
+        {
+          "confidence": 0.55,
+          "content": "Cite sources",
+          "learning_type": "prefer",
+          "own": true,
+          "source_agent_id": "agent-1",
+          "source_agent_name": "Nadia",
+        },
+      ],
+      "mode": "vector",
+      "run_id": "run-1",
+    },
+  ],
+  [
+    "svc",
     "getExperienceGraph",
     [],
   ],
