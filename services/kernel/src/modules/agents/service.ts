@@ -2148,8 +2148,15 @@ export class AgentService {
     const schedules = this.db
       .prepare("SELECT * FROM agent_schedules WHERE active = 1 ORDER BY created_at DESC")
       .all() as AgentSchedule[];
+    // The latest 50, plus every run still open however old: the dashboard reads who is working from this list, and a
+    // busy instance pushes an open run out of the latest 50 within minutes. A run it saw start live and missed the end of
+    // (a socket reconnect) then stayed "working" for good, as nothing it polled said otherwise.
     const recentRuns = this.db
-      .prepare("SELECT * FROM agent_runs ORDER BY created_at DESC LIMIT 50")
+      .prepare(
+        `SELECT * FROM agent_runs WHERE id IN (SELECT id FROM agent_runs ORDER BY created_at DESC LIMIT 50)
+            OR status IN ('running', 'pending')
+         ORDER BY created_at DESC`,
+      )
       .all() as AgentRun[];
 
     const stats: Record<string, { total_runs: number; completed: number; failed: number; success_rate: number }> = {};

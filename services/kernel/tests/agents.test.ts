@@ -207,6 +207,23 @@ describe("AgentService", () => {
       service.updateRun(run.id, { status: "completed" });
       expect(service.cancelRun(run.id)).toBe(false);
     });
+
+    it("lists a run still open in the graph's recent runs however many runs came after it", () => {
+      const agent = service.createAgent({ name: "Test" });
+      const open = service.createRun({ agent_id: agent.id, goal: "long one" });
+      service.updateRun(open.id, { status: "running" });
+      db.run("UPDATE agent_runs SET created_at = '2000-01-01T00:00:00.000Z' WHERE id = ?", [open.id]);
+      const old = service.createRun({ agent_id: agent.id, goal: "done long ago" });
+      service.updateRun(old.id, { status: "completed" });
+      db.run("UPDATE agent_runs SET created_at = '2000-01-01T00:00:01.000Z' WHERE id = ?", [old.id]);
+      for (let i = 0; i < 60; i++) service.updateRun(service.createRun({ agent_id: agent.id, goal: `r${i}` }).id, { status: "completed" });
+
+      const ids = service.getAgentGraph().recentRuns.map((r) => r.id);
+      expect(ids).toHaveLength(51);
+      expect(ids).toContain(open.id);
+      expect(ids).not.toContain(old.id);
+      expect(ids.at(-1)).toBe(open.id); // newest first, still
+    });
   });
 
   // ── Steps ───────────────────────────────────────

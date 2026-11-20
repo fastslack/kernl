@@ -259,6 +259,10 @@
   // sweep only marks it failed in the DB, and this tab keeps its events across
   // the reconnect. So a run the poll already sees finished counts as completed,
   // or its agent would show as working until the page is reloaded.
+  // The poll lists every open run (the latest 50 plus all still running), so a run this tab saw start before the poll
+  // was asked for, that the poll no longer lists as open, is over too: on a busy instance the finished run is out of the
+  // latest 50 by then, and its agent showed as working, on an issue long closed, until the page was reloaded.
+  $: openRuns = new Set(runs.filter(r => r.status === 'running' || r.status === 'pending').map(r => r.id));
   $: liveRunningAgents = (() => {
     const started = new Set<string>();
     const completedRuns = new Set<string>(
@@ -268,9 +272,10 @@
       if (e.event === 'agent:flow:run_completed') completedRuns.add(String(e.data.run_id));
     }
     for (const e of flowEvents) {
-      if (e.event === 'agent:flow:run_started' && !completedRuns.has(String(e.data.run_id))) {
-        started.add(String(e.data.agent_id));
-      }
+      const id = String(e.data.run_id);
+      if (e.event !== 'agent:flow:run_started' || completedRuns.has(id)) continue;
+      if (polledRunStarts.has(id) && !openRuns.has(id)) continue;
+      started.add(String(e.data.agent_id));
     }
     return started;
   })();
@@ -299,15 +304,20 @@
       ...(hostResolverId ? [hostResolverId] : []), ...(hostDeployerId ? [hostDeployerId] : [])]);
 
   // ── Fetch ──────────────────────────────────────
+  // The runs this tab had seen start when the last poll that answered was asked for (see openRuns).
+  let polledRunStarts = new Set<string>();
   async function fetchGraph() {
+    const seen = new Set(get(agentFlowEvents).filter(e => e.event === 'agent:flow:run_started').map(e => String(e.data.run_id)));
     try {
       const args: Record<string, unknown> = selectedFlowId ? { flow_id: selectedFlowId } : {};
-      return await rpcOrCall<GraphData | null>('agents.graph', args, async () => {
+      const data = await rpcOrCall<GraphData | null>('agents.graph', args, async () => {
         const url = selectedFlowId ? `/api/agents/graph?flow_id=${selectedFlowId}` : '/api/agents/graph';
         const res = await fetch(url);
         if (!res.ok) return null;
         return await res.json() as GraphData;
       });
+      if (data) polledRunStarts = seen;
+      return data;
     } catch { return null; }
   }
 
