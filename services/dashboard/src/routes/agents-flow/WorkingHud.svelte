@@ -18,7 +18,7 @@
     /** When its run started (ISO). */
     startedAt?: string;
     /** The newest step of its run. */
-    last?: { icon: string; label: string; text: string; at: string };
+    last?: { type: string; icon: string; label: string; text: string; at: string };
     /** Tool calls and tokens of the run so far. */
     tools?: number;
     tokens?: number;
@@ -40,6 +40,7 @@
    * long it has run, its newest step, and its tool and token counts; "Open agent" there selects it in the world.
    */
   import { createEventDispatcher, onDestroy } from 'svelte';
+  import { t, type Translate } from '$lib/i18n/index.js';
 
   export let items: WorkingItem[] = [];
   const dispatch = createEventDispatcher<{ select: string }>();
@@ -65,14 +66,20 @@
     if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`;
     return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
   }
+  // A step type the dictionary does not name keeps the label it came with.
+  function stepLabel(type: string, label: string, tr: Translate): string {
+    const key = `working.step.${type}`;
+    const v = tr(key as string);
+    return v === key ? label : v;
+  }
   const tok = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k` : String(n));
 </script>
 
 {#if items.length}
-  <section class="wh" aria-label="Working">
+  <section class="wh" aria-label={$t('working.title')}>
     <header class="wh-h">
       <span class="wh-pulse" aria-hidden="true"></span>
-      <span class="wh-title">Working</span>
+      <span class="wh-title">{$t('working.title')}</span>
       <span class="wh-count">{items.length}</span>
     </header>
     <ul class="wh-list">
@@ -93,18 +100,18 @@
             <div class="wh-more">
               {#if it.tag && it.title}<p class="wh-full">{it.title}</p>{/if}
               <dl class="wh-facts">
-                {#if it.office}<dt>Office</dt><dd><i style="background:{it.officeColor ?? it.color}" aria-hidden="true"></i>{it.office}</dd>{/if}
-                {#if it.model}<dt>Model</dt><dd class="mono">{it.model}</dd>{/if}
-                {#if since(it.startedAt, now)}<dt>Running</dt><dd class="mono">{since(it.startedAt, now)}</dd>{/if}
-                {#if it.tools || it.tokens}<dt>Work</dt><dd class="mono">{it.tools ?? 0} tools{#if it.tokens} · {tok(it.tokens)} tok{/if}</dd>{/if}
+                {#if it.office}<dt>{$t('working.office')}</dt><dd><i style="background:{it.officeColor ?? it.color}" aria-hidden="true"></i>{it.office}</dd>{/if}
+                {#if it.model}<dt>{$t('working.model')}</dt><dd class="mono">{it.model}</dd>{/if}
+                {#if since(it.startedAt, now)}<dt>{$t('working.running')}</dt><dd class="mono">{since(it.startedAt, now)}</dd>{/if}
+                {#if it.tools || it.tokens}<dt>{$t('working.work')}</dt><dd class="mono">{$t('working.tools', { n: it.tools ?? 0 })}{#if it.tokens}{' · '}{$t('working.tokens', { n: tok(it.tokens) })}{/if}</dd>{/if}
               </dl>
               {#if it.last}
                 <div class="wh-last">
-                  <div class="wh-last-h"><span>{it.last.icon}</span><span class="wh-last-l">{it.last.label}</span><span class="wh-last-t mono">{since(it.last.at, now) ? `${since(it.last.at, now)} ago` : ''}</span></div>
+                  <div class="wh-last-h"><span>{it.last.icon}</span><span class="wh-last-l">{stepLabel(it.last.type, it.last.label, $t)}</span><span class="wh-last-t mono">{since(it.last.at, now) ? $t('working.ago', { t: since(it.last.at, now) }) : ''}</span></div>
                   <p class="wh-last-x">{it.last.text}</p>
                 </div>
               {/if}
-              <button type="button" class="wh-go" on:click={() => dispatch('select', it.id)}>Open agent <span aria-hidden="true">→</span></button>
+              <button type="button" class="wh-go" on:click={() => dispatch('select', it.id)}>{$t('working.open')} <span aria-hidden="true">→</span></button>
             </div>
           {/if}
         </li>

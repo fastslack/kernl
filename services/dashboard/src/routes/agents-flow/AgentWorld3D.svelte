@@ -1342,7 +1342,7 @@
       office: flow?.name, officeColor: flow?.color,
       model: [exec, a.model].filter(Boolean).join(' · ') || undefined,
       startedAt: started?.ts,
-      last: newest ? { icon: liveStepIcon(liveEventType(newest)), label: liveStepLabel(liveEventType(newest)), text: liveStepSummary(newest), at: newest.ts } : undefined,
+      last: newest ? { type: liveEventType(newest), icon: liveStepIcon(liveEventType(newest)), label: liveStepLabel(liveEventType(newest)), text: liveStepSummary(newest), at: newest.ts } : undefined,
       tools: run.filter((e) => liveEventType(e) === 'tool_call').length,
       tokens: runTokensTotal(run),
     }];
