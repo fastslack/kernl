@@ -112,7 +112,7 @@
         { id: 'queue', label: en ? 'Queued' : 'En cola', rows: shown.filter((r) => cell(r.agent) === '') },
       ]
     : [{ id: 'all', label: '', rows: shown }];
-  $: cols = fields.length + (canDrag ? 1 : 0) + (rowActions.length ? 1 : 0);
+  $: cols = tableFields.length + (canDrag ? 1 : 0) + (rowActions.length ? 1 : 0);
 
   const open = (r: Record<string, unknown>) => view.detail && dispatch('open', String(r.key ?? ''));
   // The wide column is the row's name: the field with a second line (sub), else the first one that is not a number.
@@ -121,6 +121,21 @@
   $: width = (key: string, _i: number) =>
     key === mainKey ? '40%' : kinds[key] === 'number' ? (/^(pos|#|n|nro)$/i.test(key) ? '44px' : '76px')
       : kinds[key] === 'status' ? '124px' : kinds[key] === 'phone' ? '128px' : 'auto';
+  // A text column narrower than this reads as "he…": the table drops such columns from the right until the rest fit
+  // (the row's detail still has them). The width left after the name (40%) and the fixed columns is split among them.
+  const MIN_TEXT = 110;
+  let wrapWidth = 0;
+  const fixedPx = (key: string) => { const w = width(key, 0); return w.endsWith('px') ? parseInt(w, 10) : 0; };
+  $: tableFields = (() => {
+    if (!wrapWidth) return fields;
+    const fixed = fields.reduce((n, f) => n + (f.key === mainKey ? 0 : fixedPx(f.key)), 0)
+      + (canDrag ? 26 : 0) + (rowActions.length ? (showMoves ? rowActions.length * 30 + 12 : 92) : 0);
+    const autos = fields.filter((f) => f.key !== mainKey && width(f.key, 0) === 'auto');
+    let keep = autos.length;
+    while (keep > 0 && (wrapWidth * 0.6 - fixed) / keep < MIN_TEXT) keep--;
+    const drop = new Set(autos.slice(keep).map((f) => f.key));
+    return fields.filter((f) => !drop.has(f.key));
+  })();
 </script>
 
 <div class="pt-bar">
@@ -152,10 +167,10 @@
 </div>
 
 {#if moveMsg}<div class="pt-movemsg" role="alert">{moveMsg}</div>{/if}
-<div class="pt-wrap">
+<div class="pt-wrap" bind:clientWidth={wrapWidth}>
   <table class="pt" class:pt--open={!!view.detail}>
-    <colgroup>{#if canDrag}<col style="width:26px" />{/if}{#each fields as f, i (f.key)}<col style="width:{width(f.key, i)}" />{/each}{#if rowActions.length}<col style="width:{showMoves ? rowActions.length * 30 + 12 : 92}px" />{/if}</colgroup>
-    <thead><tr>{#if canDrag}<th aria-label={en ? 'Drag' : 'Arrastrar'}></th>{/if}{#each fields as f (f.key)}<th>{textOf(f.label, $locale) || humanize(f.key)}</th>{/each}{#if rowActions.length}<th class="pt-moves-h"><button type="button" class="pt-moves-toggle" class:on={showMoves} aria-expanded={showMoves}
+    <colgroup>{#if canDrag}<col style="width:26px" />{/if}{#each tableFields as f, i (f.key)}<col style="width:{width(f.key, i)}" />{/each}{#if rowActions.length}<col style="width:{showMoves ? rowActions.length * 30 + 12 : 92}px" />{/if}</colgroup>
+    <thead><tr>{#if canDrag}<th aria-label={en ? 'Drag' : 'Arrastrar'}></th>{/if}{#each tableFields as f (f.key)}<th>{textOf(f.label, $locale) || humanize(f.key)}</th>{/each}{#if rowActions.length}<th class="pt-moves-h"><button type="button" class="pt-moves-toggle" class:on={showMoves} aria-expanded={showMoves}
       on:click={() => (showMoves = !showMoves)}><Icon name="move" size={11} />{showMoves ? (en ? 'Done' : 'Listo') : (en ? 'Reorder' : 'Ordenar')}</button></th>{/if}</tr></thead>
     {#each groups as grp (grp.id)}
     <tbody class="pt-grp pt-grp--{grp.id}">
@@ -174,7 +189,7 @@
           on:drop|preventDefault={() => drop(r)}
           on:dragend={() => { dragKey = ''; overKey = ''; }}>
           {#if canDrag}<td class="pt-grip" title={en ? 'Drag to reorder' : 'Arrastrá para reordenar'} aria-hidden="true">⠿</td>{/if}
-          {#each fields as f, fi (f.key)}
+          {#each tableFields as f, fi (f.key)}
             {@const text = cell(r[f.key])}
             {@const kind = text ? kindOf(f.key, r[f.key]) : kinds[f.key]}
             {@const href = text ? hrefOf(kind, text) : null}
