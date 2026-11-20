@@ -316,4 +316,33 @@ describe.skipIf(!relateClientInstalled())("AgentExperienceGraph on Relate", () =
     });
     expect(hits.map((h) => h.id)).toEqual(["l-mail"]);
   });
+
+  it("keeps vectors of the active model's size, not only 384, and stops sending them again (1536, 20/11)", async () => {
+    const BIG = 1536;
+    const big = (seed: number, eps = 0): number[] => {
+      let s = seed;
+      const v = Array.from({ length: BIG }, (_, i) => {
+        s = (s * 16807) % 2147483647;
+        return s / 2147483647 - 0.5 + eps * Math.sin(i);
+      });
+      const n = Math.hypot(...v);
+      return v.map((x) => x / n);
+    };
+    const OPENAI = "text-embedding-3-small";
+    // The store was made under the local model: a 384-dimension index already there.
+    await xp.sync();
+    db.prepare("UPDATE agent_learnings SET embedding = ?, embedding_model = ? WHERE id = 'l-mail'").run(vectorToBlob(big(7)), OPENAI);
+    const xp2 = new AgentExperienceGraph(db as never, () => graph, () => OPENAI, () => BIG);
+    expect((await xp2.sync()).learnings).toBe(1);
+    expect((await xp2.sync()).learnings).toBe(0); // it has its vector now: not sent again on every pass
+    const dims = await graph.run(
+      "SHOW VECTOR INDEXES YIELD name, options WHERE name = 'agent-learning-embeddings' RETURN options",
+    );
+    expect(Number((dims.records[0].get("options") as { indexConfig: Record<string, unknown> }).indexConfig["vector.dimensions"])).toBe(BIG);
+    const hits = await xp2.findSharedLearnings({
+      agentId: "b", flowId: "office-1", projectId: null, goal: "zzz unrelated words",
+      goalVector: big(7, 0.02), embeddingModel: OPENAI, tools: [],
+    });
+    expect(hits.map((h) => h.id)).toEqual(["l-mail"]); // found by meaning: its words do not match
+  });
 });

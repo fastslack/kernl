@@ -47,16 +47,21 @@ export async function ensureVectorIndex(graph: GraphDriver, spec: VectorIndexSpe
   if (!graph.capabilities.vectorSimilarity) return;
   const prop = spec.property ?? "embedding";
   const filters = hasVectorSearch(graph) ? spec.filters ?? [] : [];
-  if (hasVectorSearch(graph)) {
-    const r = await graph.run(
-      "SHOW VECTOR INDEXES YIELD name, properties WHERE name = $name RETURN properties",
-      { name: spec.name },
-    );
-    const have = r.records[0]?.get("properties") as string[] | undefined;
+  // An index made for other properties, or for vectors of another size, is made again: the embeddings model can
+  // change under a store (a 384-dimension index left every 1536-dimension vector out of the search).
+  const r = await graph.run(
+    "SHOW VECTOR INDEXES YIELD name, properties, options WHERE name = $name RETURN properties, options",
+    { name: spec.name },
+  ).catch(() => null);
+  const row = r?.records[0];
+  if (row) {
+    const have = row.get("properties") as string[] | undefined;
     const want = [prop, ...filters];
-    if (have && (have.length !== want.length || have.some((p, i) => p !== want[i]))) {
-      await graph.run(`DROP INDEX ${ident(spec.name)} IF EXISTS`);
-    }
+    const options = row.get("options") as { indexConfig?: Record<string, unknown> } | null | undefined;
+    const dims = Number(options?.indexConfig?.["vector.dimensions"] ?? NaN);
+    const otherProps = hasVectorSearch(graph) && !!have && (have.length !== want.length || have.some((p, i) => p !== want[i]));
+    const otherSize = Number.isFinite(dims) && dims !== Math.trunc(spec.dimensions);
+    if (otherProps || otherSize) await graph.run(`DROP INDEX ${ident(spec.name)} IF EXISTS`);
   }
   const withClause = filters.length ? ` WITH [${filters.map((f) => `n.${ident(f)}`).join(", ")}]` : "";
   await graph.run(

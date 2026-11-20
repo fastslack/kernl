@@ -162,6 +162,7 @@ export function createAgentsModule(): AgentsModule {
           ctx.sqlite,
           () => ctx.graph,
           () => service.getEmbeddingsClient()?.model ?? null,
+          () => service.getEmbeddingsClient()?.dim ?? null,
         );
         service.setExperienceGraph(experience);
         const scheduleSync = (delayMs: number) => {

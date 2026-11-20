@@ -39,7 +39,8 @@ import { subjectKeyOf, subjectRootOf } from "../subject-key.js";
 
 export const LEARNING_VECTOR_INDEX = "agent-learning-embeddings";
 export const LEARNING_TEXT_INDEX = "agent-learning-text";
-const EMBEDDING_DIM = 384;
+/** The vector size when the embeddings client does not say its own (the local default model's). */
+const DEFAULT_EMBEDDING_DIM = 384;
 const BATCH = 500;
 /**
  * Bump when syncRuns writes something new for runs already synced.
@@ -281,7 +282,19 @@ export class AgentExperienceGraph {
     private readonly getGraph: () => GraphDriver | null,
     /** The embedding model the stored vectors were made with (from the embeddings client). */
     private readonly getEmbeddingModel: () => string | null = () => null,
+    /**
+     * The size of those vectors. The graph used to take only 384 (the local model's): an office embedding with a
+     * 1536-dimension model synced 3581 lessons with no vector, found the shared ones by their words only, and sent
+     * every one of them again on each pass, as still waiting for its vector.
+     */
+    private readonly getEmbeddingDim: () => number | null = () => null,
   ) {}
+
+  private dim(): number {
+    const d = this.getEmbeddingDim();
+    return d && d > 0 ? Math.trunc(d) : DEFAULT_EMBEDDING_DIM;
+  }
+  private schemaDim = 0;
 
   private ready(): GraphDriver | null {
     const g = this.getGraph();
@@ -301,7 +314,7 @@ export class AgentExperienceGraph {
   // ── Schema ─────────────────────────────────────────
 
   private async ensureSchema(g: GraphDriver): Promise<void> {
-    if (this.schemaFor === g) return;
+    if (this.schemaFor === g && this.schemaDim === this.dim()) return;
     const statements = [
       "CREATE CONSTRAINT agent_id IF NOT EXISTS FOR (a:Agent) REQUIRE a.id IS UNIQUE",
       "CREATE CONSTRAINT agent_run_id IF NOT EXISTS FOR (r:AgentRun) REQUIRE r.id IS UNIQUE",
@@ -316,10 +329,11 @@ export class AgentExperienceGraph {
     await ensureVectorIndex(g, {
       name: LEARNING_VECTOR_INDEX,
       label: "AgentLearning",
-      dimensions: EMBEDDING_DIM,
+      dimensions: this.dim(),
       filters: ["active", "embedding_model"],
     }).catch((err) => log.warn(`Agent experience graph: vector index skipped — ${err}`));
     this.schemaFor = g;
+    this.schemaDim = this.dim();
   }
 
   // ── Sync (SQLite → graph) ──────────────────────────
@@ -551,6 +565,7 @@ export class AgentExperienceGraph {
     const lateOnly = late.filter((r) => !seen.has(r.id));
     if (changed.length + lateOnly.length === 0) return 0;
 
+    const dim = this.dim();
     const toPayload = (r: LearningRow) => {
       const vec = blobToVector(r.embedding);
       let sources: string[] = [];
@@ -569,8 +584,8 @@ export class AgentExperienceGraph {
         active: r.active === 1,
         project_id: r.project_id,
         created_at: r.created_at || null,
-        embedding: vec && vec.length === EMBEDDING_DIM ? vec : null,
-        embedding_model: vec && vec.length === EMBEDDING_DIM ? r.embedding_model : null,
+        embedding: vec && vec.length === dim ? vec : null,
+        embedding_model: vec && vec.length === dim ? r.embedding_model : null,
         sources,
       };
     };
@@ -756,7 +771,7 @@ export class AgentExperienceGraph {
       await this.ensureSchema(g);
       const useVector =
         !!q.goalVector &&
-        q.goalVector.length === EMBEDDING_DIM &&
+        q.goalVector.length === this.dim() &&
         g.capabilities.vectorSimilarity &&
         (!q.embeddingModel || q.embeddingModel === (this.getEmbeddingModel() ?? q.embeddingModel));
       // Vectors only compare within one model, so learnings embedded with
