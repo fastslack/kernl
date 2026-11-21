@@ -546,9 +546,10 @@ export class KernelHttpServer {
       return;
     }
 
-    // ── Event-broker gate (nginx `auth_request` for /mtw) ──
-    // The broker (mtwRequest) authenticates nothing: whoever reaches it can
-    // read the database and call any tool. Only the super admin may open it;
+    // ── Event-broker gate (nginx `auth_request` for /mtw, and mtwRequest's
+    // own handshake check since 0.5.0, MTW_AUTH_KERNEL_URL) ──
+    // Whoever reaches the broker can read the database and call any tool.
+    // Only the super admin may open it;
     // a user works over HTTP, where permissions and scopes apply. nginx
     // passes the socket's original URI, whose `?token=` carries the token
     // (a browser cannot set headers on a WebSocket).
