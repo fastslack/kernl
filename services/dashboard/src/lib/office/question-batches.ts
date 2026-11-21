@@ -44,3 +44,15 @@ export function groupQuestions<Q extends BatchableQuestion>(questions: Q[]): Que
 	}
 	return out;
 }
+
+/** The operator's own "I'll take it" button, in every language the panel speaks. */
+const TAKE_LABELS = new Set(['lo veo yo', "i'll handle it"]);
+
+/**
+ * An option the asker named like the operator's own "I'll take it" button. The kernel stores it as a task option now;
+ * one asked before that is a plain option, and choosing it sent the words to the asker as the answer. Either way the
+ * card draws no second take button and choosing it takes the question on.
+ */
+export function isTakeLabel(label: string): boolean {
+	return TAKE_LABELS.has(label.trim().toLowerCase());
+}

@@ -51,6 +51,18 @@ import { subjectKeyOf } from "./subject-key.js";
 export type QuestionStatus = "triage" | "pending" | "owed" | "answered" | "dismissed";
 /** task: picking it leaves the operator a task — the question goes to 'owed', not 'answered'. */
 export type QuestionOption = { label: string; value?: string; url?: string; task?: boolean };
+
+/** The operator's own "I'll take it" button, in every language the panel speaks. */
+const TAKE_LABELS = new Set(["lo veo yo", "i'll handle it"]);
+
+/**
+ * An option an asker named like the operator's "I'll take it" is that: the operator takes the question on and the
+ * asker keeps waiting. Stored as a plain option it was an answer instead, so the asker received the words "Lo veo yo"
+ * and acted on them (an office ticket started another round with them), and the panel drew a second take button.
+ */
+export function asTakeOption(o: QuestionOption): QuestionOption {
+  return !o.task && TAKE_LABELS.has(o.label.trim().toLowerCase()) ? { ...o, task: true } : o;
+}
 /** The investigator's second opinion: '' none asked, running, ready, failed. */
 export type OpinionStatus = "" | "running" | "ready" | "failed";
 export interface AgentQuestion {
@@ -1484,6 +1496,7 @@ export class AgentService {
   }): { id: string; status: "triage" | "pending" } {
     const id = newId();
     const askedAt = isoNow();
+    const options = input.options.map(asTakeOption);
     const subject = (input.subject_key ?? "").trim().toLowerCase() || subjectKeyOf(input.question);
     const subjectState = (input.subject_state ?? "").trim() || (subject ? this.getSubjectState(input.flow_id ?? "", subject)?.state ?? "" : "");
     // The chief triages everyone else's questions; its own (or any question
@@ -1501,7 +1514,7 @@ export class AgentService {
       )
       .run(
         id, input.from_agent_id, input.flow_id ?? "", input.meeting_id ?? "", input.run_id ?? "",
-        input.question, input.context ?? "", JSON.stringify(input.options), status, askedAt, toOperator ? 1 : 0,
+        input.question, input.context ?? "", JSON.stringify(options), status, askedAt, toOperator ? 1 : 0,
         subject, normalizeCategory(input.category), subjectState,
       );
     this.events.emit("data.changed", { module: "agents", action: "question_asked" });

@@ -14,6 +14,7 @@
   import { opinionStepLabel } from '$lib/opinion-progress.js';
   import { opinionChoice } from '$lib/office/opinion-send.js';
   import type { AgeBucket } from '$lib/office/question-age.js';
+  import { isTakeLabel } from '$lib/office/question-batches.js';
   import type { PendingQuestion, QuestionOpinion } from './world-types.js';
 
   export let q: PendingQuestion;
@@ -49,6 +50,8 @@
   $: owed = q.status === 'owed';
   // Owed: the choice is made; the options left are the real ones, not the "task" one.
   $: shown = q.options.map((o, i) => ({ o, i })).filter(({ o }) => !owed || !o.task);
+  // The asker already offers the take button as one of its options: it is not drawn a second time.
+  $: hasTakeOption = q.options.some((o) => isTakeLabel(o.label));
   $: guardEscalated = !!q.chief_note?.startsWith('escalada: la respuesta dejaba trabajo al operador');
   // What the chief would have answered: the text after "propuesta del Chief:".
   $: chiefProposal = guardEscalated ? (q.chief_note?.split('propuesta del Chief:')[1] ?? '').trim() : '';
@@ -237,7 +240,7 @@
     {#each shown as { o: opt, i } (i)}
       {@const optUrl = urlForOption(q, opt)}
       <button class="bq-option" class:bq-option-link={!!optUrl} class:bq-option-pick={pick === i}
-              on:click={() => sent(onAnswer(q, i, opt))}
+              on:click={() => sent(!opt.task && isTakeLabel(opt.label) ? onTake(q) : onAnswer(q, i, opt))}
               disabled={busy}
               title={pick === i && opinion?.reasoning ? opinion.reasoning : optUrl ? `Opens ${optUrl}` : opt.label}>
         <span class="bq-option-idx">{i + 1}</span>
@@ -248,9 +251,11 @@
     {/each}
 
     {#if !owed}
-      <button class="bq-option bq-take" type="button" on:click={() => onTake(q)} disabled={busy}>
-        <span class="bq-option-lbl">{$t('office.chief.take_it')}</span>
-      </button>
+      {#if !hasTakeOption}
+        <button class="bq-option bq-take" type="button" on:click={() => onTake(q)} disabled={busy}>
+          <span class="bq-option-lbl">{$t('office.chief.take_it')}</span>
+        </button>
+      {/if}
     {:else}
       <div class="bq-done-row">
         <input class="bq-free-input" placeholder={$t('office.chief.done_note')} bind:value={doneNote} disabled={busy}

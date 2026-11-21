@@ -7,6 +7,7 @@
 <script lang="ts">
   import { t } from '$lib/i18n/index.js';
   import type { PendingQuestion } from './world-types.js';
+  import { isTakeLabel } from '$lib/office/question-batches.js';
 
   export let questions: PendingQuestion[];
   export let agentName: string;
@@ -17,9 +18,11 @@
 
   type Pick = { label: string; run: (q: PendingQuestion) => Promise<unknown> | unknown };
   $: options = questions[0]?.options ?? [];
+  // An option named like the take button is that button: it is not drawn twice, and it takes the questions on.
   $: picks = [
-    ...options.map((o, i): Pick => ({ label: o.label, run: (q) => send(q, { kind: 'option', index: i }) })),
-    ...(options.some((o) => o.task) ? [] : [{ label: $t('office.chief.take_it'), run: (q: PendingQuestion) => send(q, { kind: 'task' }) }]),
+    ...options.map((o, i): Pick => ({ label: o.label,
+      run: (q) => send(q, !o.task && isTakeLabel(o.label) ? { kind: 'task' } : { kind: 'option', index: i }) })),
+    ...(options.some((o) => o.task || isTakeLabel(o.label)) ? [] : [{ label: $t('office.chief.take_it'), run: (q: PendingQuestion) => send(q, { kind: 'task' }) }]),
   ];
 
   let confirming: Pick | null = null;

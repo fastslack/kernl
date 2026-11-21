@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { groupQuestions } from './question-batches.js';
+import { groupQuestions, isTakeLabel } from './question-batches.js';
 
 const WAIT = [{ label: 'Reanudar' }, { label: 'Lo veo yo', task: true }, { label: 'Descartar el issue' }];
 const q = (id: string, agent: string, options = WAIT, status = 'pending') => ({ id, from_agent_id: agent, status, options });
@@ -28,5 +28,12 @@ describe('groupQuestions', () => {
 	it('ignores spaces around a label', () => {
 		const g = groupQuestions([q('w1', 'int'), q('w2', 'int', [{ label: ' Reanudar ' }, WAIT[1], WAIT[2]])]);
 		expect(g).toHaveLength(1);
+	});
+});
+
+describe('isTakeLabel', () => {
+	it('knows the take button in each language, with spaces or another case, and nothing longer', () => {
+		expect(['Lo veo yo', ' lo veo YO ', "I'll handle it"].every(isTakeLabel)).toBe(true);
+		expect(['Lo veo yo después', 'Seguir como propone', 'Lo reviso yo'].some(isTakeLabel)).toBe(false);
 	});
 });

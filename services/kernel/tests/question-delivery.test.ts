@@ -295,6 +295,16 @@ describe("resolveHumanChoice", () => {
     expect(goals).toEqual([]);
   });
 
+  it("an option the asker named «Lo veo yo» is the operator taking it on, not an answer with those words", () => {
+    const w = service.createAgent({ name: "W" });
+    const { id } = service.createQuestion({ from_agent_id: w.id, question: "web#7?", options: [{ label: "Seguir como propone" }, { label: " Lo veo yo " }], for_operator: true });
+    expect(service.getQuestion(id)!.options).toEqual([{ label: "Seguir como propone" }, { label: " Lo veo yo ", task: true }]);
+    expect(resolveHumanChoice(service, executor, events, id, { kind: "option", index: 1 })).toEqual({ ok: true, status: "owed" });
+    expect(goals).toEqual([]);
+    const other = service.createQuestion({ from_agent_id: w.id, question: "web#8?", options: [{ label: "I'll handle it" }, { label: "Lo veo yo después" }], for_operator: true });
+    expect(service.getQuestion(other.id)!.options).toEqual([{ label: "I'll handle it", task: true }, { label: "Lo veo yo después" }]);
+  });
+
   it("answersGoal tells the agent an owed letter is not final", () => {
     const { w, id } = ask();
     resolveHumanChoice(service, executor, events, id, { kind: "task" });
