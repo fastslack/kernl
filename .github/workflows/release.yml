@@ -645,7 +645,7 @@ jobs:
           # The bundled pair is best-effort, exactly like whisper/ffmpeg/every
           # other platform in stage-payload.sh section 2d: a release cut
           # before mtwRequest has published win-x64 assets for $MTW_BIN_TAG
-          # (or the v0.5.0 default) still produces a working Kernl package,
+          # (or the v0.5.1 default) still produces a working Kernl package,
           # just without a bundled WhatsApp link. So this check only turns
           # strict once the binaries actually made it into the install dir —
           # if they didn't, it warns and moves on instead of failing the
@@ -654,7 +654,7 @@ jobs:
           $bundled = (Test-Path (Join-Path $dir "bin\mtw-server\mtw-server.exe")) -and
                      (Test-Path (Join-Path $dir "bin\whatsapp-bridge\whatsapp-bridge.exe"))
           if (-not $bundled) {
-            $tagLabel = $(if ($env:MTW_BIN_TAG) { $env:MTW_BIN_TAG } else { 'v0.5.0' })
+            $tagLabel = $(if ($env:MTW_BIN_TAG) { $env:MTW_BIN_TAG } else { 'v0.5.1' })
             Write-Host "::warning::mtw-server/whatsapp-bridge not bundled (no mtwRequest release assets for $tagLabel) — WhatsApp smoke skipped"
           } else {
             if (-not (Test-Path (Join-Path $dir "bin\mtw.binary.toml"))) {
