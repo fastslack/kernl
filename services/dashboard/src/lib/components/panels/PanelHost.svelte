@@ -107,7 +107,8 @@
       <PanelTimeline items={audit.map((a) => ({ at: a.at, text: `${a.ok ? '✓' : '✗'} ${a.action} — ${a.result}` }))} />
     {:else if view}
       {#if detailKey && detailView}
-        <PanelDetail {flowId} view={detailView} spec={spec} rowKey={detailKey} on:back={() => (detailKey = null)} />
+        {#key detailView.id}<PanelDetail {flowId} view={detailView} spec={spec} rowKey={detailKey} siblings={rows.map((r) => String(r.key ?? ''))}
+          on:back={() => (detailKey = null)} on:open={(e) => (detailKey = e.detail)} />{/key}
       {:else if view.component === 'kpis'}
         <PanelKpis {rows} />
       {:else if view.component === 'table'}
