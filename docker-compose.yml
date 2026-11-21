@@ -37,6 +37,10 @@ services:
       # The kernel talks control-plane over this Unix socket (msgpack RPC),
       # shared through the bridge-sock volume below.
       RUST_BRIDGE_SOCKET: /tmp/mtw-rust.sock
+      # mtwRequest 0.5.0 checks every WebSocket handshake against the kernel
+      # (/api/auth/broker, only the owner gets in) and refuses them all
+      # without this.
+      MTW_AUTH_KERNEL_URL: http://kernel:3087
       # librqbit's data plane. Defaults to 127.0.0.1, which only this
       # container could reach — the kernel proxies stream bytes over the
       # docker network, so it has to bind 0.0.0.0.

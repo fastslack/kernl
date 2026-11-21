@@ -165,6 +165,10 @@ export async function startSidecars(opts: {
       // Pinned: an inherited MTW_HOST=0.0.0.0 would expose the bus on a desktop.
       MTW_HOST: "127.0.0.1",
       MTW_PORT: "7741",
+      // mtw-server 0.5.0 checks every WebSocket handshake against the
+      // kernel's /api/auth/broker and refuses them all (503) without this.
+      // Loopback reaches the kernel whether it binds 0.0.0.0 or 127.0.0.1.
+      MTW_AUTH_KERNEL_URL: `http://127.0.0.1:${env.DASHBOARD_PORT || "3086"}`,
       RUST_BRIDGE_SOCKET: env.RUST_BRIDGE_SOCKET,
       // The torrent module reads its storage path from env only, never from
       // mtw.toml; without this it writes under ~/.local/share/mtwrequest.

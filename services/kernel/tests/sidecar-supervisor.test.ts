@@ -103,6 +103,7 @@ function fakeApp(opts: { bridge?: boolean; server?: boolean; templateAtRoot?: bo
       path.join(appDir, "bin/mtw-server/mtw-server"),
       `echo "$RUST_BRIDGE_SOCKET|$(pwd)" > "${dataDir}/server.env"\n` +
         `echo "$MTW_HOST|$MTW_PORT|\${SIDECAR_TEST_SECRET:-none}" > "${dataDir}/server.inherit"\n` +
+        `echo "$MTW_AUTH_KERNEL_URL" > "${dataDir}/server.auth"\n` +
         FAKE_LOOP,
     );
   }
@@ -190,6 +191,20 @@ describe("sidecar hardening", () => {
     expect(readFileSync(b, "utf8").trim()).toBe("none|path");
     // mtw-server still inherits the rest (it reads the LLM keys).
     expect(readFileSync(s, "utf8").trim()).toBe("127.0.0.1|7741|sk-test");
+  });
+
+  it("points mtw-server's handshake auth at the kernel's own port", async () => {
+    for (const [env, url] of [
+      [{ KERNL_BINARY_INSTALL: "1" }, "http://127.0.0.1:3086"],
+      [{ KERNL_BINARY_INSTALL: "1", DASHBOARD_PORT: "3088" }, "http://127.0.0.1:3088"],
+    ] as const) {
+      const { appDir, dataDir } = fakeApp();
+      const sups = await startSidecars({ appDir, dataDir, env: { ...env }, platform: "linux" });
+      cleanup.push(async () => { await Promise.all(sups.map(s => s.stop())); });
+      const f = path.join(dataDir, "server.auth");
+      expect(await waitFor(() => existsSync(f))).toBe(true);
+      expect(readFileSync(f, "utf8").trim()).toBe(url);
+    }
   });
 
   it("keeps pidfiles while running and removes them on stop", async () => {
