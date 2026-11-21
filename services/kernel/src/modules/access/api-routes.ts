@@ -15,8 +15,8 @@
  *   PUT    /api/access/roles/:id            { name?, description?, permissions? }
  *   DELETE /api/access/roles/:id            soft delete (built-in roles refuse)
  *   GET    /api/access/permissions          what a permission can name
- *   GET    /api/access/users/:id/scope      { mode, offices, agents }
- *   PUT    /api/access/users/:id/scope      { mode?, offices?, agents? } → replaces it
+ *   GET    /api/access/users/:id/scope      { mode, offices, agents, projects }
+ *   PUT    /api/access/users/:id/scope      { mode?, offices?, agents?, projects? } → replaces it
  *
  * Everything under /api/access is for the super admin alone. The request
  * authorizer already keeps users out; the check here holds even if a later
@@ -111,6 +111,7 @@ export function registerAccessRoutes(server: KernelHttpServer, access: AccessSer
         mode: str(body?.mode),
         offices: body?.offices,
         agents: body?.agents,
+        projects: body?.projects,
       })),
     };
   }, { requireBody: true });

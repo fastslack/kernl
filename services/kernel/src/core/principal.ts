@@ -19,7 +19,7 @@
 
 import { timingSafeEqual, createHash } from "node:crypto";
 import { formatRequirement, grants, requirementForRoute, type Requirement } from "./permissions.js";
-import { scopeFor } from "./scope.js";
+import { projectModuleDenial, scopeFor } from "./scope.js";
 
 export type Principal =
   | { kind: "super_admin"; id: "super-admin"; name: string }
@@ -173,7 +173,13 @@ export const defaultRequestAuthorizer: RequestAuthorizer = (principal, pathname,
       : { status: 403, body: { error: "Forbidden", reason: "no_permission" } };
   }
   const need = requirementForRoute(pathname, method);
-  if (need && principalCan(principal, need)) return null;
+  if (need && principalCan(principal, need)) {
+    // Held to projects: only the modules that hold project data, whatever
+    // the roles say (core/scope.ts).
+    const outside = projectModuleDenial(principal, need.module);
+    if (!outside) return null;
+    return { status: 403, body: { error: "Forbidden", reason: "outside_projects", module: need.module } };
+  }
   return {
     status: 403,
     body: { error: "Forbidden", reason: "no_permission", ...(need ? { required: formatRequirement(need) } : {}) },

@@ -1,9 +1,12 @@
 /**
- * Which offices and agents a user may see.
+ * Which offices, agents and projects a user may see.
  *
  * Roles say what a user may do (core/permissions.ts); a scope says on which
  * offices and agents. A user either reaches every office (the default) or
  * only the ones granted to them, plus any single agent granted on its own.
+ * A user granted projects is held to them: the offices that work on them,
+ * only the items that belong to them, and only the modules that hold
+ * project data (see `Scope.projects`).
  *
  * The kernel has hundreds of routes, tools and actions that name an agent,
  * an office or a run, written long before users existed. Rather than teach
@@ -34,19 +37,55 @@ import type { Level } from "./permissions.js";
 export interface Scope {
   offices: ReadonlySet<string>;
   agents: ReadonlySet<string>;
+  /**
+   * Projects. A user granted any is held to them: they reach the offices
+   * those projects work in, only items that belong to one of their projects
+   * (a `project_id` naming another project, or none, is hidden), and only
+   * the modules whose data belongs to projects (PROJECT_MODULES).
+   */
+  projects: ReadonlySet<string>;
 }
 
 /** What an id names, as far as scopes care. */
 export type RefKind =
-  | { kind: "office" }
+  | { kind: "office"; projects: readonly string[] }
   | { kind: "agent"; officeId: string }
-  | { kind: "run"; agentId: string; officeId: string };
+  | { kind: "run"; agentId: string; officeId: string }
+  | { kind: "project" };
 
 export interface ScopeProvider {
   /** The user's scope, or null when they reach every office. */
   scopeOf(principal: Principal): Scope | null;
-  /** What an id names, or null for anything that is not an agent, office or run. */
+  /** What an id names, or null for anything that is not an agent, office, run or project. */
   lookup(id: string): RefKind | null;
+}
+
+/** A scope that reaches nothing: what a failure to read one grants. */
+export function emptyScope(): Scope {
+  return { offices: new Set(), agents: new Set(), projects: new Set() };
+}
+
+/** True when the scope holds its user to some projects. */
+export function isProjectScope(scope: Scope | null | undefined): boolean {
+  return !!scope && scope.projects.size > 0;
+}
+
+/**
+ * The modules a user held to projects may reach: the ones whose data
+ * belongs to a project, so what goes back can be cut down to theirs. Mail,
+ * notes, finances and the rest have no project to tell theirs from anyone
+ * else's, so they stay closed whatever the user's roles say.
+ */
+export const PROJECT_MODULES: ReadonlySet<string> = new Set([
+  "projects", "tasks", "agents", "contacts", "outbox",
+  "growth", "sales", "marketing", "devops", "plaza",
+]);
+
+/** Why this principal may not reach `module` because of their projects, or null. */
+export function projectModuleDenial(principal: Principal | null, module: string): string | null {
+  const scope = scopeFor(principal);
+  if (!isProjectScope(scope) || PROJECT_MODULES.has(module)) return null;
+  return `Forbidden: you only reach your projects, and ${module} holds no project's data.`;
 }
 
 let provider: ScopeProvider | null = null;
@@ -68,7 +107,7 @@ export function scopeFor(principal: Principal | null): Scope | null {
     return provider.scopeOf(principal);
   } catch {
     // Could not read the scope: grant nothing rather than everything.
-    return { offices: new Set(), agents: new Set() };
+    return emptyScope();
   }
 }
 
@@ -80,8 +119,19 @@ function lookup(id: string): RefKind | null {
   }
 }
 
-function officeVisible(scope: Scope, officeId: string): boolean {
+/**
+ * An office granted outright, or one that works on a granted project: the
+ * user may work in it, not only see it.
+ */
+function officeGranted(scope: Scope, officeId: string): boolean {
   if (scope.offices.has(officeId)) return true;
+  if (scope.projects.size === 0) return false;
+  const ref = lookup(officeId);
+  return ref?.kind === "office" && ref.projects.some((p) => scope.projects.has(p));
+}
+
+function officeVisible(scope: Scope, officeId: string): boolean {
+  if (officeGranted(scope, officeId)) return true;
   for (const agentId of scope.agents) {
     const ref = lookup(agentId);
     if (ref?.kind === "agent" && ref.officeId === officeId) return true;
@@ -90,7 +140,7 @@ function officeVisible(scope: Scope, officeId: string): boolean {
 }
 
 function agentAllowed(scope: Scope, agentId: string, officeId: string): boolean {
-  return scope.agents.has(agentId) || (officeId !== "" && scope.offices.has(officeId));
+  return scope.agents.has(agentId) || (officeId !== "" && officeGranted(scope, officeId));
 }
 
 /** True when the scope reaches what this id names (or it names nothing of ours). */
@@ -99,11 +149,14 @@ export function refAllowed(scope: Scope, id: string, level: Level): boolean {
   if (!ref) return true;
   switch (ref.kind) {
     case "office":
-      return level === "write" ? scope.offices.has(id) : officeVisible(scope, id);
+      return level === "write" ? officeGranted(scope, id) : officeVisible(scope, id);
     case "agent":
       return agentAllowed(scope, id, ref.officeId);
     case "run":
       return agentAllowed(scope, ref.agentId, ref.officeId);
+    case "project":
+      // Offices alone say nothing about projects: those users see them all.
+      return scope.projects.size === 0 || scope.projects.has(id);
   }
 }
 
@@ -133,36 +186,56 @@ function collectIds(value: unknown, out: Set<string>, depth = 0): void {
  * `level` is what the call does: a read may name a visible office, a write
  * only a granted one.
  */
-export function scopeDenial(inputs: unknown, level: Level): string | null {
+export function scopeDenial(inputs: unknown, level: Level, module?: string): string | null {
   const scope = currentScope();
   if (!scope) return null;
+  if (module !== undefined) {
+    const denial = projectModuleDenial(getPrincipal(), module);
+    if (denial) return denial;
+  }
   const ids = new Set<string>();
   collectIds(inputs, ids);
   for (const id of ids) {
     if (!refAllowed(scope, id, level)) {
       const ref = lookup(id);
-      return `Forbidden: ${ref?.kind ?? "item"} ${id} is outside the offices you can ${level === "write" ? "change" : "see"}.`;
+      const where = ref?.kind === "project" ? "projects" : "offices";
+      return `Forbidden: ${ref?.kind ?? "item"} ${id} is outside the ${where} you can ${level === "write" ? "change" : "see"}.`;
     }
   }
   return null;
 }
 
-/** Throws a 403 when the inputs reach outside the caller's scope. */
-export function assertScope(inputs: unknown, level: Level): void {
-  const denial = scopeDenial(inputs, level);
+/**
+ * Throws a 403 when the inputs reach outside the caller's scope. With
+ * `module`, a user held to projects is also kept to PROJECT_MODULES.
+ */
+export function assertScope(inputs: unknown, level: Level, module?: string): void {
+  const denial = scopeDenial(inputs, level, module);
   if (denial) throw new HttpError(403, denial);
 }
 
-/** Keys an item names an agent, office or run under. */
+/** Keys an item names an agent, office, run or project under. */
 const REF_KEYS = [
   "id", "agent_id", "agentId", "flow_id", "flowId", "office_id", "officeId", "run_id", "runId",
-  "home_flow_id", "target_agent_id", "lead_agent_id",
+  "home_flow_id", "target_agent_id", "lead_agent_id", "project_id", "projectId",
 ];
+
+/** Keys an item says which project it belongs to under. */
+const PROJECT_KEYS = ["project_id", "projectId"];
 
 function itemAllowed(scope: Scope, item: Record<string, unknown>): boolean {
   for (const k of REF_KEYS) {
     const v = item[k];
     if (candidate(v) && !refAllowed(scope, v, "read")) return false;
+  }
+  if (scope.projects.size > 0) {
+    // Held to projects: an item that says which project it belongs to must
+    // belong to one of theirs. One that belongs to none is not theirs either.
+    for (const k of PROJECT_KEYS) {
+      if (!Object.prototype.hasOwnProperty.call(item, k)) continue;
+      const v = item[k];
+      if (typeof v !== "string" || !scope.projects.has(v)) return false;
+    }
   }
   return true;
 }
@@ -212,7 +285,7 @@ export function assertMayCreateOffice(): void {
 export function assertMayCreateAgentIn(flowId: string | null | undefined): void {
   const scope = currentScope();
   if (!scope) return;
-  if (!flowId || !scope.offices.has(flowId)) {
+  if (!flowId || !officeGranted(scope, flowId)) {
     throw new HttpError(403, "Forbidden: a new agent has to go into one of the offices you were given.");
   }
 }
