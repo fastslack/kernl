@@ -12,6 +12,7 @@ import { authorizeRequest, principalCan, resolveToken, SUPER_ADMIN, type Princip
 import { parsePermission } from "./permissions.js";
 import { getPrincipal, getRequestContext, runWithContext } from "./request-context.js";
 import { assertScope, filterForScope } from "./scope.js";
+import { brokerSupportsPrincipals } from "./mtw/broker-features.js";
 import { HttpError, isHttpError } from "../sdk/http-error.js";
 import type { Operation } from "../sdk/args.js";
 
@@ -548,11 +549,14 @@ export class KernelHttpServer {
 
     // ── Event-broker gate (nginx `auth_request` for /mtw, and mtwRequest's
     // own handshake check since 0.5.0, MTW_AUTH_KERNEL_URL) ──
-    // Whoever reaches the broker can read the database and call any tool.
-    // Only the super admin may open it;
-    // a user works over HTTP, where permissions and scopes apply. nginx
-    // passes the socket's original URI, whose `?token=` carries the token
-    // (a browser cannot set headers on a WebSocket).
+    // 204: the super admin, who may do anything on the broker.
+    // 200 {kind:"user", id}: a user, only when the connected broker holds
+    // users to their permissions (core/mtw/broker-features.ts): `changes`
+    // and their own channel, and RPC that the kernel runs as them. On an
+    // older broker a user would reach every channel and tool, so a user
+    // gets 403 there and works over HTTP. nginx passes the socket's
+    // original URI, whose `?token=` carries the token (a browser cannot set
+    // headers on a WebSocket).
     if (pathname === "/api/auth/broker") {
       if (!this.authToken) { res.writeHead(204, SECURITY_HEADERS); res.end(); return; }
       const original = String(req.headers["x-original-uri"] ?? "");
@@ -561,6 +565,10 @@ export class KernelHttpServer {
       const principal = fromUri
         ? resolveToken(fromUri, this.authToken)
         : resolveRequestPrincipal(req, this.authToken) ?? resolveToken(url.searchParams.get("token"), this.authToken);
+      if (principal?.kind === "user" && brokerSupportsPrincipals()) {
+        this.json(res, 200, { kind: "user", id: principal.id }, req);
+        return;
+      }
       const status = principal?.kind === "super_admin" ? 204 : principal ? 403 : 401;
       res.writeHead(status, SECURITY_HEADERS);
       res.end();

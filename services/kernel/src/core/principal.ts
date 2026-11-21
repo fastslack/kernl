@@ -46,6 +46,31 @@ export function setUserTokenResolver(fn: UserTokenResolver | null): void {
 }
 
 /**
+ * Maps a user id to that user, or null when they no longer may sign in
+ * (deleted, disabled). For callers the kernel did not authenticate by
+ * token itself: an RPC request the mtwRequest broker stamped with the user
+ * whose token it accepted at the handshake.
+ */
+export type UserIdResolver = (id: string) => Principal | null;
+
+let userIdResolver: UserIdResolver | null = null;
+
+/** Registered by the access module; `null` unregisters (tests). */
+export function setUserIdResolver(fn: UserIdResolver | null): void {
+  userIdResolver = fn;
+}
+
+/** The active user with this id, or null. Fails closed. */
+export function resolveUserId(id: string): Principal | null {
+  if (!id) return null;
+  try {
+    return userIdResolver?.(id) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Constant-time string comparison. Both sides are hashed first so the
  * comparison never short-circuits on length, which would leak the token's
  * length to a caller timing its 401s.

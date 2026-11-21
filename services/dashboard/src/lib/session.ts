@@ -2,8 +2,8 @@
 //
 // The kernel decides every call on its own (403 for what a role does not
 // grant). This copy exists so the dashboard does not draw what would only
-// answer 403: menu entries a user cannot open, and the live socket, which is
-// for the super admin alone (users work over HTTP; see ws.ts).
+// answer 403: menu entries a user cannot open, and the live socket when the
+// broker cannot hold users to their permissions (see ws.ts).
 //
 // The permission grammar (`module:level`, `*`, `system`, aliases) comes from
 // the kernel in the same response, so this file holds no list of modules.
@@ -33,6 +33,8 @@ export interface Session {
 	permissions: string[];
 	scope?: UserScope;
 	grammar?: PermissionGrammar;
+	/** A user's session: whether the broker would let them on the live socket. */
+	liveSocket?: boolean;
 }
 
 export const EMPTY_GRAMMAR: PermissionGrammar = { aliases: {}, system_modules: [], reserved_modules: [] };

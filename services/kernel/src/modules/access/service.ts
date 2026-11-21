@@ -468,6 +468,18 @@ export class AccessService {
     return { kind: "user", id: row.user_id, name: row.name, tokenId: row.token_id };
   }
 
+  /**
+   * The user with this id while they may sign in (not deleted, active).
+   * For a caller authenticated elsewhere (the broker, at its handshake),
+   * so a user disabled since then is turned away on their next request.
+   */
+  resolveUser(id: string): Principal | null {
+    const row = this.db
+      .prepare(`SELECT id, name FROM users WHERE id = ? AND deleted_at IS NULL AND status = 'active'`)
+      .get(id) as { id: string; name: string } | undefined;
+    return row ? { kind: "user", id: row.id, name: row.name, tokenId: "" } : null;
+  }
+
   private touch(tokenId: string, nowMs: number): void {
     const last = this.lastUsedWritten.get(tokenId) ?? 0;
     if (nowMs - last < LAST_USED_WRITE_EVERY_MS) return;

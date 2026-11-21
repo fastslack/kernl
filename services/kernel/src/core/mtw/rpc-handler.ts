@@ -13,7 +13,10 @@
  */
 
 import { assertScope, filterForScope } from "../scope.js";
-import { requirementForRpcAction } from "../permissions.js";
+import { formatRequirement, requirementForRpcAction } from "../permissions.js";
+import { SUPER_ADMIN, principalCan, resolveUserId, type Principal } from "../principal.js";
+import { runWithContext } from "../request-context.js";
+import { isHttpError } from "../../sdk/http-error.js";
 import type { MtwConnection, MtwMessage } from "@matware/mtw-request-ts-client";
 import { createMessage, jsonPayload, emptyPayload } from "@matware/mtw-request-ts-client";
 import { log } from "../logger.js";
@@ -38,6 +41,32 @@ interface RpcHandlerOptions {
 
 /** Modules whose mutations should NOT auto-emit data.changed (read-only actions) */
 const READ_ONLY_SUFFIXES = [".list", ".detail", ".get", ".search", ".count", ".stats", ".export"];
+
+/**
+ * Who sent an RPC request over the broker.
+ *
+ * A broker that admits users (core/mtw/broker-features.ts) writes
+ * `metadata.principal` on every RPC request over whatever the client sent:
+ * `{kind:"super_admin"}` for the owner, `{kind:"user", id}` for a user. An
+ * older broker writes nothing, and lets in only the owner. So no principal
+ * is the owner; a user is looked up again on every request, so one disabled
+ * or deleted since they connected is refused; anything else is refused.
+ */
+export function callerOf(msg: MtwMessage): Principal | null {
+  const p = (msg.metadata as Record<string, unknown> | undefined)?.principal;
+  if (p === undefined || p === null) return SUPER_ADMIN;
+  if (typeof p !== "object") return null;
+  const { kind, id } = p as { kind?: unknown; id?: unknown };
+  if (kind === "super_admin") return SUPER_ADMIN;
+  if (kind === "user" && typeof id === "string") return resolveUserId(id);
+  return null;
+}
+
+/** A reply names the requester's connection, so the broker sends it to them alone. */
+function replyMetadata(req: MtwMessage): Record<string, unknown> {
+  const to = (req.metadata as Record<string, unknown> | undefined)?.reply_to;
+  return typeof to === "string" && to ? { reply_to: to } : {};
+}
 
 export class MtwRpcHandler {
   private actionMap = new Map<string, RpcAction>();
@@ -133,6 +162,18 @@ export class MtwRpcHandler {
       return;
     }
 
+    // Who sent it, as the broker stamped it, and whether they may.
+    const caller = callerOf(msg);
+    if (!caller) {
+      this.sendError(msg, "Forbidden", "FORBIDDEN", requestId);
+      return;
+    }
+    const need = requirementForRpcAction(action);
+    if (!principalCan(caller, need)) {
+      this.sendError(msg, `Forbidden: needs ${formatRequirement(need)}`, "FORBIDDEN", requestId);
+      return;
+    }
+
     try {
       const rpcT0 = Date.now();
       // Args arrive from external browser/mtwRequest clients — strip
@@ -140,7 +181,18 @@ export class MtwRpcHandler {
       // with server.ts / bridge-server.ts. No RpcAction handler currently
       // reads a `__`-prefixed key (verified by repo-wide grep), so this is
       // behavior-preserving today.
-      const result = await handler.handler(stripInternalArgs(args) as Record<string, unknown>);
+      //
+      // Run as the caller, exactly like POST /api/rpc/<action>: a user held
+      // to some offices may not name others and gets results without them
+      // (core/scope.ts). Both are no-ops for the super admin.
+      const clean = stripInternalArgs(args) as Record<string, unknown>;
+      const result = await runWithContext(
+        { callerAgentId: "", callerRunId: "", callerDepth: 0, principal: caller },
+        async () => {
+          assertScope(clean, need.level);
+          return filterForScope(await handler.handler(clean));
+        },
+      );
       const rpcMs = Date.now() - rpcT0;
 
       // Send success response — use requestId from browser for correlation.
@@ -149,6 +201,7 @@ export class MtwRpcHandler {
         createMessage("response", jsonPayload({ ok: true, data: result }), {
           channel: "rpc",
           ref_id: requestId,
+          metadata: replyMetadata(msg),
         }),
       );
 
@@ -166,7 +219,7 @@ export class MtwRpcHandler {
       else log.debug(`RPC: ${action} → ${rpcMs}ms`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.sendError(msg, message, "INTERNAL", requestId);
+      this.sendError(msg, message, isHttpError(err) && err.status === 403 ? "FORBIDDEN" : "INTERNAL", requestId);
       log.warn(`RPC: ${action} → error: ${message}`);
     }
   }
@@ -186,6 +239,7 @@ export class MtwRpcHandler {
       createMessage("error", jsonPayload({ ok: false, error, code }), {
         channel: "rpc",
         ref_id: overrideRefId ?? reqMsg.id,
+        metadata: replyMetadata(reqMsg),
       }),
     );
   }
@@ -206,8 +260,8 @@ export class MtwRpcHandler {
     if (!handler) throw new Error(`Unknown action: ${action}`);
     // A user restricted to some offices may not name an agent, office or
     // run outside them, and gets results without them (core/scope.ts).
-    // Over HTTP the caller is known; over the broker it is not, which is why
-    // only the super admin may open the broker (/api/auth/broker).
+    // Over HTTP the caller is the request's principal; over the broker,
+    // handleRequest sets the one the broker stamped.
     const clean = stripInternalArgs(args) as Record<string, unknown>;
     assertScope(clean, requirementForRpcAction(action).level);
     return filterForScope(await handler.handler(clean));

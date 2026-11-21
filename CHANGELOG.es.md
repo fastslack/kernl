@@ -7,6 +7,19 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Novedades
+
+- **Los usuarios también tienen el socket en vivo, con sus permisos.** Con
+  mtwRequest 0.6.0 o posterior, el dashboard de un usuario conectado se
+  conecta al broker: el RPC corre por ahí como ese usuario, con sus roles y
+  oficinas, y la respuesta le llega solo a él. El broker solo deja que un
+  usuario se suscriba a `changes`, que dice qué módulo cambió y no lleva
+  datos; el dashboard vuelve a pedir por HTTP lo que muestra la página. Con
+  un broker anterior el kernel deja a los usuarios afuera, como antes, y
+  trabajan por HTTP.
+- El RPC por el broker ahora se controla con los permisos y el alcance de
+  oficinas de quien llama, igual que `POST /api/rpc/<action>`.
+
 ### Cambios
 
 - **mtwRequest viene encendido por defecto.** `BRIDGE_ENABLED` y
