@@ -11,7 +11,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 - **Las llamadas al LLM pasan por mtwRequest.** La parte HTTP de cada
   llamada de `llm()` a un proveedor compatible con OpenAI o a Anthropic ahora
-  corre en mtw-ai (`llm.complete`, mtwRequest 0.7.0 o posterior), por el
+  corre en mtw-ai (`llm.complete`, mtwRequest 0.6.1 o posterior), por el
   perfil de salida del broker. Todo lo demás sigue en el kernel: la cadena,
   el fallback, la salud, el limitador de 429, los reintentos, el registro de
   llamadas y la contabilidad de uso. Las keys viajan con cada llamada y el

@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **LLM calls go through mtwRequest.** The HTTP leg of every `llm()` call
   to an OpenAI-compatible or Anthropic provider now runs on mtw-ai
-  (`llm.complete`, mtwRequest 0.7.0 or later), through the broker's egress
+  (`llm.complete`, mtwRequest 0.6.1 or later), through the broker's egress
   profile. Everything else stays in the kernel: the chain, fallback, health,
   the 429 limiter, retries, the call log and usage accounting. Keys are sent
   with each call and never stored by the broker. With the bridge down, an
