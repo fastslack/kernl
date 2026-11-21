@@ -131,6 +131,11 @@ services:
       # (docker-compose.full.yml shares the whole /tmp instead; here the
       # kernel keeps its own /tmp, which it uses to stage extension uploads.)
       RUST_BRIDGE_SOCKET: /run/mtw/mtw-rust.sock
+      # The other direction: mtw-request calls into the kernel on
+      # /tmp/kernl.sock in its container (mtw.docker.toml [store.bridge]),
+      # which is this same volume. Left at the kernel's own /tmp, the socket
+      # was one nobody could reach.
+      BRIDGE_SOCKET_PATH: /run/mtw/kernl.sock
       # Where the mtwRequest broker lives. Defaults to ws://localhost:7741/ws
       # (see core/bootstrap/mtw.ts), which inside this container is nothing —
       # the engine is a sibling on the compose network.
@@ -207,8 +212,9 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - kernel-data:/app/data
-      # The Unix socket mtw-request listens on. Harmless when the engine is
-      # not running: the bridge just finds nothing there and stays disabled.
+      # The Unix sockets between the kernel and mtw-request, both ways.
+      # Harmless when the engine is not running: the rust bridge finds
+      # nothing there and the kernel keeps going.
       - bridge-sock:/run/mtw
       # Host folders (the commander's root, the Claude Code login for
       # claude_code agents) are opt-in: docker-compose.host.yml.
@@ -226,6 +232,10 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       searxng:
+        condition: service_started
+      # Not a hard requirement any more (the kernel boots without the broker
+      # and connects when it comes up), just a saner start order.
+      mtw-request:
         condition: service_started
 
   # ── Dashboard (self-contained SvelteKit SPA + nginx) ─

@@ -275,6 +275,17 @@ function parseMcpTransport(value?: string): "stdio" | "http" | "both" {
   return "both";
 }
 
+/**
+ * A bridge switch: "true"/"false" (also 1/0, yes/no, on/off) decide; unset
+ * means on, except for a stdio-only kernel.
+ */
+export function bridgeFlag(value: string | undefined, mcpTransport: string | undefined): boolean {
+  const v = value?.trim().toLowerCase();
+  if (v === "true" || v === "1" || v === "yes" || v === "on") return true;
+  if (v === "false" || v === "0" || v === "no" || v === "off") return false;
+  return parseMcpTransport(mcpTransport) !== "stdio";
+}
+
 function parseLanguage(value?: string): KernelLanguage {
   if (value === "es") return "es";
   return "en";
@@ -571,14 +582,17 @@ export function loadConfig(): KernelConfig {
         .filter(Boolean),
     },
     bridge: {
-      enabled: process.env.BRIDGE_ENABLED === "true",
+      // mtwRequest is Kernl's real-time bus: on unless switched off. A
+      // stdio-only kernel (one per Claude session) stays off by default —
+      // several of them on one broker would each answer every RPC.
+      enabled: bridgeFlag(process.env.BRIDGE_ENABLED, process.env.MCP_TRANSPORT),
       // Windows has no /tmp and no unix sockets where these bridges expect
       // them; named pipes are its equivalent.
       socketPath: process.env.BRIDGE_SOCKET_PATH
         ?? (process.platform === "win32" ? "\\\\.\\pipe\\kernl" : "/tmp/kernl.sock"),
     },
     rustBridge: {
-      enabled: process.env.RUST_BRIDGE_ENABLED === "true",
+      enabled: bridgeFlag(process.env.RUST_BRIDGE_ENABLED, process.env.MCP_TRANSPORT),
       socketPath: process.env.RUST_BRIDGE_SOCKET
         ?? (process.platform === "win32" ? "\\\\.\\pipe\\mtw-rust" : "/tmp/mtw-rust.sock"),
     },

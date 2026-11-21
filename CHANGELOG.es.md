@@ -7,6 +7,31 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Cambios
+
+- **mtwRequest viene encendido por defecto.** `BRIDGE_ENABLED` y
+  `RUST_BRIDGE_ENABLED` quedan encendidos salvo que se pongan en `false`. La
+  excepción es un kernel solo stdio (uno por sesión de Claude), que queda
+  apagado: varios de esos kernels en un mismo broker contestarían cada uno
+  todos los RPC.
+
+### Correcciones
+
+- **El kernel ya no deja de arrancar si el broker está caído.** Arranca y se
+  conecta cuando el broker aparece. Antes salía con
+  `Bootstrap failed: Client is not connected`.
+- **El RPC por el broker sigue andando después de una reconexión.** El kernel
+  ahora se suscribe a `rpc` en cada conexión, no solo en la primera.
+- **Un kernel ya no le quita el socket del bridge a otro.** Antes borraba
+  cualquier archivo en `BRIDGE_SOCKET_PATH`, aunque fuera el socket de un
+  kernel en marcha, y eso dejaba a ese otro kernel sin broker.
+- **Las instalaciones de escritorio tienen su propio socket del bridge**
+  (`<data>/run/kernl.sock`, o un named pipe por instalación en Windows) en
+  vez del `/tmp/kernl.sock` compartido, que en Windows no funcionaba.
+- **El stack Docker público comparte el socket del bridge del kernel con
+  mtw-request.** Antes ahí el broker no podía llamar al kernel. Además, el
+  kernel arranca después de mtw-request.
+
 ## [0.5.2] - 2026-11-18
 
 ### Actualizar desde 0.5.1

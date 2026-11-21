@@ -13,7 +13,7 @@
  * Kernl keeps working exactly as before — this is additive.
  */
 
-import { createServer, type Server, type Socket } from "node:net";
+import { createServer, Socket, type Server } from "node:net";
 import { existsSync, unlinkSync } from "node:fs";
 import { log } from "../logger.js";
 import { stripInternalArgs } from "../helpers.js";
@@ -76,8 +76,16 @@ export class BridgeServer {
   }
 
   async start(): Promise<void> {
-    // Clean stale socket file
-    if (existsSync(this.socketPath)) {
+    // A socket file left by a dead kernel is removed; one that still answers
+    // belongs to a live kernel (the desktop app, another dev kernel) and is
+    // left alone — unlinking it would cut that kernel's broker off.
+    if (!isWindowsPipe(this.socketPath) && existsSync(this.socketPath)) {
+      if (await socketAnswers(this.socketPath)) {
+        throw new Error(
+          `Bridge: ${this.socketPath} belongs to another running kernel; ` +
+            `set BRIDGE_SOCKET_PATH to a path of this kernel's own`,
+        );
+      }
       unlinkSync(this.socketPath);
     }
 
@@ -245,4 +253,32 @@ export class BridgeServer {
       log.error("Bridge: failed to send response", err);
     }
   }
+}
+
+function isWindowsPipe(p: string): boolean {
+  return p.startsWith("\\\\.\\pipe\\") || p.startsWith("//./pipe/");
+}
+
+/** True when something is listening on this unix socket. */
+function socketAnswers(socketPath: string, timeoutMs = 500): Promise<boolean> {
+  return new Promise((resolve) => {
+    // Listeners go on before connect(): Bun can emit the error from inside it.
+    const probe = new Socket();
+    let settled = false;
+    const done = (alive: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      probe.destroy();
+      resolve(alive);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    probe.on("connect", () => done(true));
+    probe.on("error", () => done(false));
+    try {
+      probe.connect(socketPath);
+    } catch {
+      done(false);
+    }
+  });
 }

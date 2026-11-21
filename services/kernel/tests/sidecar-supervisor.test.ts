@@ -159,9 +159,31 @@ describe("startSidecars", () => {
 
     expect(env.KERNEL_URL).toBe("ws://127.0.0.1:7741/ws");
     expect(env.RUST_BRIDGE_SOCKET).toBe(`${dataDir}/run/mtw-rust.sock`);
+    // The kernel's bridge socket is this install's own, on both sides.
+    expect(env.BRIDGE_SOCKET_PATH).toBe(`${dataDir}/run/kernl.sock`);
+    expect(toml).toContain(`socket = "${dataDir}/run/kernl.sock"`);
+    expect(toml).not.toContain("/tmp/kernl.sock");
+    expect(toml).not.toContain("{{KERNEL_SOCKET}}");
 
     await Promise.all(sups.map(s => s.stop()));
     expect(sups.every(s => !s.running)).toBe(true);
+  });
+
+  it("keeps an explicit BRIDGE_SOCKET_PATH, and leaves an older template's socket alone", async () => {
+    const custom = fakeApp();
+    const env: NodeJS.ProcessEnv = { KERNL_BINARY_INSTALL: "1", BRIDGE_SOCKET_PATH: "/run/k.sock" };
+    const sups = await startSidecars({ appDir: custom.appDir, dataDir: custom.dataDir, env, platform: "linux" });
+    cleanup.push(async () => { await Promise.all(sups.map(s => s.stop())); });
+    expect(env.BRIDGE_SOCKET_PATH).toBe("/run/k.sock");
+    expect(readFileSync(path.join(custom.dataDir, "mtw/mtw.toml"), "utf8")).toContain('socket = "/run/k.sock"');
+
+    const old = fakeApp();
+    const tpl = path.join(old.appDir, "bin/mtw.binary.toml");
+    writeFileSync(tpl, readFileSync(tpl, "utf8").replace('"{{KERNEL_SOCKET}}"', '"/tmp/kernl.sock"'));
+    const oldEnv: NodeJS.ProcessEnv = { KERNL_BINARY_INSTALL: "1" };
+    const sups2 = await startSidecars({ appDir: old.appDir, dataDir: old.dataDir, env: oldEnv, platform: "linux" });
+    cleanup.push(async () => { await Promise.all(sups2.map(s => s.stop())); });
+    expect(oldEnv.BRIDGE_SOCKET_PATH).toBeUndefined();
   });
 });
 
@@ -306,12 +328,14 @@ describe("sidecarEndpoints", () => {
     const e = sidecarEndpoints("linux", "/home/u/.local/share/kernl");
     expect(e.whatsapp).toBe("/home/u/.local/share/kernl/run/whatsapp.sock");
     expect(e.rust).toBe("/home/u/.local/share/kernl/run/mtw-rust.sock");
+    expect(e.kernel).toBe("/home/u/.local/share/kernl/run/kernl.sock");
   });
 
   it("uses per-install named pipes on Windows, with a per-boot random nonce", () => {
     const e = sidecarEndpoints("win32", "C:\\Users\\Ana María\\AppData\\Local\\Kernl\\data");
     expect(e.whatsapp).toMatch(/^\\\\\.\\pipe\\kernl-[0-9a-f]{10}-[0-9a-f]{12}-whatsapp$/);
     expect(e.rust).toMatch(/^\\\\\.\\pipe\\kernl-[0-9a-f]{10}-[0-9a-f]{12}-rust$/);
+    expect(e.kernel).toMatch(/^\\\\\.\\pipe\\kernl-[0-9a-f]{10}-[0-9a-f]{12}-kernel$/);
   });
 
   it("gives two installs different pipes and one install the same pipe whatever the case (same nonce)", () => {
