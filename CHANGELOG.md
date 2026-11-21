@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **mtwRequest is on by default.** `BRIDGE_ENABLED` and `RUST_BRIDGE_ENABLED`
+  now default to on unless set to `false`. The exception is a stdio-only
+  kernel (one per Claude session), which stays off: several such kernels on
+  one broker would each answer every RPC.
+
+### Fixed
+
+- **The kernel no longer fails to boot when the broker is down.** It boots
+  and connects once the broker comes up. Before, it exited with
+  `Bootstrap failed: Client is not connected`.
+- **RPC over the broker keeps working after a reconnect.** The kernel now
+  subscribes to `rpc` on every connection, not only the first.
+- **A kernel no longer takes over another kernel's bridge socket.** It used
+  to delete any file at `BRIDGE_SOCKET_PATH`, even a socket a running kernel
+  was listening on. That cut the other kernel's broker off.
+- **Desktop installs get a bridge socket of their own**
+  (`<data>/run/kernl.sock`, or a per-install named pipe on Windows) instead
+  of the shared `/tmp/kernl.sock`, which did not work on Windows.
+- **The public Docker stack shares the kernel's bridge socket with
+  mtw-request.** Before, the broker could not call into the kernel there.
+  The kernel also starts after mtw-request.
+
 ## [0.5.2] - 2026-11-18
 
 ### Upgrading from 0.5.1

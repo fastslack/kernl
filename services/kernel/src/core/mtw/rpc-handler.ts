@@ -77,12 +77,9 @@ export class MtwRpcHandler {
       log.info(`RPC: no WS connection — serving ${this.actionMap.size} actions over HTTP only`);
       return;
     }
-    // Subscribe to rpc channel
-    conn.send(
-      createMessage("subscribe", emptyPayload(), { channel: "rpc" }),
-    );
-
-    // Listen for request messages (accept both 'request' and 'publish' types for browser compatibility)
+    // Listen for request messages (accept both 'request' and 'publish' types
+    // for browser compatibility). The handler lives on the client, so it
+    // survives reconnects; the broker-side subscription does not.
     conn.onChannel("rpc", (msg: MtwMessage) => {
       if (msg.type !== "request" && msg.type !== "publish" && msg.type !== "event") return;
       this.handleRequest(msg).catch((err) => {
@@ -90,7 +87,26 @@ export class MtwRpcHandler {
       });
     });
 
+    // Subscribe on every (re)connection. The broker may not be up yet when
+    // the kernel boots, and a new socket starts with no subscriptions, so a
+    // one-off subscribe here would leave RPC deaf after the first drop.
+    // Client 0.1.0 emits "connected" on reconnects too; "reconnected" covers
+    // a client that tells them apart.
+    conn.on("connected", () => this.subscribe(conn));
+    conn.on("reconnected", () => this.subscribe(conn));
+    if (conn.connected) this.subscribe(conn);
+    else log.info("RPC: broker not connected yet — will subscribe to 'rpc' once it is");
+
     log.info(`RPC: listening on 'rpc' channel (${this.actionMap.size} actions registered)`);
+  }
+
+  private subscribe(conn: MtwConnection): void {
+    try {
+      conn.send(createMessage("subscribe", emptyPayload(), { channel: "rpc" }));
+    } catch (err) {
+      // Dropped between the check and the send: the next "connected" retries.
+      log.debug(`RPC: subscribe to 'rpc' deferred — ${err}`);
+    }
   }
 
   private async handleRequest(msg: MtwMessage): Promise<void> {
@@ -129,7 +145,7 @@ export class MtwRpcHandler {
 
       // Send success response — use requestId from browser for correlation.
       // handleRequest only runs off a WS message, so conn is always set here.
-      this.conn?.send(
+      this.reply(
         createMessage("response", jsonPayload({ ok: true, data: result }), {
           channel: "rpc",
           ref_id: requestId,
@@ -155,8 +171,18 @@ export class MtwRpcHandler {
     }
   }
 
+  /** Send a reply; one that finds the socket gone is dropped (the browser's
+   *  own timeout and HTTP fallback take over). */
+  private reply(msg: MtwMessage): void {
+    try {
+      this.conn?.send(msg);
+    } catch (err) {
+      log.debug(`RPC: reply dropped, broker not connected — ${err}`);
+    }
+  }
+
   private sendError(reqMsg: MtwMessage, error: string, code: string, overrideRefId?: string): void {
-    this.conn?.send(
+    this.reply(
       createMessage("error", jsonPayload({ ok: false, error, code }), {
         channel: "rpc",
         ref_id: overrideRefId ?? reqMsg.id,

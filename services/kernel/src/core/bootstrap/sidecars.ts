@@ -51,14 +51,22 @@ export function sidecarEndpoints(
   platform: NodeJS.Platform,
   dataDir: string,
   nonce?: string,
-): { whatsapp: string; rust: string } {
+): { whatsapp: string; rust: string; kernel: string } {
   if (platform === "win32") {
     const id = createHash("sha256").update(path.win32.resolve(dataDir).toLowerCase()).digest("hex").slice(0, 10);
     const suffix = nonce ?? randomBytes(6).toString("hex");
-    return { whatsapp: `\\\\.\\pipe\\kernl-${id}-${suffix}-whatsapp`, rust: `\\\\.\\pipe\\kernl-${id}-${suffix}-rust` };
+    const pipe = (name: string) => `\\\\.\\pipe\\kernl-${id}-${suffix}-${name}`;
+    return { whatsapp: pipe("whatsapp"), rust: pipe("rust"), kernel: pipe("kernel") };
   }
   const runDir = path.join(dataDir, "run");
-  return { whatsapp: path.join(runDir, "whatsapp.sock"), rust: path.join(runDir, "mtw-rust.sock") };
+  return {
+    whatsapp: path.join(runDir, "whatsapp.sock"),
+    rust: path.join(runDir, "mtw-rust.sock"),
+    // Where mtw-server calls into the kernel ([store.bridge]). Per install,
+    // never the shared /tmp/kernl.sock: a second kernel on the same machine
+    // (a dev or test one) would unlink it and cut this install's broker off.
+    kernel: path.join(runDir, "kernl.sock"),
+  };
 }
 
 /** TOML basic-string escaping. */
@@ -119,13 +127,20 @@ export async function startSidecars(opts: {
   // generated once per boot (not inside sidecarEndpoints) so the two pipe
   // names it produces share the same random suffix.
   const nonce = platform === "win32" ? randomBytes(6).toString("hex") : undefined;
-  const { whatsapp: whatsappSock, rust: rustSock } = sidecarEndpoints(platform, dataDir, nonce);
+  const { whatsapp: whatsappSock, rust: rustSock, kernel: kernelSock } = sidecarEndpoints(platform, dataDir, nonce);
 
   // TOML basic-string escaping: a data dir with a backslash or a quote in it
   // (every Windows path, every named pipe) would otherwise produce a config
   // mtw-server refuses to parse. Templates that still spell the socket as
   // {{DATA_DIR}}/run/whatsapp.sock keep working on Unix.
-  const rendered = readFileSync(template, "utf8")
+  const raw = readFileSync(template, "utf8");
+  // The kernel's own bridge socket (config.bridge.socketPath, read by
+  // loadConfig after this). Only when the template asks for it: an older
+  // payload's template still names /tmp/kernl.sock, and the two sides must
+  // agree on one path.
+  if (raw.includes('"{{KERNEL_SOCKET}}"')) env.BRIDGE_SOCKET_PATH ??= kernelSock;
+  const rendered = raw
+    .replaceAll("{{KERNEL_SOCKET}}", tomlString(env.BRIDGE_SOCKET_PATH ?? kernelSock))
     .replaceAll("{{WHATSAPP_SOCKET}}", tomlString(whatsappSock))
     .replaceAll("{{DATA_DIR}}", tomlString(dataDir));
   writeFileSync(path.join(mtwDir, "mtw.toml"), rendered);

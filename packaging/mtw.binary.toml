@@ -3,9 +3,9 @@
 #
 # Template, not a config: the kernel renders it to <data dir>/mtw/mtw.toml on
 # every boot (src/core/bootstrap/sidecars.ts), replacing {{DATA_DIR}} with the
-# per-user data directory and {{WHATSAPP_SOCKET}} with the bridge endpoint (a
-# unix socket under the data dir, or a per-install named pipe on Windows),
-# both TOML-escaped, and starts mtw-server from that folder. Derived from
+# per-user data directory, and {{WHATSAPP_SOCKET}} and {{KERNEL_SOCKET}} with
+# the WhatsApp bridge and kernel bridge endpoints (unix sockets under the data
+# dir, or per-install named pipes on Windows), all TOML-escaped, and starts mtw-server from that folder. Derived from
 # mtw.docker.toml; keep the channel list in step with it.
 
 [server]
@@ -31,9 +31,10 @@ default = "json"
 path = "{{DATA_DIR}}/data/kernel.db"
 readonly = true
 
-# Bridge — delegates writes to kernel via Unix socket (Rust→TS)
+# Bridge — delegates writes to the kernel (Rust→TS). The kernel listens on the
+# same per-install endpoint (BRIDGE_SOCKET_PATH, set by sidecars.ts).
 [store.bridge]
-socket = "/tmp/kernl.sock"
+socket = "{{KERNEL_SOCKET}}"
 
 # ── Channels ────────────────────────────────────────────────
 [[channels]]

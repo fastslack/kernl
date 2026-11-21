@@ -74,7 +74,14 @@ export async function initBridgesAndStdio(args: {
       tools: finalTools,
       events,
     });
-    await bridgeServer.start();
+    try {
+      await bridgeServer.start();
+    } catch (err) {
+      // Only mtw-server's calls into the kernel need this socket; the kernel
+      // and the rest of the broker keep working without it.
+      log.error(`Bridge: not listening — ${err instanceof Error ? err.message : String(err)}`);
+      bridgeServer = null;
+    }
   }
 
   // ── Rust Bridge (delegate heavy operations to Rust) ──
