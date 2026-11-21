@@ -7,6 +7,7 @@ import { newId, isoNow } from "../../core/helpers.js";
 import { buildPatch, type PatchColumn } from "../../sdk/query-helpers.js";
 import { agentModelChain } from "./agent-fields.js";
 import { log } from "../../core/logger.js";
+import { assertMayCreateAgentIn } from "../../core/scope.js";
 import { readEditionMode, type EditionMode } from "../../core/edition.js";
 import type {
   Agent,
@@ -736,6 +737,7 @@ export class AgentService {
      *  agents via the kernel_agents_create policy gate. Defaults to 'worker'. */
     role?: string;
   }): Agent {
+    assertMayCreateAgentIn(input.flow_id);
     const now = isoNow();
     const agent: Agent = {
       id: newId(),

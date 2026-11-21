@@ -14,6 +14,8 @@ services:
       - KERNEL_HOST=${KERNEL_HOST}
       - KERNEL_PORT=${KERNEL_PORT}
       - RUST_BRIDGE_SOCKET=/tmp/mtw-rust.sock
+      # The broker checks each WS handshake against the kernel; only the owner gets in.
+      - MTW_AUTH_KERNEL_URL=http://kernel:3087
       # Torrent engine — the librqbit data plane HTTP server. Default
       # is 127.0.0.1 which only the same container can reach; we bind
       # 0.0.0.0 so the kernel container can proxy stream requests via

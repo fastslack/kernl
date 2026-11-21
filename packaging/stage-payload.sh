@@ -300,7 +300,7 @@ rm -rf "$TMP_T"
 # archive extension and the binary name are chosen per platform below, but
 # the rest of the loop — download/vendor, extract, chmod, pair check,
 # template copy — is identical across every platform.
-MTW_BIN_TAG="${MTW_BIN_TAG:-v0.4.0}"
+MTW_BIN_TAG="${MTW_BIN_TAG:-v0.5.1}"
 
 case "$PLATFORM" in
   win-x64) SIDECAR_EXT=zip; SIDECAR_EXE=.exe ;;

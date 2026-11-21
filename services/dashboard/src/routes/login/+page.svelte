@@ -81,7 +81,9 @@
         headers: { Authorization: 'Bearer ' + tok },
       });
       const body = await r.json().catch(() => ({} as any));
-      if (!r.ok || body.valid !== true) {
+      // `valid` is the kernel token (super admin); a user's personal token
+      // answers `kind: 'user'`. Both may sign in.
+      if (!r.ok || (body.valid !== true && body.kind !== 'user')) {
         error = $t('login.error_rejected');
         busy = false;
         return;

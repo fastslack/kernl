@@ -1,5 +1,6 @@
 import type { AgentDriver, AgentDriverResult, KernelModule, ModuleContext, ResourceProvider, ToolDefinition } from "./types.js";
 import { guardOutbound } from "./outbound-guard.js";
+import { guardPermission } from "./tool-permission-guard.js";
 import type { DashboardRegistry } from "./dashboard-registry.js";
 import type { SqliteDb } from "./db/sqlite.js";
 import type { RpcAction } from "./mtw/rpc-handler.js";
@@ -156,7 +157,10 @@ export class ModuleRegistry {
     return this.modules
       .filter((m) => this.initializedModules.has(m.name))
       .flatMap((m) => m.getTools())
-      .map(guardOutbound);
+      .map(guardOutbound)
+      // Outermost: a user without the permission is refused before any
+      // other wrapper runs (core/tool-permission-guard.ts).
+      .map(guardPermission);
   }
 
   /**

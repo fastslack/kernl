@@ -13,6 +13,7 @@
   import { agentFromResponse } from '$lib/stores/agent-detail.js';
   import { toast, confirm as confirmDialog, describeError } from '$shared/feedback';
   import { onMount } from 'svelte';
+  import { session, can, canCreateInAgents } from '$lib/session.js';
   import { locale } from '$lib/i18n';
   import { PALETTE } from '$lib/components/bench/model.js';
 
@@ -627,7 +628,9 @@
     </div>
     <div class="hact">
       <a href="/agents-flow" class="btn ghost">◈ {tx.flow}</a>
-      <button type="button" class="btn primary" on:click={() => showComposer = true}>+ {tx.create}</button>
+      {#if canCreateInAgents($session)}
+        <button type="button" class="btn primary" on:click={() => showComposer = true}>+ {tx.create}</button>
+      {/if}
     </div>
   </header>
 
@@ -696,7 +699,9 @@
                     </span>
                   {:else}<span class="rate"></span>{/if}
                 </button>
-                {#if running || stoppingIds.has(agent.id)}
+                {#if !can($session, 'agents', 'write')}
+                  <!-- A role that only reads: no run, stop or delete. -->
+                {:else if running || stoppingIds.has(agent.id)}
                   <button type="button" class="act stop" on:click|stopPropagation={() => doStopAgent(agent.id)} disabled={stoppingIds.has(agent.id)} title={tx.stop} aria-label="{tx.stop} {agent.name}">{stoppingIds.has(agent.id) ? '…' : '■'}</button>
                 {:else}
                   <button type="button" class="act run" on:click|stopPropagation={() => doRunAgent(agent.id)} title={tx.run} aria-label="{tx.run} {agent.name}">▶</button>
@@ -711,7 +716,9 @@
                         <button role="menuitem" on:click={() => { menuFor = ''; doAcceptRevision(agent.id, agent.name); }}>{tx.keep}</button>
                         <button role="menuitem" on:click={() => { menuFor = ''; doRejectRevision(agent.id, agent.name); }}>{tx.reject}</button>
                       {/if}
-                      <button role="menuitem" class="danger" on:click={() => { menuFor = ''; doDeleteAgent(agent.id); }}>{tx.del}</button>
+                      {#if can($session, 'agents', 'write')}
+                        <button role="menuitem" class="danger" on:click={() => { menuFor = ''; doDeleteAgent(agent.id); }}>{tx.del}</button>
+                      {/if}
                     </div>
                   {/if}
                 </div>

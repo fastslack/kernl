@@ -3,6 +3,7 @@ import type { SqliteDb } from "../../../core/db/sqlite.js";
 import type { EventBus } from "../../../core/event-bus.js";
 import { newId, isoNow } from "../../../core/helpers.js";
 import { log } from "../../../core/logger.js";
+import { assertMayCreateOffice } from "../../../core/scope.js";
 import { WORKSPACE_ROOT } from "../workspace-constants.js";
 import { OFFICE_HOME_WORKSPACE_NAME } from "../office-home.js";
 import { FLOW_KINDS, isFlowKind, isOffGridKind, type Agent, type AgentFlow, type FlowKind, type RepoIsolation } from "../types.js";
@@ -40,6 +41,7 @@ export class AgentFlowsService {
     /** A free lot the operator picked on the 3D floor; ignored if taken or not a lot. */
     lot_id?: string;
   }): AgentFlow {
+    assertMayCreateOffice();
     const kind = input.kind ?? "general";
     if (!isFlowKind(kind)) {
       throw new Error(`Invalid office kind "${String(kind)}" — use one of ${FLOW_KINDS.join(", ")}`);

@@ -4,6 +4,7 @@
 	import BuildingStats from './BuildingStats.svelte';
 	import type { WorldStats } from '$shared/world-plugin.js';
 	import { t } from '$lib/i18n/index.js';
+	import { session, canCreateInAgents } from '$lib/session.js';
 
 	export let agents = 0;
 	export let working = 0;
@@ -104,10 +105,12 @@
 			{/if}
 		</div>
 
-		<span class="bar-sep" aria-hidden="true"></span>
-		<button class="k-btn bar-new" type="button" title={$t('office.bar.new_office')} on:click={() => dispatch('newoffice')}>
-			<Icon name="plus" /><span class="cb-label cb-label--keep">{$t('office.bar.new_office')}</span><kbd class="k-kbd bar-new-kbd">N</kbd>
-		</button>
+		{#if canCreateInAgents($session)}
+			<span class="bar-sep" aria-hidden="true"></span>
+			<button class="k-btn bar-new" type="button" title={$t('office.bar.new_office')} on:click={() => dispatch('newoffice')}>
+				<Icon name="plus" /><span class="cb-label cb-label--keep">{$t('office.bar.new_office')}</span><kbd class="k-kbd bar-new-kbd">N</kbd>
+			</button>
+		{/if}
 	</div>
 </header>
 

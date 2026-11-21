@@ -23,6 +23,7 @@
 export { SDK_MAJOR, KernlHostVersionError, type KernlHost, type Logger } from "./host.js";
 export { log } from "./log.js";
 export * from "./facades.js";
+export * from "./access.js";
 export * from "./types.js";
 
 export * from "./helpers.js";

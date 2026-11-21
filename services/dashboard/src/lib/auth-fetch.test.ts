@@ -27,7 +27,9 @@ describe('installAuthFetch', () => {
   const saved = { window: g.window, location: g.location, localStorage: g.localStorage };
   const sent: Array<{ url: string; auth: string | null }> = [];
   let status = 200;
+  let body = '{}';
   let on428Calls = 0;
+  const forbidden: string[] = [];
   const loc = { host: 'dash', pathname: '/tasks', search: '?q=1', hash: '#h', href: '' };
 
   beforeAll(() => {
@@ -37,10 +39,10 @@ describe('installAuthFetch', () => {
       location: loc,
       fetch: async (input: RequestInfo | URL, init: RequestInit = {}) => {
         sent.push({ url: requestUrl(input), auth: new Headers(init.headers).get('Authorization') });
-        return new Response('{}', { status });
+        return new Response(body, { status });
       },
     };
-    installAuthFetch(() => { on428Calls++; });
+    installAuthFetch(() => { on428Calls++; }, (required) => { forbidden.push(required); });
   });
   afterAll(() => {
     g.window = saved.window; g.location = saved.location; g.localStorage = saved.localStorage;
@@ -73,6 +75,21 @@ describe('installAuthFetch', () => {
     loc.href = '';
     await g.window.fetch('/api/a');
     expect(loc.href).toBe('');
+  });
+
+  it('explains a refused change, and keeps quiet about a refused read', async () => {
+    status = 403;
+    body = JSON.stringify({ error: 'Forbidden', reason: 'no_permission', required: 'tasks:write' });
+    await g.window.fetch('/api/tasks/all');
+    await g.window.fetch('/api/tasks/create', { method: 'POST', body: '{}' });
+    body = JSON.stringify({ error: 'Forbidden: agent x is outside the offices you can change.' });
+    await g.window.fetch('/api/agents/x', { method: 'PUT', body: '{}' });
+    body = JSON.stringify({ error: 'quota exceeded' });
+    await g.window.fetch('/api/llm/run', { method: 'POST', body: '{}' });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(forbidden).toEqual(['tasks:write', '']);
+    status = 200;
+    body = '{}';
   });
 
   it('installs only once', () => {

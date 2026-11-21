@@ -83,6 +83,19 @@ export interface KernlHost {
    * while the module is not running.
    */
   projects?(): import("./projects.js").ProjectsHost | null;
+  /**
+   * Whether the caller of the request in flight holds a permission
+   * (`module:read`, `module:write`, `module:*`). Optional so a bundle built
+   * now still runs on a kernel whose host predates users; the SDK then
+   * answers from the principal alone (see access.ts).
+   */
+  can?(permission: string): boolean;
+  /**
+   * Whether the caller's offices reach this id (an agent, an office or a
+   * run). True for anything that is none of those, and for callers no scope
+   * restricts. Optional, like `can`.
+   */
+  inScope?(id: string, level: "read" | "write"): boolean;
 }
 
 const HOST_KEY = Symbol.for("kernl.host");
@@ -143,6 +156,9 @@ const defaultHost: KernlHost = Object.freeze({
   peering: () => null,
   verifyPeerRequest: () => notInstalled("verifyPeerRequest"),
   timezone: () => "UTC",
+  // No kernel, no users: nothing to refuse.
+  can: () => true,
+  inScope: () => true,
 });
 
 /** The installed host, or the default one when no kernel is running. */

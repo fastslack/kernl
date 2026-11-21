@@ -33,37 +33,50 @@ export interface DashboardAgents {
   activeSchedules: number;
 }
 
-export function queryAgents(db: SqliteDb): DashboardAgents | null {
+/**
+ * `only`: the agents a restricted user may see (core/scope.ts). Every count
+ * is then taken over those agents alone — dropping the out-of-scope rows from
+ * the response is not enough when the response is a total. Absent for
+ * everyone else.
+ */
+export function queryAgents(db: SqliteDb, only?: readonly string[]): DashboardAgents | null {
   if (!tableExists(db, "agents")) return null;
 
-  const totalAgents = (db.prepare("SELECT COUNT(*) as c FROM agents").get() as { c: number }).c;
-  const activeAgents = (db.prepare("SELECT COUNT(*) as c FROM agents WHERE active = 1").get() as { c: number }).c;
-  const totalRuns = (db.prepare("SELECT COUNT(*) as c FROM agent_runs").get() as { c: number }).c;
+  // `a` is the agent id column of whatever table the query reads.
+  const ids = only ? [...only] : [];
+  const within = (a: string, joiner: "WHERE" | "AND") =>
+    only ? ` ${joiner} ${a} IN (SELECT value FROM json_each(?))` : "";
+  const args = (...rest: unknown[]) => (only ? [...rest, JSON.stringify(ids)] : rest);
+
+  const count = (sql: string, ...rest: unknown[]) => (db.prepare(sql).get(...args(...rest)) as { c: number }).c;
+  const totalAgents = count(`SELECT COUNT(*) as c FROM agents${within("id", "WHERE")}`);
+  const activeAgents = count(`SELECT COUNT(*) as c FROM agents WHERE active = 1${within("id", "AND")}`);
+  const totalRuns = count(`SELECT COUNT(*) as c FROM agent_runs${within("agent_id", "WHERE")}`);
 
   const todayStart = dayStart(localDate());
-  const runsToday = (db.prepare("SELECT COUNT(*) as c FROM agent_runs WHERE created_at >= ?").get(todayStart) as { c: number }).c;
-  const completedRuns = (db.prepare("SELECT COUNT(*) as c FROM agent_runs WHERE status = 'completed'").get() as { c: number }).c;
-  const failedRuns = (db.prepare("SELECT COUNT(*) as c FROM agent_runs WHERE status = 'failed'").get() as { c: number }).c;
-  const totalTokens = (db.prepare("SELECT COALESCE(SUM(tokens_used), 0) as c FROM agent_runs").get() as { c: number }).c;
+  const runsToday = count(`SELECT COUNT(*) as c FROM agent_runs WHERE created_at >= ?${within("agent_id", "AND")}`, todayStart);
+  const completedRuns = count(`SELECT COUNT(*) as c FROM agent_runs WHERE status = 'completed'${within("agent_id", "AND")}`);
+  const failedRuns = count(`SELECT COUNT(*) as c FROM agent_runs WHERE status = 'failed'${within("agent_id", "AND")}`);
+  const totalTokens = count(`SELECT COALESCE(SUM(tokens_used), 0) as c FROM agent_runs${within("agent_id", "WHERE")}`);
 
   const recentRuns = db
     .prepare(
       `SELECT r.id, r.agent_id, a.name as agent_name, r.trigger_type, r.status,
               r.steps_count, r.tokens_used, r.created_at
-       FROM agent_runs r
-       JOIN agents a ON r.agent_id = a.id
+       FROM agent_runs r${only ? " INDEXED BY idx_agent_runs_created" : ""}
+       JOIN agents a ON r.agent_id = a.id${within("r.agent_id", "WHERE")}
        ORDER BY r.created_at DESC LIMIT 10`,
     )
-    .all() as DashboardAgents["recentRuns"];
+    .all(...args()) as DashboardAgents["recentRuns"];
 
   const statusRows = db
-    .prepare("SELECT status as key, COUNT(*) as count FROM agent_runs GROUP BY status")
-    .all() as Array<{ key: string; count: number }>;
+    .prepare(`SELECT status as key, COUNT(*) as count FROM agent_runs${within("agent_id", "WHERE")} GROUP BY status`)
+    .all(...args()) as Array<{ key: string; count: number }>;
   const runsByStatus = toRecord(statusRows);
 
   const triggerRows = db
-    .prepare("SELECT trigger_type as key, COUNT(*) as count FROM agent_runs GROUP BY trigger_type")
-    .all() as Array<{ key: string; count: number }>;
+    .prepare(`SELECT trigger_type as key, COUNT(*) as count FROM agent_runs${within("agent_id", "WHERE")} GROUP BY trigger_type`)
+    .all(...args()) as Array<{ key: string; count: number }>;
   const runsByTrigger = toRecord(triggerRows);
 
   const topAgents = db
@@ -74,14 +87,14 @@ export function queryAgents(db: SqliteDb): DashboardAgents | null {
       `SELECT a.id, a.name, COUNT(r.agent_id) as run_count, COALESCE(SUM(r.tokens_used), 0) as total_tokens
        FROM agents a
        LEFT JOIN agent_runs r ON a.id = r.agent_id
-       WHERE a.active = 1
+       WHERE a.active = 1${within("a.id", "AND")}
        GROUP BY a.id
        ORDER BY run_count DESC LIMIT 10`,
     )
-    .all() as DashboardAgents["topAgents"];
+    .all(...args()) as DashboardAgents["topAgents"];
 
-  const activeTriggers = safeGet(db, "SELECT COUNT(*) as c FROM agent_event_triggers WHERE active = 1", [], { c: 0 }).c;
-  const activeSchedules = safeGet(db, "SELECT COUNT(*) as c FROM agent_schedules WHERE active = 1", [], { c: 0 }).c;
+  const activeTriggers = safeGet(db, `SELECT COUNT(*) as c FROM agent_event_triggers WHERE active = 1${within("agent_id", "AND")}`, args(), { c: 0 }).c;
+  const activeSchedules = safeGet(db, `SELECT COUNT(*) as c FROM agent_schedules WHERE active = 1${within("agent_id", "AND")}`, args(), { c: 0 }).c;
 
   return {
     kpis: { totalAgents, activeAgents, totalRuns, runsToday, completedRuns, failedRuns, totalTokens },
@@ -95,7 +108,8 @@ export function queryAgents(db: SqliteDb): DashboardAgents | null {
 }
 
 /** Agent list for the Agents dashboard page (WS channel). */
-export function queryAgentsList(db: SqliteDb): { agents: Record<string, unknown>[]; flows?: unknown[] } | null {
+/** `only`: as in queryAgents — a restricted user's agents; per-office counts are taken over them. */
+export function queryAgentsList(db: SqliteDb, only?: readonly string[]): { agents: Record<string, unknown>[]; flows?: unknown[] } | null {
   if (!tableExists(db, "agents")) return null;
 
   const agents = db
@@ -140,7 +154,9 @@ export function queryAgentsList(db: SqliteDb): { agents: Record<string, unknown>
   // Compute per-flow agent counts and last run times
   const flowAgentCount: Record<string, number> = {};
   const flowLastRun: Record<string, string | null> = {};
+  const visible = only ? new Set(only) : null;
   for (const a of agents) {
+    if (visible && !visible.has(a.id as string)) continue;
     const fid = a.flow_id as string;
     if (fid && flowDetailMap[fid]) {
       flowAgentCount[fid] = (flowAgentCount[fid] || 0) + 1;

@@ -273,8 +273,13 @@ export async function initMtw(args: {
   const mtwUrl = process.env.KERNEL_URL ?? "ws://localhost:7741/ws";
   const { MtwConnection: MtwConn } = await import("@matware/mtw-request-ts-client");
 
+  // The broker lets in only the owner (it checks the token against
+  // /api/auth/broker), so the kernel's own bridge connects as the owner. The
+  // token travels in the client's handshake, never in the logged URL.
+  const bridgeToken = config.auth.token || process.env.KERNEL_AUTH_TOKEN || "";
   const mtwConn = new MtwConn({
     url: mtwUrl,
+    ...(bridgeToken ? { auth: { token: bridgeToken } } : {}),
     reconnect: true,
     reconnectDelay: 2000,
     maxReconnectDelay: 30000,

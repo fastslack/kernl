@@ -421,6 +421,26 @@ export function wsConnect(onMessage?: () => void) {
 	connectMtwRequest(onMessage);
 }
 
+/** How often a session that never opens the socket re-polls its channels. */
+export const HTTP_ONLY_POLL_MS = 15_000;
+
+/**
+ * Keep the dashboard fed over HTTP alone, never opening /mtw.
+ *
+ * For a user's session: the live socket is the super admin's (the broker
+ * behind it has no notion of users, so nginx refuses everyone else; see
+ * nginx.conf). Every RPC then goes to its HTTP fallback, where the kernel
+ * applies the user's roles and offices, and subscribed channels are polled
+ * here more often than the outage fallback does, since this is the normal
+ * state of the session rather than a blip.
+ */
+export function wsStartHttpOnly(onMessage?: () => void, intervalMs = HTTP_ONLY_POLL_MS) {
+	if (fallbackTimer) clearInterval(fallbackTimer);
+	wsConnected.set(false);
+	fallbackTimer = setInterval(() => { pollSubscribedChannels(); onMessage?.(); }, intervalMs);
+	pollSubscribedChannels();
+}
+
 function disconnected(onMessage?: () => void) {
 	wsConnected.set(false);
 	mtwWs = null;

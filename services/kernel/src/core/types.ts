@@ -50,6 +50,12 @@ export interface ToolDefinition {
    */
   sideEffects?: string[];
   /**
+   * What a user's role must grant to call this tool, `<module>:<read|write>`.
+   * Absent: read off the name (`kernel_tasks_list` → `tasks:read`; see
+   * core/permissions.ts). Set it when the name says the wrong thing.
+   */
+  permission?: string;
+  /**
    * Publishes or sends something outside Kernl (post, email, message, upload).
    * Runs that work for a project never get these — they draft through
    * kernel_outbox_propose and a human approves. See src/modules/projects.
@@ -514,6 +520,12 @@ export interface DashboardNavItem {
    * items whose id already resolves (matching module, extPage, or core route).
    */
   requires?: string;
+  /**
+   * The module or extension that contributed the item, filled in by the
+   * dashboard registry. The dashboard hides an item from a user whose roles
+   * grant no read on it (a hint only: the kernel checks every call).
+   */
+  module?: string;
 }
 
 /** Top-level sidebar group. Extensions can contribute new groups dynamically. */

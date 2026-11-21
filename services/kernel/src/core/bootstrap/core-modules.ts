@@ -37,6 +37,7 @@ import { createToolMemoryModule, type ToolMemoryModule } from "../../modules/too
 import { createBenchModule } from "../../modules/bench/index.js";
 import { createBrainModule } from "../../modules/brain/index.js";
 import { createProvenanceModule } from "../../modules/provenance/index.js";
+import { createAccessModule } from "../../modules/access/index.js";
 import { createGraphQueryModule } from "../../modules/graph-query/index.js";
 import { createPlacesModule } from "../../modules/places/index.js";
 import { createGraphAnalyticsModule } from "../../modules/graph-analytics/index.js";
@@ -176,6 +177,9 @@ export async function initCoreModules(args: {
 
   // ── Provenance (who changed what: every writing tool call and the ids it touched) ──
   registry.register(createProvenanceModule());
+
+  // ── Access (users and personal tokens; the kernel token is the super admin) ──
+  registry.register(createAccessModule());
 
   // ── Graph query (agents read the graph: schema, checked read-only Cypher, plain-word questions) ──
   registry.register(createGraphQueryModule());

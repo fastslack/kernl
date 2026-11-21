@@ -15,12 +15,14 @@ import tmEn, { type TimeMachineKey } from "./time-machine.en.js";
 import tmEs from "./time-machine.es.js";
 import workingEn, { type WorkingHudKey } from "./working-hud.en.js";
 import workingEs from "./working-hud.es.js";
+import accessEn, { type AccessKey } from "./access.en.js";
+import accessEs from "./access.es.js";
 
 export type Locale = "en" | "es" | "nl" | "de" | "fr" | "pt" | "ja" | "zh";
 
 /** Every key `t()` has a string for: the dashboard dictionary plus the feature strings. */
-export type TranslationKey = I18nKey | LlmConnectKey | MailSyncKey | StorageKey | AttachmentsKey | GraphKey | TimeMachineKey | WorkingHudKey;
-export type { I18nKey, LlmConnectKey, MailSyncKey, StorageKey, AttachmentsKey, GraphKey, TimeMachineKey, WorkingHudKey };
+export type TranslationKey = I18nKey | LlmConnectKey | MailSyncKey | StorageKey | AttachmentsKey | GraphKey | TimeMachineKey | WorkingHudKey | AccessKey;
+export type { I18nKey, LlmConnectKey, MailSyncKey, StorageKey, AttachmentsKey, GraphKey, TimeMachineKey, WorkingHudKey, AccessKey };
 
 /**
  * What `t()` accepts as a key K. A string literal — or a union of them, such
@@ -36,8 +38,8 @@ export type Translate = <K extends string>(key: KeyArg<K>, params?: Record<strin
 // Feature strings live in their own files so parallel work on en.ts/es.ts
 // does not collide; they are merged here once.
 const translations: Record<string, Record<string, string>> = {
-  en: { ...en, ...llmEn, ...mailSyncEn, ...storageEn, ...attachEn, ...graphEn, ...tmEn, ...workingEn },
-  es: { ...es, ...llmEs, ...mailSyncEs, ...storageEs, ...attachEs, ...graphEs, ...tmEs, ...workingEs },
+  en: { ...en, ...llmEn, ...mailSyncEn, ...storageEn, ...attachEn, ...graphEn, ...tmEn, ...workingEn, ...accessEn },
+  es: { ...es, ...llmEs, ...mailSyncEs, ...storageEs, ...attachEs, ...graphEs, ...tmEs, ...workingEs, ...accessEs },
 };
 
 /** Active locale. Defaults to "en" — same default as the backend

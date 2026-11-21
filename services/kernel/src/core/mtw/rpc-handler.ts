@@ -12,6 +12,8 @@
  * Pattern inspired by BridgeServer.handleFrame() (toolMap dispatch).
  */
 
+import { assertScope, filterForScope } from "../scope.js";
+import { requirementForRpcAction } from "../permissions.js";
 import type { MtwConnection, MtwMessage } from "@matware/mtw-request-ts-client";
 import { createMessage, jsonPayload, emptyPayload } from "@matware/mtw-request-ts-client";
 import { log } from "../logger.js";
@@ -176,6 +178,12 @@ export class MtwRpcHandler {
   async callAction(action: string, args: Record<string, unknown>): Promise<unknown> {
     const handler = this.actionMap.get(action);
     if (!handler) throw new Error(`Unknown action: ${action}`);
-    return handler.handler(stripInternalArgs(args) as Record<string, unknown>);
+    // A user restricted to some offices may not name an agent, office or
+    // run outside them, and gets results without them (core/scope.ts).
+    // Over HTTP the caller is known; over the broker it is not, which is why
+    // only the super admin may open the broker (/api/auth/broker).
+    const clean = stripInternalArgs(args) as Record<string, unknown>;
+    assertScope(clean, requirementForRpcAction(action).level);
+    return filterForScope(await handler.handler(clean));
   }
 }

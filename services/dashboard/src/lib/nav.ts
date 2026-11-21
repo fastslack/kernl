@@ -39,7 +39,7 @@ export interface NavManifest {
 	navGroups?: Array<{ id: string; label: string; icon: string; defaultView?: string; order?: number }>;
 	navItems?: Array<{
 		id: string; label: string; icon: string; group: string;
-		parent?: string; order?: number; path?: string; requires?: string;
+		parent?: string; order?: number; path?: string; requires?: string; module?: string;
 	}>;
 }
 
@@ -115,6 +115,9 @@ export function buildNav(m: NavManifest, base: NavGroup[] = NAV_GROUPS): BuiltNa
 			const view: NavView = { id: item.id, label: item.label, icon: item.icon };
 			if (item.parent) view.parent = item.parent;
 			if (item.order !== undefined) view.order = item.order;
+			const modules = [item.module, item.requires?.replace(/^ext:/, ''), item.id]
+				.filter((m): m is string => typeof m === 'string' && m !== '');
+			view.modules = [...new Set(modules)];
 			group.views.push(view);
 			if (item.path) viewPaths[item.id] = item.path;
 		}
@@ -163,4 +166,22 @@ export function activeTabId(pathname: string, search: string, viewPaths: Record<
 		if ([...want].every(([k, v]) => here.get(k) === v)) return id;
 	}
 	return pathname.split('/')[1] || 'home';
+}
+
+/**
+ * The nav with every view the session cannot read removed, and groups left
+ * empty dropped (System included: a user with no system grant has nothing
+ * to do there). `canRead(module)` answers for the signed-in principal; the
+ * super admin, and a dashboard that has not heard who is signed in, keep
+ * everything. A view with no module named keeps its id as the module.
+ *
+ * Only spares users tabs that would answer 403; the kernel checks every call.
+ */
+export function filterNavForSession(groups: NavGroup[], canRead: (module: string) => boolean): NavGroup[] {
+	return groups
+		.map((g) => ({
+			...g,
+			views: g.views.filter((v) => (v.modules?.length ? v.modules : [v.id]).some(canRead)),
+		}))
+		.filter((g) => g.views.length > 0);
 }

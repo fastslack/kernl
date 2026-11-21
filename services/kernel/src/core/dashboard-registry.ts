@@ -137,7 +137,7 @@ export class DashboardRegistry {
           );
           continue;
         }
-        this.navItems.push(item);
+        this.navItems.push({ ...item, module: item.module ?? mod.name });
       }
     }
 
@@ -428,6 +428,7 @@ export class DashboardRegistry {
                 path: typeof raw.path === "string" ? raw.path : undefined,
                 parent: typeof raw.parent === "string" ? raw.parent : undefined,
                 requires: typeof raw.requires === "string" ? raw.requires : undefined,
+                module: row.slug,
               };
               navItems.push(item);
             }
