@@ -74,7 +74,7 @@ describe("scopes in the service", () => {
   it("defaults to every office", () => {
     const { svc } = store();
     const u = svc.createUser({ name: "Ana" });
-    expect(svc.getScope(u.id)).toEqual({ mode: "all", offices: [], agents: [] });
+    expect(svc.getScope(u.id)).toEqual({ mode: "all", offices: [], agents: [], projects: [] });
     expect(svc.scopeForUser(u.id)).toBeNull();
   });
 
@@ -97,7 +97,7 @@ describe("scopes in the service", () => {
 
   it("the index tells offices, agents and runs apart", () => {
     const { svc } = store();
-    expect(svc.refs.lookup(OFF_A)).toEqual({ kind: "office" });
+    expect(svc.refs.lookup(OFF_A)).toEqual({ kind: "office", projects: [] });
     expect(svc.refs.lookup("agent-b1")).toEqual({ kind: "agent", officeId: OFF_B });
     expect(svc.refs.lookup("run-b1")).toEqual({ kind: "run", agentId: "agent-b1", officeId: OFF_B });
     expect(svc.refs.lookup("task-123")).toBeNull();
@@ -108,7 +108,7 @@ describe("what a scope reaches", () => {
   let svc: AccessService;
   beforeEach(() => { ({ svc } = store()); wire(svc); });
 
-  const scope = (offices: string[], agents: string[] = []): Scope => ({ offices: new Set(offices), agents: new Set(agents) });
+  const scope = (offices: string[], agents: string[] = []): Scope => ({ offices: new Set(offices), agents: new Set(agents), projects: new Set() });
 
   it("a granted office brings its agents and their runs", () => {
     const s = scope([OFF_A]);
@@ -245,13 +245,13 @@ describe("HTTP with a restricted user", () => {
   it("the super admin sets scopes over HTTP", async () => {
     const u = svc.createUser({ name: "Ana" });
     const r = await send("PUT", `/api/access/users/${u.id}/scope`, MASTER, { mode: "restricted", offices: [OFF_A] });
-    expect((await r.json()).scope).toEqual({ mode: "restricted", offices: [OFF_A], agents: [] });
+    expect((await r.json()).scope).toEqual({ mode: "restricted", offices: [OFF_A], agents: [], projects: [] });
     expect((await send("PUT", `/api/access/users/${u.id}/scope`, MASTER, { offices: ["nope"] })).status).toBe(400);
   });
 
   it("/api/auth/me tells a user their scope", async () => {
     const { token } = restrictedUser(svc);
-    expect((await (await send("GET", "/api/auth/me", token)).json()).scope).toEqual({ mode: "restricted", offices: [OFF_A], agents: [] });
+    expect((await (await send("GET", "/api/auth/me", token)).json()).scope).toEqual({ mode: "restricted", offices: [OFF_A], agents: [], projects: [] });
   });
 
   it("the broker opens for the kernel token only, while it cannot hold users", async () => {

@@ -189,7 +189,7 @@ export class MtwRpcHandler {
       const result = await runWithContext(
         { callerAgentId: "", callerRunId: "", callerDepth: 0, principal: caller },
         async () => {
-          assertScope(clean, need.level);
+          assertScope(clean, need.level, need.module);
           return filterForScope(await handler.handler(clean));
         },
       );
@@ -263,7 +263,8 @@ export class MtwRpcHandler {
     // Over HTTP the caller is the request's principal; over the broker,
     // handleRequest sets the one the broker stamped.
     const clean = stripInternalArgs(args) as Record<string, unknown>;
-    assertScope(clean, requirementForRpcAction(action).level);
+    const need = requirementForRpcAction(action);
+    assertScope(clean, need.level, need.module);
     return filterForScope(await handler.handler(clean));
   }
 }

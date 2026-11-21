@@ -91,10 +91,10 @@ describe("SDK: can / requirePermission", () => {
 describe("SDK: inScope", () => {
   beforeEach(() => {
     setScopeProvider({
-      scopeOf: (p) => (p.kind === "user" ? { offices: new Set(["off-a"]), agents: new Set() } : null),
+      scopeOf: (p) => (p.kind === "user" ? { offices: new Set(["off-a"]), agents: new Set(), projects: new Set() } : null),
       lookup: (id) => (id === "agent-a" ? { kind: "agent", officeId: "off-a" }
         : id === "agent-b" ? { kind: "agent", officeId: "off-b" }
-        : id.startsWith("off-") ? { kind: "office" } : null),
+        : id.startsWith("off-") ? { kind: "office", projects: [] } : null),
     });
   });
 

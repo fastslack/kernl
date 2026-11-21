@@ -17,7 +17,7 @@ import type { SqliteDb } from "../../core/db/sqlite.js";
 import { newId, isoNow } from "../../core/helpers.js";
 import type { Principal } from "../../core/principal.js";
 import { isGrantablePermission, parsePermission } from "../../core/permissions.js";
-import type { Scope } from "../../core/scope.js";
+import { emptyScope, type Scope } from "../../core/scope.js";
 import { RefIndex } from "./ref-index.js";
 
 export const USER_TOKEN_PREFIX = "kul_";
@@ -47,6 +47,8 @@ export interface UserScope {
   mode: "all" | "restricted";
   offices: string[];
   agents: string[];
+  /** Restricted with projects: held to them (core/scope.ts). */
+  projects: string[];
 }
 
 export interface RoleRow {
@@ -120,24 +122,27 @@ export class AccessService {
     if (!row) throw new AccessError(404, "user not found");
     const refs = this.db
       .prepare(`SELECT kind, ref_id FROM user_scopes WHERE user_id = ? ORDER BY kind, ref_id`)
-      .all(userId) as Array<{ kind: "office" | "agent"; ref_id: string }>;
+      .all(userId) as Array<{ kind: "office" | "agent" | "project"; ref_id: string }>;
     return {
       mode: row.office_scope,
       offices: refs.filter((r) => r.kind === "office").map((r) => r.ref_id),
       agents: refs.filter((r) => r.kind === "agent").map((r) => r.ref_id),
+      projects: refs.filter((r) => r.kind === "project").map((r) => r.ref_id),
     };
   }
 
-  /** Replaces the user's scope. Every id must name an existing office or agent. */
-  setScope(userId: string, input: { mode?: string; offices?: unknown; agents?: unknown }): UserScope {
+  /** Replaces the user's scope. Every id must name an existing office, agent or project. */
+  setScope(userId: string, input: { mode?: string; offices?: unknown; agents?: unknown; projects?: unknown }): UserScope {
     const current = this.getScope(userId);
     const mode = input.mode ?? current.mode;
     if (mode !== "all" && mode !== "restricted") throw new AccessError(400, "mode must be 'all' or 'restricted'");
     const offices = input.offices !== undefined ? idList(input.offices, "offices") : current.offices;
     const agents = input.agents !== undefined ? idList(input.agents, "agents") : current.agents;
+    const projects = input.projects !== undefined ? idList(input.projects, "projects") : current.projects;
     this.refs.invalidate();
     for (const id of offices) if (!this.refs.isOffice(id)) throw new AccessError(400, `not an office: ${id}`);
     for (const id of agents) if (!this.refs.isAgent(id)) throw new AccessError(400, `not an agent: ${id}`);
+    for (const id of projects) if (!this.refs.isProject(id)) throw new AccessError(400, `not a project: ${id}`);
     const at = isoNow();
     const tx = this.db.transaction(() => {
       this.db.prepare(`UPDATE users SET office_scope = ?, updated_at = ? WHERE id = ?`).run(mode, at, userId);
@@ -147,6 +152,9 @@ export class AccessService {
       }
       for (const id of agents) {
         this.db.prepare(`INSERT INTO user_scopes (user_id, kind, ref_id, created_at) VALUES (?, 'agent', ?, ?)`).run(userId, id, at);
+      }
+      for (const id of projects) {
+        this.db.prepare(`INSERT INTO user_scopes (user_id, kind, ref_id, created_at) VALUES (?, 'project', ?, ?)`).run(userId, id, at);
       }
     });
     tx();
@@ -160,10 +168,12 @@ export class AccessService {
     let scope: Scope | null;
     try {
       const s = this.getScope(userId);
-      scope = s.mode === "all" ? null : { offices: new Set(s.offices), agents: new Set(s.agents) };
+      scope = s.mode === "all"
+        ? null
+        : { offices: new Set(s.offices), agents: new Set(s.agents), projects: new Set(s.projects) };
     } catch {
       // A user that vanished between resolving the token and here reaches nothing.
-      scope = { offices: new Set(), agents: new Set() };
+      scope = emptyScope();
     }
     this.scopeCache.set(userId, scope);
     return scope;

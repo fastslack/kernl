@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Users held to projects.** In Settings → Users a user's reach can now be
+  a set of projects: they work in the offices those projects use and see only
+  what belongs to them (tasks, contacts, agents, growth, sales, the outbox).
+  Anything without a project, and the modules that hold no project data (mail,
+  notes, finances…), stay closed whatever their roles grant. The kernel
+  enforces it on every HTTP and RPC call. The Users panel is redesigned:
+  roles as cards, the reach as Everything / By project / By office, tokens with
+  their last use, and a permission editor for your own roles.
 - **LLM calls go through mtwRequest.** The HTTP leg of every `llm()` call
   to an OpenAI-compatible or Anthropic provider now runs on mtw-ai
   (`llm.complete`, mtwRequest 0.6.1 or later), through the broker's egress

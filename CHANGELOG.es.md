@@ -9,6 +9,15 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 ### Novedades
 
+- **Usuarios limitados a proyectos.** En Configuración → Usuarios, el
+  alcance de un usuario ahora puede ser un conjunto de proyectos: trabaja en
+  las oficinas de esos proyectos y ve solo lo que les pertenece (tareas,
+  contactos, agentes, growth, ventas, el outbox). Lo que no tiene proyecto, y
+  los módulos sin datos de proyecto (mail, notas, finanzas…), quedan cerrados
+  digan lo que digan sus roles. El kernel lo aplica en cada llamada HTTP y RPC.
+  El panel de Usuarios está rediseñado: roles como tarjetas, el alcance como
+  Todo / Por proyecto / Por oficina, tokens con su último uso y un editor de
+  permisos para los roles propios.
 - **Las llamadas al LLM pasan por mtwRequest.** La parte HTTP de cada
   llamada de `llm()` a un proveedor compatible con OpenAI o a Anthropic ahora
   corre en mtw-ai (`llm.complete`, mtwRequest 0.6.1 o posterior), por el

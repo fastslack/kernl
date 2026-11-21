@@ -1,5 +1,5 @@
 /**
- * What an id names — an office, an agent or a run — for scope checks
+ * What an id names — an office, an agent, a run or a project — for scope checks
  * (core/scope.ts). Asked for every id in a restricted user's request and
  * every item in the response, so it answers from memory:
  *
@@ -23,6 +23,9 @@ const MAX_RUNS_REMEMBERED = 20_000;
 export class RefIndex {
   private offices = new Set<string>();
   private agents = new Map<string, string>();
+  private projects = new Set<string>();
+  /** officeId → the projects it works on (linked, or their home office). */
+  private officeProjects = new Map<string, string[]>();
   private loadedAt = 0;
   private runs = new Map<string, { agentId: string }>();
   /** Ids that were not runs at the last look; forgotten on every reload. */
@@ -37,7 +40,8 @@ export class RefIndex {
 
   lookup(id: string): RefKind | null {
     this.refresh();
-    if (this.offices.has(id)) return { kind: "office" };
+    if (this.offices.has(id)) return { kind: "office", projects: this.officeProjects.get(id) ?? [] };
+    if (this.projects.has(id)) return { kind: "project" };
     const officeId = this.agents.get(id);
     if (officeId !== undefined) return { kind: "agent", officeId };
     const run = this.run(id);
@@ -53,6 +57,11 @@ export class RefIndex {
   isAgent(id: string): boolean {
     this.refresh();
     return this.agents.has(id);
+  }
+
+  isProject(id: string): boolean {
+    this.refresh();
+    return this.projects.has(id);
   }
 
   private refresh(): void {
@@ -71,6 +80,27 @@ export class RefIndex {
       this.agents = new Map(rows.map((a) => [a.id, a.flow_id ?? ""]));
     } catch {
       this.agents = new Map();
+    }
+    try {
+      const rows = this.db.prepare(`SELECT id, home_flow_id FROM projects`).all() as Array<{ id: string; home_flow_id: string | null }>;
+      this.projects = new Set(rows.map((p) => p.id));
+      // An office works on a project when it is linked to it, or is its home.
+      const links = new Map<string, Set<string>>();
+      const link = (office: string | null, project: string) => {
+        if (!office) return;
+        let set = links.get(office);
+        if (!set) links.set(office, (set = new Set()));
+        set.add(project);
+      };
+      for (const p of rows) link(p.home_flow_id, p.id);
+      try {
+        const op = this.db.prepare(`SELECT flow_id, project_id FROM office_projects WHERE active = 1`).all() as Array<{ flow_id: string; project_id: string }>;
+        for (const r of op) link(r.flow_id, r.project_id);
+      } catch { /* no office links yet: homes only */ }
+      this.officeProjects = new Map([...links].map(([k, v]) => [k, [...v]]));
+    } catch {
+      this.projects = new Set();
+      this.officeProjects = new Map();
     }
   }
 

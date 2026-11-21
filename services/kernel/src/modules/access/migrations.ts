@@ -89,4 +89,22 @@ export const accessMigrations: Migration[] = [
       );
     `,
   },
+  {
+    // Projects join the scope (core/scope.ts). A CHECK cannot be altered in
+    // SQLite, so the table is rebuilt with the grants it already holds.
+    version: 4,
+    sql: `
+      CREATE TABLE user_scopes_v4 (
+        user_id     TEXT NOT NULL REFERENCES users(id),
+        kind        TEXT NOT NULL CHECK(kind IN ('office','agent','project')),
+        ref_id      TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        PRIMARY KEY (user_id, kind, ref_id)
+      );
+      INSERT INTO user_scopes_v4 (user_id, kind, ref_id, created_at)
+        SELECT user_id, kind, ref_id, created_at FROM user_scopes;
+      DROP TABLE user_scopes;
+      ALTER TABLE user_scopes_v4 RENAME TO user_scopes;
+    `,
+  },
 ];
