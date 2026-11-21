@@ -19,6 +19,7 @@ import * as limiter from "./limiter.js";
 import { ChatClaudeCodeProvider } from "./claude-code-adapter.js";
 import { applyModelQuirks, chatCompletionsUrl, fallbackOrder, getCatalogEntry } from "./provider-catalog.js";
 import { fitOpenAiParams } from "./chat-openai.js";
+import { callGateway, gatewayError } from "./gateway.js";
 import { parseRetryAfterMs, sleep, withJitter, type RetryableError } from "./retry.js";
 import { orderLinksByHealth, runWithFallbackChain } from "./fallback-chain.js";
 import { getProviderConfig, isConnected } from "./credentials.js";
@@ -515,8 +516,34 @@ export class LlmClient {
     applyModelQuirks(body, slugOf(link), model);
     fitOpenAiParams(body, slugOf(link), model);
 
+    // The exchange itself runs on mtwRequest when it can (gateway.ts); the
+    // body above, quirks included, is the same either way.
+    const timeoutMs = link.timeoutMs ?? 60_000;
+    const viaBroker = await callGateway({
+      wire: "openai",
+      url: this.getBaseUrlFor(link),
+      apiKey: link.apiKey,
+      model,
+      system: opts.system,
+      user: opts.user,
+      image: imageOf(opts),
+      params: bodyParams(body),
+      timeoutMs,
+    });
+    if (viaBroker) {
+      if (!viaBroker.ok) throw gatewayError("OpenAI", viaBroker, timeoutMs, [429, 503]);
+      return {
+        text: stripReasoning(viaBroker.text),
+        model: viaBroker.model || model,
+        provider: link.provider,
+        inputTokens: viaBroker.usage.input_tokens,
+        outputTokens: viaBroker.usage.output_tokens,
+        ...(viaBroker.usage.cache_read_tokens !== undefined ? { cacheReadTokens: viaBroker.usage.cache_read_tokens } : {}),
+      };
+    }
+
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), link.timeoutMs ?? 60_000);
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     let response: Response;
     try {
       response = await fetch(this.getBaseUrlFor(link), {
@@ -638,8 +665,35 @@ export class LlmClient {
     if (opts.system) body.system = opts.system;
     if (opts.temperature !== undefined) body.temperature = opts.temperature;
 
+    const timeoutMs = link.timeoutMs ?? 60_000;
+    const viaBroker = await callGateway({
+      wire: "anthropic",
+      url: this.getBaseUrlFor(link),
+      apiKey: link.apiKey,
+      model,
+      system: opts.system,
+      user: opts.user,
+      image: imageOf(opts),
+      params: bodyParams(body),
+      timeoutMs,
+    });
+    if (viaBroker) {
+      // Anthropic uses 529 for "overloaded" besides 429 and 503.
+      if (!viaBroker.ok) throw gatewayError("Anthropic", viaBroker, timeoutMs, [429, 529, 503]);
+      const u = viaBroker.usage;
+      return {
+        text: viaBroker.text,
+        model: viaBroker.model || model,
+        provider: "anthropic",
+        inputTokens: u.input_tokens,
+        outputTokens: u.output_tokens,
+        cacheReadTokens: u.cache_read_tokens,
+        cacheWriteTokens: u.cache_write_tokens,
+      };
+    }
+
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), link.timeoutMs ?? 60_000);
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     let response: Response;
     try {
       response = await fetch(this.getBaseUrlFor(link), {
@@ -693,6 +747,18 @@ export class LlmClient {
       cacheWriteTokens: data.usage?.cache_creation_input_tokens,
     };
   }
+}
+
+/** The body fields the gateway takes as `params`: all but what it builds itself. */
+function bodyParams(body: Record<string, unknown>): Record<string, unknown> {
+  const { model: _model, messages: _messages, system: _system, ...rest } = body;
+  return rest;
+}
+
+function imageOf(opts: LlmChatOptions): { mediaType: string; data: string } | undefined {
+  return opts.imageBase64 && opts.imageMediaType
+    ? { mediaType: opts.imageMediaType, data: opts.imageBase64 }
+    : undefined;
 }
 
 /**

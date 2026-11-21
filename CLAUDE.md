@@ -43,6 +43,13 @@
   accounting. Per-feature model choice belongs in the `model:` option (backed by
   a `*_MODEL` setting), never in a new client. Always pass a `caller:` tag so the
   call is attributable.
+  The driver keeps every decision in TS; only the HTTP exchange of an
+  OpenAI-compatible or Anthropic link runs on mtwRequest (mtw-ai
+  `llm.complete` on the Rust bridge, `core/llm/gateway.ts`), with the link's
+  endpoint and key sent per call. The driver makes the call itself when the
+  bridge is down, the broker predates `llm.complete`, or `LLM_GATEWAY=off`.
+  Claude Code links never go there. A new wire path goes in both places:
+  mtw-ai's gateway and the driver's in-process fallback.
 </conventions>
 
 <module-pattern>

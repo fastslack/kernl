@@ -166,8 +166,10 @@ export class RustBridge {
     log.info("RustBridge: disconnected");
   }
 
-  /** Call a Rust tool and wait for the response */
-  async call(tool: string, args: Record<string, unknown> = {}): Promise<unknown> {
+  /** Call a Rust tool and wait for the response. `timeoutMs` overrides the
+   *  bridge's default for a call known to take longer (an LLM call). */
+  async call(tool: string, args: Record<string, unknown> = {}, opts: { timeoutMs?: number } = {}): Promise<unknown> {
+    const timeoutMs = opts.timeoutMs ?? this.config.timeout;
     if (!this.connected || !this.socket) {
       throw new Error(`RustBridge: not connected (tool=${tool})`);
     }
@@ -177,8 +179,8 @@ export class RustBridge {
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`RustBridge: timeout after ${this.config.timeout}ms (tool=${tool})`));
-      }, this.config.timeout);
+        reject(new Error(`RustBridge: timeout after ${timeoutMs}ms (tool=${tool})`));
+      }, timeoutMs);
 
       this.pending.set(id, { resolve, reject, timer });
 

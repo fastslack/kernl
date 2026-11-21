@@ -28,6 +28,7 @@ import { RustBridge } from "../rust/bridge.js";
 import { createRustDelegates } from "../rust/delegates.js";
 import { createMcpServer, startStdio } from "../../server.js";
 import type { SkillRegistry } from "../../skills/registry.js";
+import { setLlmGateway } from "../llm/gateway.js";
 
 export interface BridgesResult {
   llmClient: LlmClient;
@@ -95,6 +96,10 @@ export async function initBridgesAndStdio(args: {
       reconnectDelay: 2000,
     });
 
+    // llm() runs its HTTP calls through mtw-ai while this bridge is up, and
+    // makes them itself while it is not (core/llm/gateway.ts).
+    setLlmGateway(rustBridge);
+
     try {
       await rustBridge.connect();
       rustDelegates = createRustDelegates(rustBridge);
@@ -127,6 +132,7 @@ export async function initBridgesAndStdio(args: {
         .catch((e) => log.warn(`torrents: setRustBridge failed: ${e}`));
     } catch (err) {
       log.warn(`Rust bridge unavailable, using local fallback: ${err}`);
+      setLlmGateway(null);
       rustBridge = null;
     }
   }

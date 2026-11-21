@@ -9,6 +9,15 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 ### Novedades
 
+- **Las llamadas al LLM pasan por mtwRequest.** La parte HTTP de cada
+  llamada de `llm()` a un proveedor compatible con OpenAI o a Anthropic ahora
+  corre en mtw-ai (`llm.complete`, mtwRequest 0.6.1 o posterior), por el
+  perfil de salida del broker. Todo lo demás sigue en el kernel: la cadena,
+  el fallback, la salud, el limitador de 429, los reintentos, el registro de
+  llamadas y la contabilidad de uso. Las keys viajan con cada llamada y el
+  broker no las guarda. Con el bridge caído, un broker anterior o
+  `LLM_GATEWAY=off`, el kernel llama al proveedor directamente. Los
+  eslabones de Claude Code no cambian.
 - **Los usuarios también tienen el socket en vivo, con sus permisos.** Con
   mtwRequest 0.6.0 o posterior, el dashboard de un usuario conectado se
   conecta al broker: el RPC corre por ahí como ese usuario, con sus roles y
