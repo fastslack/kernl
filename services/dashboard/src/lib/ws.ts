@@ -118,6 +118,32 @@ if (import.meta.hot) {
 let mtwConnected = false;
 let subscribedChannels = new Set<string>();
 
+/**
+ * A user's session on the live socket (wsConnectAsUser). The broker holds a
+ * user to `changes` (which modules changed, no data) and to RPC, which the
+ * kernel runs with their roles and offices. Page channels stay on HTTP, for
+ * the same reason: their snapshot is filtered for the user there. A note on
+ * `changes` refetches them at once instead of waiting for the next poll.
+ */
+let userMode = false;
+const CHANGES_CHANNEL = 'changes';
+/** While a user's socket is up, still re-poll this often: not every change is announced. */
+const USER_SAFETY_POLL_MS = 60_000;
+let userPollTimer: ReturnType<typeof setInterval> | null = null;
+let changeTimer: ReturnType<typeof setTimeout> | null = null;
+let userOnMessage: (() => void) | undefined;
+
+function refetchPageChannels(): void {
+	for (const ch of subscribedChannels) if (ch !== CHANGES_CHANNEL) void hydrateChannelHttp(ch);
+	userOnMessage?.();
+}
+
+/** Several changes in a burst refetch once. */
+function onChangeNote(): void {
+	if (changeTimer) return;
+	changeTimer = setTimeout(() => { changeTimer = null; refetchPageChannels(); }, 250);
+}
+
 function mtwWsUrl(): string {
 	const p = location.protocol === 'https:' ? 'wss:' : 'ws:';
 	// A browser cannot set headers on a WebSocket, so the kernel's token rides in
@@ -133,6 +159,11 @@ function mtwWsUrl(): string {
 /** Subscribe to a channel on mtwRequest */
 function mtwSubscribe(channel: string) {
 	subscribedChannels.add(channel);
+	if (userMode && channel !== CHANGES_CHANNEL) {
+		// The broker would refuse it; HTTP holds this user's view of it.
+		void hydrateChannelHttp(channel);
+		return;
+	}
 	if (!mtwWs || mtwWs.readyState !== WebSocket.OPEN) {
 		// No live WS (e.g. the zero-config stack has no mtwRequest broker).
 		// Hydrate the channel store over HTTP so push-driven pages still load.
@@ -264,6 +295,12 @@ function handleMtwMessage(msg: any, onMessage?: () => void) {
 	// Skip RPC channel messages in the store handler (handled above via ref_id)
 	if (channel === 'rpc') return;
 
+	// A module changed: refetch what this page shows (user sessions only).
+	if (channel === CHANGES_CHANNEL) {
+		if (userMode) onChangeNote();
+		return;
+	}
+
 	// TEMP DEBUG: log everything on agents.flow
 	if (channel === 'agents.flow') {
 		console.log('[WS DEBUG agents.flow]', JSON.stringify(msg).slice(0, 500));
@@ -335,6 +372,11 @@ export function wsSubscribeChannels(channels: string[]) {
 
 /** Unsubscribe from page-specific channels. Call on page destroy. */
 export function wsUnsubscribeChannels(channels: string[]) {
+	if (userMode) {
+		// Page channels never reached the broker in a user's session.
+		for (const ch of channels) if (ch !== CHANGES_CHANNEL) subscribedChannels.delete(ch);
+		return;
+	}
 	if (!mtwWs || mtwWs.readyState !== WebSocket.OPEN) return;
 	for (const ch of channels) {
 		if (!subscribedChannels.has(ch)) continue;
@@ -382,11 +424,14 @@ function connectMtwRequest(onMessage?: () => void) {
 			fallbackTimer = null;
 		}
 
-		// Subscribe only to essential channels — pages subscribe to their own
-		const essentialChannels = ['dashboard', 'notifications', 'rpc'];
+		// Subscribe only to essential channels — pages subscribe to their own.
+		// A user gets `changes` alone, and catches up on what changed while
+		// the socket was down.
+		const essentialChannels = userMode ? [CHANGES_CHANNEL] : ['dashboard', 'notifications', 'rpc'];
 		for (const ch of essentialChannels) {
 			mtwSubscribe(ch);
 		}
+		if (userMode) refetchPageChannels();
 
 		// Notify layout to re-fetch init data via RPC
 		for (const cb of onConnectedCbs) cb();
@@ -404,7 +449,8 @@ function connectMtwRequest(onMessage?: () => void) {
 	mtwWs.onclose = (ev) => {
 		if (!quiet) console.log('[WS] closed:', ev.code, ev.reason);
 		mtwConnected = false;
-		subscribedChannels.clear();
+		// A user's page channels live on HTTP and outlast the socket.
+		if (!userMode) subscribedChannels.clear();
 		if (disposed) return; // replaced by a reloaded copy of this module
 		disconnected(onMessage);
 	};
@@ -421,18 +467,33 @@ export function wsConnect(onMessage?: () => void) {
 	connectMtwRequest(onMessage);
 }
 
+/**
+ * A user's session with the live socket: RPC over it (run as the user, see
+ * kernel core/mtw/rpc-handler.ts), `changes` for prompt refetches, and page
+ * channels over HTTP. Only when the kernel says its broker can hold users
+ * (`liveSocket` in /api/auth/me); otherwise use wsStartHttpOnly.
+ */
+export function wsConnectAsUser(onMessage?: () => void) {
+	userMode = true;
+	userOnMessage = onMessage;
+	if (userPollTimer) clearInterval(userPollTimer);
+	// Polls only while the socket is up; disconnected() polls faster while it is down.
+	userPollTimer = setInterval(() => { if (wsIsConnected()) refetchPageChannels(); }, USER_SAFETY_POLL_MS);
+	connectMtwRequest(onMessage);
+}
+
 /** How often a session that never opens the socket re-polls its channels. */
 export const HTTP_ONLY_POLL_MS = 15_000;
 
 /**
  * Keep the dashboard fed over HTTP alone, never opening /mtw.
  *
- * For a user's session: the live socket is the super admin's (the broker
- * behind it has no notion of users, so nginx refuses everyone else; see
- * nginx.conf). Every RPC then goes to its HTTP fallback, where the kernel
- * applies the user's roles and offices, and subscribed channels are polled
- * here more often than the outage fallback does, since this is the normal
- * state of the session rather than a blip.
+ * For a user's session when the broker cannot hold users to their
+ * permissions (an older mtwRequest; `liveSocket` false in /api/auth/me), so
+ * the kernel keeps them off it. Every RPC then goes to its HTTP fallback,
+ * where the kernel applies the user's roles and offices, and subscribed
+ * channels are polled here more often than the outage fallback does, since
+ * this is the normal state of the session rather than a blip.
  */
 export function wsStartHttpOnly(onMessage?: () => void, intervalMs = HTTP_ONLY_POLL_MS) {
 	if (fallbackTimer) clearInterval(fallbackTimer);
@@ -445,7 +506,9 @@ function disconnected(onMessage?: () => void) {
 	wsConnected.set(false);
 	mtwWs = null;
 	if (!fallbackTimer) {
-		fallbackTimer = setInterval(() => { pollSubscribedChannels(); onMessage?.(); }, 60000);
+		// A user's session has no other way to fresh data, so it polls as often as HTTP-only does.
+		const every = userMode ? HTTP_ONLY_POLL_MS : 60000;
+		fallbackTimer = setInterval(() => { pollSubscribedChannels(); onMessage?.(); }, every);
 	}
 	// Immediate first poll so the page doesn't wait a full interval to hydrate.
 	pollSubscribedChannels();
@@ -502,5 +565,15 @@ export function wsDisconnect() {
 		clearTimeout(quietTimer);
 		quietTimer = null;
 	}
+	if (userPollTimer) {
+		clearInterval(userPollTimer);
+		userPollTimer = null;
+	}
+	if (changeTimer) {
+		clearTimeout(changeTimer);
+		changeTimer = null;
+	}
+	userMode = false;
+	userOnMessage = undefined;
 	subscribedChannels.clear();
 }

@@ -25,6 +25,7 @@
  */
 
 import { log } from "../logger.js";
+import { trackBrokerFeatures } from "../mtw/broker-features.js";
 import type { KernelConfig } from "../config.js";
 import type { SqliteDb } from "../db/sqlite.js";
 import type { Neo4jClient } from "../db/neo4j.js";
@@ -273,9 +274,9 @@ export async function initMtw(args: {
   const mtwUrl = process.env.KERNEL_URL ?? "ws://localhost:7741/ws";
   const { MtwConnection: MtwConn } = await import("@matware/mtw-request-ts-client");
 
-  // The broker lets in only the owner (it checks the token against
-  // /api/auth/broker), so the kernel's own bridge connects as the owner. The
-  // token travels in the client's handshake, never in the logged URL.
+  // The broker checks every token against /api/auth/broker; the kernel's own
+  // bridge connects as the owner. The token travels in the client's
+  // handshake, never in the logged URL.
   const bridgeToken = config.auth.token || process.env.KERNEL_AUTH_TOKEN || "";
   const mtwConn = new MtwConn({
     url: mtwUrl,
@@ -284,6 +285,10 @@ export async function initMtw(args: {
     reconnectDelay: 2000,
     maxReconnectDelay: 30000,
   });
+
+  // Learn on every connection whether this broker can hold users to their
+  // permissions; until it says so, users stay off it (core/mtw/broker-features.ts).
+  trackBrokerFeatures(mtwConn);
 
   log.info(`mtwRequest: connecting to ${mtwUrl}...`);
   try {

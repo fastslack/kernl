@@ -6,8 +6,11 @@ import { accessMigrations } from "../src/modules/access/migrations.js";
 import { AccessService } from "../src/modules/access/service.js";
 import { registerAccessRoutes } from "../src/modules/access/api-routes.js";
 import {
-  defaultRequestAuthorizer, setPermissionResolver, setUserTokenResolver, type Principal,
+  defaultRequestAuthorizer, setPermissionResolver, setUserIdResolver, setUserTokenResolver, type Principal,
 } from "../src/core/principal.js";
+import { clearBrokerInfo, setBrokerInfo } from "../src/core/mtw/broker-features.js";
+import { getPrincipal } from "../src/core/request-context.js";
+import { EventEmitter } from "node:events";
 import { filterForScope, refAllowed, scopeDenial, setScopeProvider, type Scope } from "../src/core/scope.js";
 import { guardPermission } from "../src/core/tool-permission-guard.js";
 import { runWithContext } from "../src/core/request-context.js";
@@ -40,6 +43,7 @@ function store() {
 
 function wire(svc: AccessService) {
   setUserTokenResolver((t) => svc.resolve(t));
+  setUserIdResolver((id) => svc.resolveUser(id));
   setPermissionResolver((p) => (p.kind === "user" ? svc.permissionsForUser(p.id) : []));
   setScopeProvider({
     scopeOf: (p) => (p.kind === "user" ? svc.scopeForUser(p.id) : null),
@@ -49,6 +53,8 @@ function wire(svc: AccessService) {
 
 afterEach(() => {
   setUserTokenResolver(null);
+  setUserIdResolver(null);
+  clearBrokerInfo();
   setPermissionResolver(null);
   setScopeProvider(null);
 });
@@ -248,13 +254,38 @@ describe("HTTP with a restricted user", () => {
     expect((await (await send("GET", "/api/auth/me", token)).json()).scope).toEqual({ mode: "restricted", offices: [OFF_A], agents: [] });
   });
 
-  it("the broker opens for the kernel token only", async () => {
+  it("the broker opens for the kernel token only, while it cannot hold users", async () => {
     const { token } = restrictedUser(svc);
     const broker = (uri: string) => fetch(base + "/api/auth/broker", { headers: { "x-original-uri": uri } });
     expect((await broker(`/mtw?token=${MASTER}`)).status).toBe(204);
     expect((await broker(`/mtw?token=${token}`)).status).toBe(403);
     expect((await broker("/mtw?token=nope")).status).toBe(401);
     expect((await broker("/mtw")).status).toBe(401);
+    // An older broker answers broker.info with nothing useful.
+    setBrokerInfo({ version: "0.5.1" });
+    expect((await broker(`/mtw?token=${token}`)).status).toBe(403);
+  });
+
+  it("a broker that holds users lets a user on, named", async () => {
+    const { user, token } = restrictedUser(svc);
+    setBrokerInfo({ version: "0.6.0", features: ["principals"] });
+    const broker = (uri: string, headers: Record<string, string> = {}) =>
+      fetch(base + "/api/auth/broker", { headers: { "x-original-uri": uri, ...headers } });
+    const r = await broker(`/mtw?token=${token}`);
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ kind: "user", id: user.id });
+    expect((await broker(`/mtw?token=${MASTER}`)).status).toBe(204);
+    expect((await broker("/mtw?token=nope")).status).toBe(401);
+    // The kernel's own connection decides; a header from the client does not.
+    clearBrokerInfo();
+    expect((await broker(`/mtw?token=${token}`, { "x-mtw-broker-features": "principals" })).status).toBe(403);
+  });
+
+  it("/api/auth/me says whether a user may open the live socket", async () => {
+    const { token } = restrictedUser(svc);
+    expect((await (await send("GET", "/api/auth/me", token)).json()).liveSocket).toBe(false);
+    setBrokerInfo({ features: ["principals"] });
+    expect((await (await send("GET", "/api/auth/me", token)).json()).liveSocket).toBe(true);
   });
 });
 
@@ -297,5 +328,85 @@ describe("RPC and tools with a restricted user", () => {
     const u = svc.createUser({ name: "Bob" });
     svc.setUserRoles(u.id, ["role-viewer"]);
     expect(defaultRequestAuthorizer({ kind: "user", id: u.id, name: "Bob", tokenId: "t" }, "/mcp", "POST")).toBeNull();
+  });
+});
+
+
+/** Just enough of the broker connection for the RPC handler. */
+class FakeBroker extends EventEmitter {
+  connected = true;
+  sent: Array<{ type: string; ref_id?: string; metadata?: Record<string, unknown>; payload: { data?: any } }> = [];
+  private handlers = new Map<string, (m: unknown) => void>();
+  send(m: never): void { this.sent.push(m); }
+  onChannel(ch: string, fn: (m: unknown) => void): void { this.handlers.set(ch, fn); }
+  /** Deliver an RPC request the way the broker does: stamped with who sent it. */
+  async deliver(id: string, action: string, args: Record<string, unknown>, metadata: Record<string, unknown>) {
+    this.handlers.get("rpc")?.({
+      id, type: "publish", channel: "rpc", timestamp: 0, metadata,
+      payload: { kind: "Json", data: { action, args, _requestId: id } },
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    return this.sent.find((m) => m.ref_id === id && (m.type === "response" || m.type === "error"));
+  }
+}
+
+describe("RPC over the broker, as the user the broker names", () => {
+  let svc: AccessService;
+  let conn: FakeBroker;
+  let seen: Array<Principal | null>;
+  beforeEach(async () => {
+    ({ svc } = store());
+    wire(svc);
+    conn = new FakeBroker();
+    seen = [];
+    const rpc = new MtwRpcHandler({ conn: conn as never, events: { emit: () => {} } as never });
+    rpc.register({ name: "agents.list", handler: async () => {
+      seen.push(getPrincipal());
+      return { agents: [{ id: "agent-a1" }, { id: "agent-b1" }] };
+    } });
+    rpc.register({ name: "agents.update", handler: async (a) => ({ ok: a.id }) });
+    await rpc.start();
+  });
+  const user = (id: string) => ({ principal: { kind: "user", id }, reply_to: "conn-ana" });
+
+  it("runs as that user, held to their offices, and answers them alone", async () => {
+    const { user: ana } = restrictedUser(svc);
+    const r = await conn.deliver("r1", "agents.list", {}, user(ana.id));
+    expect(r?.type).toBe("response");
+    expect(r?.payload.data.data).toEqual({ agents: [{ id: "agent-a1" }] });
+    expect(r?.metadata?.reply_to).toBe("conn-ana");
+    expect(seen[0]).toMatchObject({ kind: "user", id: ana.id });
+
+    const out = await conn.deliver("r2", "agents.update", { id: "agent-b1" }, user(ana.id));
+    expect(out?.type).toBe("error");
+    expect(out?.payload.data.code).toBe("FORBIDDEN");
+    expect(out?.metadata?.reply_to).toBe("conn-ana");
+  });
+
+  it("refuses what the user's roles do not grant", async () => {
+    const bob = svc.createUser({ name: "Bob" });
+    const r = await conn.deliver("r3", "agents.list", {}, user(bob.id));
+    expect(r?.type).toBe("error");
+    expect(r?.payload.data.code).toBe("FORBIDDEN");
+    expect(seen).toHaveLength(0);
+  });
+
+  it("refuses a user disabled since they connected, and anyone unknown", async () => {
+    const { user: ana } = restrictedUser(svc);
+    svc.updateUser(ana.id, { status: "disabled" });
+    expect((await conn.deliver("r4", "agents.list", {}, user(ana.id)))?.type).toBe("error");
+    expect((await conn.deliver("r5", "agents.list", {}, user("nobody")))?.type).toBe("error");
+    expect((await conn.deliver("r6", "agents.list", {}, { principal: { kind: "root" } }))?.type).toBe("error");
+    expect((await conn.deliver("r7", "agents.list", {}, { principal: "super_admin" }))?.type).toBe("error");
+    expect(seen).toHaveLength(0);
+  });
+
+  it("the owner, stamped or on an older broker that stamps nothing, reaches everything", async () => {
+    const a = await conn.deliver("r8", "agents.list", {}, { principal: { kind: "super_admin" }, reply_to: "conn-o" });
+    expect(a?.payload.data.data.agents).toHaveLength(2);
+    const b = await conn.deliver("r9", "agents.list", {}, {});
+    expect(b?.payload.data.data.agents).toHaveLength(2);
+    expect(b?.metadata).toEqual({});
+    expect(seen.map((p) => p?.kind)).toEqual(["super_admin", "super_admin"]);
   });
 });

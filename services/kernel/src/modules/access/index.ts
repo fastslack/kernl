@@ -14,7 +14,7 @@
 
 import type { KernelModule, ModuleContext, ToolDefinition } from "../../core/types.js";
 import { runMigrations } from "../../core/db/migrations.js";
-import { setPermissionResolver, setUserTokenResolver } from "../../core/principal.js";
+import { setPermissionResolver, setUserIdResolver, setUserTokenResolver } from "../../core/principal.js";
 import { setScopeProvider } from "../../core/scope.js";
 import { accessMigrations } from "./migrations.js";
 import { AccessService, setAccessService } from "./service.js";
@@ -27,6 +27,7 @@ export function createAccessModule(): KernelModule {
       const service = new AccessService(ctx.sqlite);
       setAccessService(service);
       setUserTokenResolver((token) => service.resolve(token));
+      setUserIdResolver((id) => service.resolveUser(id));
       setPermissionResolver((p) => (p.kind === "user" ? service.permissionsForUser(p.id) : []));
       setScopeProvider({
         scopeOf: (p) => (p.kind === "user" ? service.scopeForUser(p.id) : null),
@@ -38,6 +39,7 @@ export function createAccessModule(): KernelModule {
     },
     async shutdown() {
       setUserTokenResolver(null);
+      setUserIdResolver(null);
       setPermissionResolver(null);
       setScopeProvider(null);
       setAccessService(null);

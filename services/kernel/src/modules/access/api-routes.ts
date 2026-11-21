@@ -30,6 +30,7 @@ import { getPrincipal } from "../../core/request-context.js";
 import { isSuperAdmin, permissionsOf } from "../../core/principal.js";
 import { MODULE_ALIASES, RESERVED_MODULES, SYSTEM_MODULES } from "../../core/permissions.js";
 import { AccessError, type AccessService } from "./service.js";
+import { brokerSupportsPrincipals } from "../../core/mtw/broker-features.js";
 
 function requireSuperAdmin(): void {
   if (!isSuperAdmin(getPrincipal())) throw new HttpError(403, "Forbidden");
@@ -81,6 +82,9 @@ export function registerAccessRoutes(server: KernelHttpServer, access: AccessSer
       permissions,
       scope: call(() => access.getScope(p.id)),
       grammar: grammar(),
+      // Whether the broker would let this user on (core/mtw/broker-features.ts);
+      // the dashboard stays on HTTP alone when it would not.
+      liveSocket: brokerSupportsPrincipals(),
     };
   });
 

@@ -49,8 +49,15 @@ const ALL_CHANNELS = [
   "finance", "health", "notes", "learning",
 ];
 
-// Compat alias
-const CHANNELS = ALL_CHANNELS;
+/**
+ * Which modules changed, and nothing else: the one data channel a user may
+ * subscribe to on the broker (mtw-server `access.rs`). A user's dashboard
+ * refetches what it shows over HTTP, where their roles and offices apply.
+ */
+export const CHANGES_CHANNEL = "changes";
+
+// Compat alias. `changes` is subscribed too so the broker keeps the channel.
+const CHANNELS = [...ALL_CHANNELS, CHANGES_CHANNEL];
 
 export class MtwPublisher {
   private conn: MtwConnection;
@@ -100,6 +107,7 @@ export class MtwPublisher {
       const module = payload?.module ?? "unknown";
       if (!this.connected) return;
       this.schedulePublish(module);
+      this.scheduleChange(module);
 
       // Emit arch beam for the 3D architecture view (tool calls only, not every tick)
       const tool = payload?.tool ?? "";
@@ -177,9 +185,25 @@ export class MtwPublisher {
       clearTimeout(timer);
     }
     this.debounceTimers.clear();
+    for (const timer of this.changeTimers.values()) clearTimeout(timer);
+    this.changeTimers.clear();
     // Connection is managed externally — don't close it here
     this.connected = false;
     log.info("Publisher: shut down");
+  }
+
+  private changeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /** Announce on `changes` that a module changed, once per burst. */
+  private scheduleChange(module: string): void {
+    if (this.changeTimers.has(module)) return;
+    this.changeTimers.set(
+      module,
+      setTimeout(() => {
+        this.changeTimers.delete(module);
+        if (!this.shuttingDown) this.publish(CHANGES_CHANNEL, { module, ts: Date.now() });
+      }, 300),
+    );
   }
 
   /** Publish raw data to a mtwRequest channel */

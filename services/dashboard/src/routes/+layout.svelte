@@ -6,7 +6,7 @@
   import { goto, beforeNavigate, afterNavigate } from '$app/navigation';
   import { page } from '$app/stores';
   import { data, lastRefresh, ensureStore, activeTheme, notifications, unreadCount, serverTz } from '$lib/stores.js';
-  import { wsConnect, wsStartHttpOnly, wsDisconnect, mergeChannelMap, rpcOrCall, onWsConnected, wsSubscribeChannels, wsUnsubscribeChannels } from '$lib/ws.js';
+  import { wsConnect, wsConnectAsUser, wsStartHttpOnly, wsDisconnect, mergeChannelMap, rpcOrCall, onWsConnected, wsSubscribeChannels, wsUnsubscribeChannels } from '$lib/ws.js';
   import { getChannelsForPage } from '$lib/page-channels.js';
   import { extPages as extPagesStore, extPagesReady } from '$lib/ext-host.js';
   import { NAV_GROUPS, VIEWS, VIEW_TO_GROUP, SUB_TAB_LABELS, type NavGroup, type NavView } from '$lib/constants.js';
@@ -497,11 +497,13 @@
     // migrated /music extension page can drive it (see $lib/music-bridge).
     musicBridgeDispose = initMusicBridge();
 
-    // Who is signed in decides the transport: the live socket is the super
-    // admin's, a user's session runs over HTTP (lib/ws.ts, wsStartHttpOnly).
+    // Who is signed in decides the transport (lib/ws.ts): the super admin
+    // gets the live socket; a user gets it, held to RPC and `changes`, when
+    // the broker can hold users, and HTTP alone otherwise.
     void loadSession().then((s) => {
-      if (isUserSession(s)) wsStartHttpOnly(onWsRefresh);
-      else wsConnect(onWsRefresh);
+      if (!isUserSession(s)) wsConnect(onWsRefresh);
+      else if (s?.liveSocket) wsConnectAsUser(onWsRefresh);
+      else wsStartHttpOnly(onWsRefresh);
     });
     // Re-fetch init data on every WS (re)connect — covers restart/502 scenarios
     onWsConnected(() => {
