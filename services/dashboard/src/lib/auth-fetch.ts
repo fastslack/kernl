@@ -19,13 +19,18 @@ export function isKernelApiUrl(url: string, host: string): boolean {
 
 /**
  * Patch window.fetch, once per page load. `on428` runs when a request was
- * refused for lack of a model.
+ * refused for lack of a model. `onForbidden` runs when a change (anything but
+ * a GET) was refused for lack of a permission or outside the caller's
+ * offices, with the permission it needed when the kernel said which: a
+ * user's role decides what they may do, and a button that silently does
+ * nothing reads as a bug. A refused GET stays quiet — the shell asks for
+ * admin-only data on every load and copes with the 403.
  *
  * Must run before anything fetches, so the root layout calls it while its
  * script initializes rather than from onMount — child components' onMount
  * runs before the layout's.
  */
-export function installAuthFetch(on428: () => void): void {
+export function installAuthFetch(on428: () => void, onForbidden?: (required: string) => void): void {
 	if (typeof window === 'undefined' || (window as any).__kernelAuthPatched) return;
 	(window as any).__kernelAuthPatched = true;
 	const origFetch = window.fetch.bind(window);
@@ -45,6 +50,18 @@ export function installAuthFetch(on428: () => void): void {
 		// links to the fix — and hand the response back to the caller.
 		if (res.status === 428) {
 			on428();
+			return res;
+		}
+
+		if (res.status === 403 && onForbidden) {
+			const method = (init.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+			if (method !== 'GET' && method !== 'HEAD') {
+				res.clone().json().then((b: { error?: unknown; required?: unknown }) => {
+					if (typeof b?.error === 'string' && b.error.startsWith('Forbidden')) {
+						onForbidden(typeof b.required === 'string' ? b.required : '');
+					}
+				}).catch(() => { /* not the kernel's JSON: not ours to explain */ });
+			}
 			return res;
 		}
 

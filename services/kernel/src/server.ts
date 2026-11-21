@@ -20,7 +20,9 @@ import { zodToJsonSchema } from "./core/zod-to-json.js";
 import type { ModuleRegistry } from "./core/module-registry.js";
 import type { EventBus } from "./core/event-bus.js";
 import { errorResult, stripInternalArgs } from "./core/helpers.js";
-import { isAuthenticated } from "./core/auth.js";
+import { resolveRequestPrincipal } from "./core/auth.js";
+import { authorizeRequest, isSuperAdmin } from "./core/principal.js";
+import { toolPermissionDenial } from "./core/tool-permission-guard.js";
 import { log } from "./core/logger.js";
 import { currentVersion } from "./core/update/version.js";
 import { runWithContext, type KernelRequestContext } from "./core/request-context.js";
@@ -227,7 +229,13 @@ export function createMcpServer(
   };
 
   // ── ListTools ─────────────────────────────────────────────
-  server.setRequestHandler(ListToolsRequestSchema, async () => listToolsResponse);
+  // A user sees only the tools their role lets them call; everyone else
+  // (the super admin, local transports, the kernel itself) sees them all.
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const principal = getRequestContext().principal;
+    if (!principal || principal.kind === "super_admin") return listToolsResponse;
+    return { tools: listToolsResponse.tools.filter((_, i) => toolPermissionDenial(allTools[i]) === null) };
+  });
 
   // ── CallTool ──────────────────────────────────────────────
   // The actual tool execution is split out so the task-augmented path
@@ -461,6 +469,12 @@ export function createMcpServer(
     const meta = (req.params as { _meta?: { budget?: Budget } })._meta;
     const budget = meta?.budget;
 
+    // Permissions first, before any path below: the mesh proxy forwards
+    // `peer:` calls without ever reaching a local handler, so the check in
+    // the handler wrapper (core/tool-permission-guard.ts) would not see them.
+    const permissionDenial = toolPermissionDenial(toolMap.get(req.params.name) ?? { name: req.params.name });
+    if (permissionDenial) return toCallToolResult(errorResult(permissionDenial));
+
     // Mesh proxy: `peer:<short>:<remote_name>` is forwarded verbatim to
     // the trusted peer. We don't attest the proxy hop locally — the
     // peer's receipt rides through under its own server_id. (#1 phase 2
@@ -639,6 +653,8 @@ interface McpSession {
   server: Server;
   transport: StreamableHTTPServerTransport;
   lastSeen: number;
+  /** Who opened the session; only they may keep using it. */
+  principalId: string;
 }
 
 /** Hard cap on concurrent MCP HTTP sessions (memory-exhaustion DoS guard). */
@@ -670,13 +686,22 @@ export class McpHttpRouter {
   /** Entry point — mount with httpServer.all("/mcp", ...) */
   async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     // ── Authentication gate ──
-    // The public HTTP `/mcp` endpoint exposes every kernel tool. Require the
-    // Bearer token before touching session state, mirroring the `/api/*` gate
-    // in http-server.ts. When no token is configured, auth is disabled.
-    const authed = this.authToken !== "" && isAuthenticated(req, this.authToken);
-    if (this.authToken && !authed) {
+    // The public HTTP `/mcp` endpoint exposes every kernel tool. Require a
+    // valid token before touching session state, mirroring the `/api/*` gate
+    // in http-server.ts. When no token is configured, auth is disabled and
+    // the caller is the super admin.
+    const principal = resolveRequestPrincipal(req, this.authToken);
+    if (!principal) {
       res.writeHead(401, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32001, message: "Unauthorized" } }));
+      return;
+    }
+    // A user's token reaches `/mcp` only if the access rules say so; until
+    // tool permissions exist, they do not (core/principal.ts).
+    const denied = authorizeRequest(principal, "/mcp", req.method ?? "POST");
+    if (denied) {
+      res.writeHead(denied.status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32003, message: "Forbidden" } }));
       return;
     }
 
@@ -686,22 +711,33 @@ export class McpHttpRouter {
     // AsyncLocalStorage so MCP tool handlers (kernel_agents_run / _invoke)
     // can read them without changing every handler signature.
     //
-    // SECURITY: trust the X-Caller-* headers ONLY on an authenticated request.
-    // They grant agent lineage and recursion depth — an unauthenticated or
-    // external TCP client could forge X-Caller-Agent-Id to bypass the
-    // self-invocation guard, or forge X-Caller-Depth to reset the recursion
-    // cap (→ runaway agent recursion / lineage forgery). Legitimate subprocess
-    // agents never reach this router: they pass caller context via the
-    // Unix-socket handshake (core/mcp-unix-socket.ts). So an untrusted request
-    // gets the empty/zero top-level context.
-    const ctx = authed
-      ? readCallerContext(req)
-      : { callerAgentId: "", callerRunId: "", callerDepth: 0 };
+    // SECURITY: trust the X-Caller-* headers ONLY from the kernel token
+    // itself. They grant agent lineage and recursion depth — any other
+    // caller could forge X-Caller-Agent-Id to act as an agent (its tools,
+    // its offices) or bypass the self-invocation guard, or forge
+    // X-Caller-Depth to reset the recursion cap. That covers the
+    // unauthenticated caller and, since users exist, a user's personal
+    // token too: only the kernel launches agents, and it uses the kernel
+    // token (core/llm/claude-code-adapter.ts). With auth disabled the
+    // headers stay untrusted, as before. Subprocess agents normally use the
+    // Unix-socket handshake (core/mcp-unix-socket.ts) instead.
+    const trustCaller = this.authToken !== "" && isSuperAdmin(principal);
+    const ctx: KernelRequestContext = {
+      ...(trustCaller ? readCallerContext(req) : { callerAgentId: "", callerRunId: "", callerDepth: 0 }),
+      principal,
+    };
 
     // Existing session — delegate to its transport
     if (sessionId) {
       const session = this.sessions.get(sessionId);
       if (!session) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "Session not found" } }));
+        return;
+      }
+      // A session belongs to whoever opened it. Knowing its id must not let
+      // another principal ride on it.
+      if (session.principalId !== principal.id) {
         res.writeHead(404, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "Session not found" } }));
         return;
@@ -730,11 +766,11 @@ export class McpHttpRouter {
     }
 
     // Create new session
-    const session = await this.createSession();
+    const session = await this.createSession(principal.id);
     await runWithContext(ctx, () => session.transport.handleRequest(req, res));
   }
 
-  private async createSession(): Promise<McpSession> {
+  private async createSession(principalId: string): Promise<McpSession> {
     // session is captured by the onsessioninitialized closure below.
     // It's assigned synchronously before handleRequest is called.
     let session: McpSession;
@@ -758,7 +794,7 @@ export class McpHttpRouter {
     const server = createMcpServer(this.registry, this.events, this.opts);
     await server.connect(transport);
 
-    session = { server, transport, lastSeen: Date.now() };
+    session = { server, transport, lastSeen: Date.now(), principalId };
     return session;
   }
 

@@ -431,6 +431,15 @@ export async function initHttpAndMcp(args: {
       const { registerPairingAdminRoutes } = await import("../pairing-admin-routes.js");
       registerPairingAdminRoutes(httpServer, pairingManager);
 
+      // Users and personal tokens (/api/auth/me, /api/access/*). The access
+      // module is a core module, so its service is up before HTTP starts.
+      const { getAccessService } = await import("../../modules/access/service.js");
+      const access = getAccessService();
+      if (access) {
+        const { registerAccessRoutes } = await import("../../modules/access/api-routes.js");
+        registerAccessRoutes(httpServer, access, { authEnabled: config.auth.token !== "" });
+      }
+
       // Peering: this instance's signed identity, its friends, and the
       // transports that reach them. The layer is kernel-wide; cinema's
       // friends-only directories are simply its first consumer.

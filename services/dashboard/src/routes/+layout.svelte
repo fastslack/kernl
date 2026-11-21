@@ -6,11 +6,12 @@
   import { goto, beforeNavigate, afterNavigate } from '$app/navigation';
   import { page } from '$app/stores';
   import { data, lastRefresh, ensureStore, activeTheme, notifications, unreadCount, serverTz } from '$lib/stores.js';
-  import { wsConnect, wsDisconnect, mergeChannelMap, rpcOrCall, onWsConnected, wsSubscribeChannels, wsUnsubscribeChannels } from '$lib/ws.js';
+  import { wsConnect, wsStartHttpOnly, wsDisconnect, mergeChannelMap, rpcOrCall, onWsConnected, wsSubscribeChannels, wsUnsubscribeChannels } from '$lib/ws.js';
   import { getChannelsForPage } from '$lib/page-channels.js';
   import { extPages as extPagesStore, extPagesReady } from '$lib/ext-host.js';
   import { NAV_GROUPS, VIEWS, VIEW_TO_GROUP, SUB_TAB_LABELS, type NavGroup, type NavView } from '$lib/constants.js';
-  import { railViewsFor, buildNav, activeTabId } from '$lib/nav.js';
+  import { railViewsFor, buildNav, activeTabId, filterNavForSession } from '$lib/nav.js';
+  import { session, loadSession, isUserSession, can } from '$lib/session.js';
   import { fetchEdition } from '$lib/edition.js';
   import { applyNavPrefs, parseNavPrefs, shellNavGroups, EMPTY_NAV_PREFS, NAV_LAYOUT_KEY, SHOW_TOOLS_KEY, type NavPrefs } from '$lib/nav-prefs.js';
   import SideNav from '$lib/components/SideNav.svelte';
@@ -26,6 +27,8 @@
   import MusicPlayer from '$lib/components/MusicPlayer.svelte';
   import MusicNavIndicator from '$lib/components/MusicNavIndicator.svelte';
   import LlmChainPill from '$lib/components/LlmChainPill.svelte';
+  import UserChip from '$lib/components/access/UserChip.svelte';
+  import { toast } from '$shared/feedback';
   import UpdateProgress from '$lib/components/UpdateProgress.svelte';
   import { initMusicBridge } from '$lib/music-bridge.js';
   import { initLocale, t, locale } from '$lib/i18n/index.js';
@@ -49,7 +52,12 @@
   let notifOpen = false;
 
   // Manifest-driven navigation — starts with hardcoded defaults, extended by manifest
-  let navGroups: NavGroup[] = NAV_GROUPS;
+  // The nav as the manifest builds it, and as the signed-in principal sees it:
+  // a user gets only the entries their roles can read (lib/session.ts).
+  let rawNavGroups: NavGroup[] = NAV_GROUPS;
+  $: navGroups = isUserSession($session)
+    ? filterNavForSession(rawNavGroups, (m) => can($session, m, 'read'))
+    : rawNavGroups;
   let allViews: NavView[] = VIEWS;
   let viewToGroup: Record<string, string> = VIEW_TO_GROUP;
 
@@ -250,7 +258,10 @@
   // ── Global fetch interceptor for kernel auth ──────────────────────
   // Installed while this script initializes, not in onMount: children mount
   // (and fetch) before the layout's onMount runs. See $lib/auth-fetch.
-  installAuthFetch(() => void refreshLlmReadiness());
+  installAuthFetch(
+    () => void refreshLlmReadiness(),
+    (required) => toast.error(required ? $t('access.forbidden_need', { permission: required }) : $t('access.forbidden')),
+  );
 
   // Refresh on WS (re)connect — used internally by wsConnect().
   // No UI button: stores are push-driven, a manual refresh is dead UX.
@@ -265,7 +276,7 @@
   }
 
   // ── Command palette ───────────────────────────────────────────────
-  $: CMD_ITEMS = allViews.map(v => ({ label: 'Go to ' + v.label, action: () => navigate(v.id) }));
+  $: CMD_ITEMS = navGroups.flatMap((g) => g.views).map(v => ({ label: 'Go to ' + v.label, action: () => navigate(v.id) }));
 
   // The handler below accepts Ctrl or ⌘; the hint should name the one this
   // keyboard has — "⌘K" means nothing on Windows or Linux.
@@ -486,7 +497,12 @@
     // migrated /music extension page can drive it (see $lib/music-bridge).
     musicBridgeDispose = initMusicBridge();
 
-    wsConnect(onWsRefresh);
+    // Who is signed in decides the transport: the live socket is the super
+    // admin's, a user's session runs over HTTP (lib/ws.ts, wsStartHttpOnly).
+    void loadSession().then((s) => {
+      if (isUserSession(s)) wsStartHttpOnly(onWsRefresh);
+      else wsConnect(onWsRefresh);
+    });
     // Re-fetch init data on every WS (re)connect — covers restart/502 scenarios
     onWsConnected(() => {
       // Re-apply the manifest too: if the very first fetch failed (kernel not
@@ -569,7 +585,7 @@
     setExtToolRenderers(m.extToolRenderers);
     extPagesReady.set(true);
 
-    navGroups = nav.navGroups;
+    rawNavGroups = nav.navGroups;
     allViews = nav.allViews;
     viewToGroup = nav.viewToGroup;
     // Rewrite path overrides: start fresh so removed items don't linger.
@@ -735,7 +751,8 @@
 
       <!-- Meta cluster: connection + theme. Compact, low-attention. -->
       <div class="hdr-cluster hdr-meta">
-        <LlmChainPill />
+        <UserChip />
+        {#if !isUserSession($session)}<LlmChainPill />{/if}
         <ThemeSwitcher />
       </div>
     </div>

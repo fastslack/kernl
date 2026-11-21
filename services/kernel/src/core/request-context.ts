@@ -16,6 +16,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { Principal } from "./principal.js";
 
 export interface KernelRequestContext {
   /** Agent that owns the subprocess making this MCP call. "" if absent. */
@@ -24,6 +25,13 @@ export interface KernelRequestContext {
   callerRunId: string;
   /** Depth of the caller's run. 0 if absent. */
   callerDepth: number;
+  /**
+   * Who made the request: set at the HTTP boundary (`/api/*`, `/mcp`) once
+   * the token is checked. Absent for work the kernel starts on its own
+   * (scheduled agents, triggers) and for the Unix-socket and stdio
+   * transports, whose callers are local processes.
+   */
+  principal?: Principal;
 }
 
 const storage = new AsyncLocalStorage<KernelRequestContext>();
@@ -42,4 +50,9 @@ export function getRequestContext(): KernelRequestContext {
       callerDepth: 0,
     }
   );
+}
+
+/** The principal of the request in flight, or null outside one. */
+export function getPrincipal(): Principal | null {
+  return storage.getStore()?.principal ?? null;
 }

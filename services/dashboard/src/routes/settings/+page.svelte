@@ -23,6 +23,8 @@
   import VoicePicker from '$lib/components/settings/VoicePicker.svelte';
   import SetupChecklist from '$lib/components/settings/SetupChecklist.svelte';
   import SideNav from '$lib/components/SideNav.svelte';
+  import AccessPanel from '$lib/components/access/AccessPanel.svelte';
+  import { session } from '$lib/session.js';
   import type { SideNavItem } from '$lib/components/SideNav.svelte';
   import AiConnections from '$lib/components/llm/AiConnections.svelte';
   import LlmUsage from '$lib/components/llm/LlmUsage.svelte';
@@ -199,11 +201,14 @@
   // ── Sections / routing ───────────────────────
   // License first: it is what unlocks everything paid, and it used to be a
   // page nothing linked to.
-  const CORE_SECTIONS = ['license', 'general', 'ai', 'mail', 'channels', 'integrations', 'security', 'advanced', 'about'];
+  const CORE_SECTIONS = ['license', 'general', 'ai', 'mail', 'channels', 'integrations', 'security', 'access', 'advanced', 'about'];
+  // Users and permissions: the super admin's alone (the kernel refuses
+  // /api/access to anyone else), so nobody else gets the entry.
+  $: visibleSections = CORE_SECTIONS.filter((id) => id !== 'access' || $session?.kind === 'super_admin');
   /** Rail icon per core section, so the eye finds a section before reading it. */
   const SECTION_ICONS: Record<string, string> = {
     license: '🔑', general: '⚙️', ai: '🧠', mail: '✉️', channels: '📡',
-    integrations: '🔌', security: '🛡️', advanced: '🛠️', about: 'ℹ️',
+    integrations: '🔌', security: '🛡️', access: '👥', advanced: '🛠️', about: 'ℹ️',
   };
   /** For an extension section that ships without an icon of its own. */
   const EXT_SECTION_ICON = '🧩';
@@ -215,7 +220,7 @@
     } catch { /* the badge is a hint; the section still loads its own status */ }
   }
   onMount(loadLicenseState);
-  $: navSections = CORE_SECTIONS.map((id) => ({ id, label: $t(`settings.nav.${id}`), icon: SECTION_ICONS[id] }));
+  $: navSections = visibleSections.map((id) => ({ id, label: id === 'access' ? $t('access.nav') : $t(`settings.nav.${id}`), icon: SECTION_ICONS[id] }));
   $: extNav = extSections.map((s) => ({ id: `ext-${s.id}`, label: loc(s.label), icon: s.icon ?? '' }));
 
   // Un solo array para el rail. El divisor cuelga del primer item de
@@ -710,6 +715,11 @@
         <!-- ═══ Sidebar menus ═══ -->
         {#if activeSection === 'general' && activeCard === 'nav-menu'}
           <NavMenuCard layoutValue={original[NAV_LAYOUT_KEY] ?? ''} showToolsValue={original[SHOW_TOOLS_KEY] ?? ''} />
+        {/if}
+
+        <!-- ═══ Users and permissions ═══ -->
+        {#if activeSection === 'access' && $session?.kind === 'super_admin'}
+          <AccessPanel />
         {/if}
 
         <!-- ═══ License ═══ -->

@@ -7,13 +7,22 @@ import { promisify } from "node:util";
 import { log } from "./logger.js";
 import type { KernelConfig } from "./config.js";
 import { resolveSecureBind } from "./config.js";
-import { isAuthenticated, isAuthExemptPath, isPeerAuthenticatedPath, isWebhookPath } from "./auth.js";
+import { isAuthExemptPath, isPeerAuthenticatedPath, isWebhookPath, resolveRequestPrincipal } from "./auth.js";
+import { authorizeRequest, principalCan, resolveToken, SUPER_ADMIN, type Principal } from "./principal.js";
+import { parsePermission } from "./permissions.js";
+import { getPrincipal, getRequestContext, runWithContext } from "./request-context.js";
+import { assertScope, filterForScope } from "./scope.js";
 import { HttpError, isHttpError } from "../sdk/http-error.js";
 import type { Operation } from "../sdk/args.js";
 
 export { HttpError, isHttpError };
 
 const gzipAsync = promisify(gzip);
+
+/** GET and HEAD read; every other method writes. */
+function levelOf(method: string | undefined): "read" | "write" {
+  return method === "GET" || method === "HEAD" ? "read" : "write";
+}
 const GZIP_THRESHOLD = 1024; // Only compress responses > 1KB
 
 const SECURITY_HEADERS = {
@@ -70,6 +79,14 @@ export interface RouteOptions {
    * an empty request must not reach it by accident.
    */
   requireBody?: boolean;
+  /**
+   * What a user needs on top of what the path asks (`module:read`,
+   * `module:write`). The gate classifies every `/api/<module>/…` request by
+   * its path and method; this narrows a route that does more than that says,
+   * such as a GET under a feature module that returns credentials. It never
+   * widens: a route still needs what its path asks.
+   */
+  permission?: string;
 }
 
 /**
@@ -90,6 +107,20 @@ export type Precondition = (
   method: string,
 ) => { status: number; body: unknown } | null;
 
+/**
+ * Why the caller may not use a route that declares `permission`, as the 403
+ * body, or null. The super admin and kernel-initiated work pass; a
+ * declaration that does not parse refuses users, so a typo never opens a
+ * route.
+ */
+export function routePermissionDenial(permission: string): Record<string, unknown> | null {
+  const principal = getPrincipal();
+  if (!principal || principal.kind === "super_admin") return null;
+  const need = parsePermission(permission);
+  if (need && need.module !== "*" && need.level !== "*" && principalCan(principal, { module: need.module, level: need.level })) return null;
+  return { error: "Forbidden", reason: "no_permission", required: permission };
+}
+
 export class KernelHttpServer {
   private server: Server | null = null;
   private routes = new Map<string, RouteHandler>();
@@ -109,6 +140,14 @@ export class KernelHttpServer {
    * this, a caller checking it would answer the same request twice.
    */
   private answered = new WeakSet<ServerResponse>();
+  /**
+   * Who made each request. The request context (AsyncLocalStorage) carries
+   * it too, but a raw handler may answer from an event callback where that
+   * context is gone; the scope checks below fall back to this.
+   */
+  private principals = new WeakMap<IncomingMessage, Principal>();
+  /** Lets `json()` find the request when a handler passes only the response. */
+  private requestOf = new WeakMap<ServerResponse, IncomingMessage>();
 
   // Simple IP rate limiter for HTTP API (separate from messaging rate limiter)
   private apiRateLimits = new Map<string, { count: number; resetAt: number }>();
@@ -234,9 +273,14 @@ export class KernelHttpServer {
     const register = { GET: this.get, POST: this.post, PUT: this.put, DELETE: this.delete }[method];
     register.call(this, path, async (req, res) => {
       try {
+        if (opts.permission) {
+          const denied = routePermissionDenial(opts.permission);
+          if (denied) throw new HttpError(403, "Forbidden", denied);
+        }
         const body = method === "GET"
           ? ({} as B)
           : await this.parseBody<B>(req, undefined, opts.requireBody ? undefined : ({} as B)).catch((err: Error) => {
+              if (isHttpError(err)) throw err;
               throw new HttpError(err.message.startsWith("Request body exceeds") ? 413 : 400, err.message);
             });
         const result = await fn({
@@ -295,7 +339,24 @@ export class KernelHttpServer {
   }
 
   /** `emptyAs`: resolve to this instead of rejecting when the body is empty. */
-  parseBody<T = unknown>(req: IncomingMessage, maxBytes = 10 * 1024 * 1024, emptyAs?: T): Promise<T> {
+  /**
+   * The JSON body. For a user restricted to some offices, a body naming an
+   * agent, office or run outside them is refused with a 403 (core/scope.ts).
+   */
+  async parseBody<T = unknown>(req: IncomingMessage, maxBytes = 10 * 1024 * 1024, emptyAs?: T): Promise<T> {
+    const body = await this.readBody<T>(req, maxBytes, emptyAs);
+    this.asRequester(req, () => assertScope(body, levelOf(req.method)));
+    return body;
+  }
+
+  /** Runs `fn` as the request's principal, even where the async context was lost. */
+  private asRequester<R>(req: IncomingMessage | undefined, fn: () => R): R {
+    const p = req ? this.principals.get(req) : undefined;
+    if (!p || getPrincipal()) return fn();
+    return runWithContext({ ...getRequestContext(), principal: p }, fn);
+  }
+
+  private readBody<T = unknown>(req: IncomingMessage, maxBytes: number, emptyAs?: T): Promise<T> {
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
       let totalSize = 0;
@@ -326,7 +387,9 @@ export class KernelHttpServer {
 
   json(res: ServerResponse, status: number, data: unknown, req?: IncomingMessage): void {
     this.answered.add(res);
-    const body = JSON.stringify(data);
+    // A user restricted to some offices gets lists and maps without the
+    // agents, offices and runs outside them (core/scope.ts).
+    const body = JSON.stringify(this.asRequester(req ?? this.requestOf.get(res), () => filterForScope(data)));
     const cors = this.corsHeaders(req);
     // Gzip if client accepts it and response is large enough
     if (req && body.length > GZIP_THRESHOLD && req.headers["accept-encoding"]?.includes("gzip")) {
@@ -469,18 +532,44 @@ export class KernelHttpServer {
 
     // ── Auth verification endpoint (built-in, before route matching) ──
     if (pathname === "/api/auth/verify") {
+      // `valid` keeps its old meaning: the kernel token itself. Callers that
+      // gate the whole install on it (the Cloudflare tunnel guard lets the
+      // live socket through on `valid`) must not start letting user tokens
+      // in, so a user's token answers `valid: false, kind: "user"` and the
+      // login page accepts either.
       if (!this.authToken) {
-        this.json(res, 200, { valid: true, authEnabled: false }, req);
+        this.json(res, 200, { valid: true, authEnabled: false, kind: "super_admin" }, req);
       } else {
-        const valid = isAuthenticated(req, this.authToken);
-        this.json(res, 200, { valid, authEnabled: true }, req);
+        const principal = resolveRequestPrincipal(req, this.authToken);
+        this.json(res, 200, { valid: principal?.kind === "super_admin", authEnabled: true, kind: principal?.kind ?? null }, req);
       }
+      return;
+    }
+
+    // ── Event-broker gate (nginx `auth_request` for /mtw) ──
+    // The broker (mtwRequest) authenticates nothing: whoever reaches it can
+    // read the database and call any tool. Only the super admin may open it;
+    // a user works over HTTP, where permissions and scopes apply. nginx
+    // passes the socket's original URI, whose `?token=` carries the token
+    // (a browser cannot set headers on a WebSocket).
+    if (pathname === "/api/auth/broker") {
+      if (!this.authToken) { res.writeHead(204, SECURITY_HEADERS); res.end(); return; }
+      const original = String(req.headers["x-original-uri"] ?? "");
+      const qIdx = original.indexOf("?");
+      const fromUri = qIdx >= 0 ? new URLSearchParams(original.slice(qIdx + 1)).get("token") : null;
+      const principal = fromUri
+        ? resolveToken(fromUri, this.authToken)
+        : resolveRequestPrincipal(req, this.authToken) ?? resolveToken(url.searchParams.get("token"), this.authToken);
+      const status = principal?.kind === "super_admin" ? 204 : principal ? 403 : 401;
+      res.writeHead(status, SECURITY_HEADERS);
+      res.end();
       return;
     }
 
     // ── Authentication gate ──
     // Exempt paths (/api/health, /api/auth/verify) and non-API paths skip auth.
     // /mcp has its own auth mechanism.
+    let principal: Principal | null = null;
     if (
       this.authToken &&
       pathname.startsWith("/api/") &&
@@ -491,12 +580,37 @@ export class KernelHttpServer {
       // Project webhooks authenticate by HMAC signature (projects module).
       !isWebhookPath(req.method ?? "", pathname)
     ) {
-      if (!isAuthenticated(req, this.authToken)) {
+      principal = resolveRequestPrincipal(req, this.authToken);
+      if (!principal) {
         this.json(res, 401, { error: "Unauthorized" }, req);
         return;
       }
+      // Authenticated is not authorized: a user's token reaches only what
+      // the access rules grant it (core/principal.ts). The super admin
+      // always passes.
+      const denied = authorizeRequest(principal, pathname, req.method ?? "GET");
+      if (denied) {
+        this.json(res, denied.status, denied.body, req);
+        return;
+      }
+    } else if (!this.authToken && pathname.startsWith("/api/")) {
+      // Auth disabled: every caller is the super admin, as before users.
+      principal = SUPER_ADMIN;
     }
 
+    // The rest of the request runs knowing who made it, so routes and the
+    // operations they call can read `getPrincipal()`.
+    if (principal) {
+      const who = principal;
+      this.principals.set(req, who);
+      this.requestOf.set(res, req);
+      return runWithContext({ ...getRequestContext(), principal: who }, () => this.routeRequest(req, res, url, pathname));
+    }
+    return this.routeRequest(req, res, url, pathname);
+  }
+
+  /** Everything after authentication: preconditions, routes, static files. */
+  private async routeRequest(req: IncomingMessage, res: ServerResponse, url: URL, pathname: string): Promise<void> {
     // ── Preconditions ──
     // After auth, so an unauthenticated caller learns nothing about how the
     // install is configured. `/mcp` is deliberately outside: it is not a page,
@@ -516,6 +630,10 @@ export class KernelHttpServer {
 
     const run = async (handler: RouteHandler) => {
       try {
+        // Ids in the path and the query: an agent, office or run outside a
+        // restricted user's offices is refused before the handler runs.
+        const params = (req as unknown as { params?: Record<string, string> }).params ?? {};
+        assertScope({ ...Object.fromEntries(url.searchParams), ...params }, levelOf(req.method));
         await handler(req, res);
       } catch (err) {
         if (isHttpError(err) && !this.responded(res)) { this.json(res, err.status, err.body ?? { error: err.message }, req); return; }

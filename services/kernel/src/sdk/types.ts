@@ -37,6 +37,7 @@ export type { LlmClient } from "../core/llm/client.js";
 export type { LlmStartInfo, LlmEndInfo, LlmFailInfo } from "../core/llm/logger.js";
 export type { MediaTool, MediaToolStatus } from "../core/media-tools.js";
 export type { KernelRequestContext } from "../core/request-context.js";
+export type { Principal } from "../core/principal.js";
 export type { ReminderServiceLike } from "../core/types/extensions/reminders.js";
 export type { KernelEventsModuleEvents } from "../core/types/extensions/events.js";
 

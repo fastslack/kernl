@@ -94,6 +94,13 @@ interface ToolMeta {
   cost?: ToolCost;
   inverse?: ToolInverse;
   outputSchema?: z.ZodType<unknown>;
+  /**
+   * `module:read` or `module:write`: what a user needs to call the tool, in
+   * place of what its name implies. For a tool whose verb reads as a write
+   * (`kernel_x_summarize`) but only reads, or one that belongs to another
+   * module than its name says. See ToolDefinition.permission.
+   */
+  permission?: string;
 }
 
 /**
@@ -169,6 +176,7 @@ export function defineTool<T extends z.ZodType>(config: ToolMeta & {
     ...(config.outbound ? { outbound: true } : {}),
     ...(config.cost ? { cost: config.cost } : {}),
     ...(config.inverse ? { inverse: config.inverse } : {}),
+    ...(config.permission ? { permission: config.permission } : {}),
     handler: async (args: unknown) => {
       try {
         return await config.handler(parseToolArgs(config.schema, args));

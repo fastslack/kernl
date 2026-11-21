@@ -13,7 +13,7 @@
  * and the HTTP body shape was kept.
  */
 
-import { HttpError, pickArgs, type Operation } from "@kernl/extension-sdk";
+import { HttpError, pickArgs, requirePermission, type Operation } from "@kernl/extension-sdk";
 import { publicAccount, SECRET_MASK, type TwitterService } from "./service.js";
 import type { TwitterPublisher } from "./publisher.js";
 
@@ -37,12 +37,23 @@ const ACCOUNT_FIELDS = {
  * means "keep what is stored": drop it so the update never overwrites the
  * secret with the placeholder or wipes it.
  */
+const SECRET_FIELDS = ["api_key", "api_secret", "access_token", "access_secret"] as const;
+
 function withoutUntouchedSecrets<T extends Record<string, unknown>>(fields: T): T {
   const out = { ...fields };
-  for (const key of ["api_key", "api_secret", "access_token", "access_secret"] as const) {
+  for (const key of SECRET_FIELDS) {
     if (out[key] === "" || out[key] === SECRET_MASK) delete out[key];
   }
   return out;
+}
+
+/**
+ * Setting an account's API keys is handling credentials, not managing posts:
+ * a user needs `secrets:write` for it, on top of `twitter:write`. Checked
+ * here rather than on the route so the RPC road asks the same.
+ */
+function guardSecrets(fields: Record<string, unknown>): void {
+  if (SECRET_FIELDS.some((k) => fields[k] !== undefined)) requirePermission("secrets:write");
 }
 
 export function twitterOperations(tw: TwitterService, pub: TwitterPublisher | null): Record<string, Operation> {
@@ -59,13 +70,16 @@ export function twitterOperations(tw: TwitterService, pub: TwitterPublisher | nu
   return {
     "twitter.accounts.create": (input) => {
       const fields = withoutUntouchedSecrets(pickArgs(input, ACCOUNT_FIELDS));
+      guardSecrets(fields);
       if (!fields.handle) throw new HttpError(400, "handle is required");
       return publicAccount(tw.addAccount({ ...fields, handle: fields.handle }));
     },
 
     "twitter.accounts.update": (input) => {
       const id = required(input, "id");
-      const account = tw.updateAccount(id, withoutUntouchedSecrets(pickArgs(input, { ...ACCOUNT_FIELDS, status: "string" })));
+      const fields = withoutUntouchedSecrets(pickArgs(input, { ...ACCOUNT_FIELDS, status: "string" }));
+      guardSecrets(fields);
+      const account = tw.updateAccount(id, fields);
       if (!account) throw new HttpError(404, "Account not found");
       return publicAccount(account);
     },

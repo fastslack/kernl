@@ -14,7 +14,10 @@ import { llm, createPinnedLlmClient } from "./llm/client.js";
 import { logLlmStart, logLlmEnd, logLlmFail } from "./llm/logger.js";
 import { record as recordLlmCall } from "./llm/call-log.js";
 import { getProviderConfig, isConnected } from "./llm/credentials.js";
-import { getRequestContext } from "./request-context.js";
+import { getPrincipal, getRequestContext } from "./request-context.js";
+import { principalCan } from "./principal.js";
+import { parsePermission } from "./permissions.js";
+import { currentScope, refAllowed } from "./scope.js";
 import { loadTransformers } from "./transformers-cache.js";
 import { mediaToolBin, probeMediaTool, mediaToolError } from "./media-tools.js";
 import { PeeringService } from "./peering/service.js";
@@ -56,6 +59,20 @@ const kernelHost: KernlHost = Object.freeze({
   verifyPeerRequest: verifyRequest,
   timezone: () => timezoneSource(),
   projects: () => projectsSource(),
+  can: (permission: string) => {
+    const principal = getPrincipal();
+    // Work the kernel starts on its own (an agent run, a trigger) carries no
+    // principal and is not a user's to restrict.
+    if (!principal || principal.kind === "super_admin") return true;
+    const need = parsePermission(permission);
+    // Wildcards name no single requirement, and a typo must not grant.
+    if (!need || need.module === "*" || need.level === "*") return false;
+    return principalCan(principal, { module: need.module, level: need.level });
+  },
+  inScope: (id: string, level: "read" | "write") => {
+    const scope = currentScope();
+    return !scope || refAllowed(scope, id, level);
+  },
 });
 
 /** Install the kernel host. Idempotent; warns if it displaces another host. */

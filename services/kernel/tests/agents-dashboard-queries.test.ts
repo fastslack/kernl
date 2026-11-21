@@ -87,6 +87,8 @@ describe("agents dashboard channel queries", () => {
     const { db, seen } = recordStatements(raw);
     queryAgents(db);
     queryAgentsList(db);
+    // A restricted user's totals filter by agent id; still through indexes.
+    queryAgents(db, [agent.id]);
 
     const runsStatements = seen.filter((s) => s.sql.includes("agent_runs"));
     expect(runsStatements.length).toBeGreaterThan(0);
@@ -118,5 +120,28 @@ describe("agents dashboard channel queries", () => {
     const list = queryAgentsList(raw)!;
     const lastRun = Object.fromEntries(list.agents.map((a) => [a.name, a.last_run_at]));
     expect(lastRun).toEqual({ Busy: now.toISOString(), Idle: null });
+  });
+
+  it("counts only the given agents for a restricted user", () => {
+    const mine = service.createAgent({ name: "Mine" });
+    const other = service.createAgent({ name: "Other" });
+    const now = new Date().toISOString();
+    insertRun(mine.id, now, 10);
+    insertRun(other.id, now, 7);
+    insertRun(other.id, now, 3);
+
+    const d = queryAgents(raw, [mine.id])!;
+    expect(d.kpis.totalAgents).toBe(1);
+    expect(d.kpis.totalRuns).toBe(1);
+    expect(d.kpis.totalTokens).toBe(10);
+    expect(d.kpis.runsToday).toBe(1);
+    expect(d.topAgents.map((a) => a.name)).toEqual(["Mine"]);
+    expect(d.recentRuns.map((r) => r.agent_name)).toEqual(["Mine"]);
+
+    const none = queryAgents(raw, [])!;
+    expect(none.kpis.totalAgents).toBe(0);
+    expect(none.kpis.totalRuns).toBe(0);
+
+    expect(queryAgents(raw)!.kpis.totalRuns).toBe(3);
   });
 });

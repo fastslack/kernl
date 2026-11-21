@@ -1209,6 +1209,17 @@ export const agentsMigrations: Migration[] = [
       );
     `,
   },
+  {
+    // A user restricted to some offices sees the agents panel's totals over
+    // their agents only (dashboard-queries.ts, `only`). Counting runs by
+    // status and by trigger for a set of agents needs these to stay off the
+    // table rows, which carry a goal embedding each.
+    version: 67,
+    sql: `
+      CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_status  ON agent_runs(agent_id, status);
+      CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_trigger ON agent_runs(agent_id, trigger_type);
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is
@@ -1217,5 +1228,5 @@ export const agentsMigrations: Migration[] = [
   //
   // NOTE: versions 61 and 62 are burned too. They belonged to a learning
   // import from other instances that was removed before any release; a dev
-  // DB may have recorded them. The next migration is 67.
+  // DB may have recorded them. The next migration is 68.
 ];

@@ -1,7 +1,8 @@
 import type { IncomingMessage } from "node:http";
+import { resolveToken, safeEqual, type Principal } from "./principal.js";
 
 /** Paths that bypass authentication (health check, auth verification, MCP has its own auth). */
-export const AUTH_EXEMPT_PATHS = ["/api/health", "/api/metrics", "/api/auth/verify"];
+export const AUTH_EXEMPT_PATHS = ["/api/health", "/api/metrics", "/api/auth/verify", "/api/auth/broker"];
 
 /**
  * Prefixes served to anyone, matched on the path.
@@ -87,11 +88,15 @@ export function isPeerAuthenticatedPath(pathname: string): boolean {
 const AUTH_QUERY_PATH_RE =
   /^\/api\/(torrents\/(transcode|webseed-proxy|[^/?#]+\/file\/\d+\/stream)|cinema\/media\/(transcode|webseed-proxy|convert\/file$)|blender\/jobs\/[^/?#]+\/frame\/[^/?#]+$|transfers\/[^/?#]+\/files\/\d+$)/;
 
-export function isAuthenticated(req: IncomingMessage, token: string): boolean {
+/**
+ * The credential a request presents, or null. Same rules as above: the
+ * Bearer header always, `?auth=` only where a header cannot be set.
+ */
+export function extractRequestToken(req: IncomingMessage): string | null {
   const authHeader = req.headers.authorization;
   if (authHeader) {
     const parts = authHeader.split(" ");
-    if (parts[0] === "Bearer" && parts[1] === token) return true;
+    if (parts[0] === "Bearer" && parts[1]) return parts[1];
   }
   // Query-string fallback. `req.url` is path+query — parse the bare query
   // string instead of new URL() to avoid needing a real host.
@@ -102,10 +107,26 @@ export function isAuthenticated(req: IncomingMessage, token: string): boolean {
     const path = url.slice(0, qIdx);
     if (accept.includes("text/event-stream") || AUTH_QUERY_PATH_RE.test(path)) {
       const params = new URLSearchParams(url.slice(qIdx + 1));
-      if (params.get("auth") === token) return true;
+      const q = params.get("auth");
+      if (q) return q;
     }
   }
-  return false;
+  return null;
+}
+
+/**
+ * Who the request comes from: the super admin (the kernel token), a user (a
+ * personal token), or null for no one. With no kernel token configured, auth
+ * is disabled and everyone is the super admin.
+ */
+export function resolveRequestPrincipal(req: IncomingMessage, masterToken: string): Principal | null {
+  return resolveToken(extractRequestToken(req), masterToken);
+}
+
+/** True when the request carries the kernel token itself (super admin). */
+export function isAuthenticated(req: IncomingMessage, token: string): boolean {
+  const presented = extractRequestToken(req);
+  return presented !== null && safeEqual(presented, token);
 }
 
 /**

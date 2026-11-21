@@ -34,6 +34,18 @@ import { log } from "../../core/logger.js";
 import { onGraphReplaced } from "../../core/graph-backfill.js";
 import { createChatProviders, initProviderStatus } from "../../core/llm/chat-adapters.js";
 import { queryAgents, queryAgentsList } from "./dashboard-queries.js";
+import type { SqliteDb } from "../../core/db/sqlite.js";
+import { currentScope, refAllowed, type Scope } from "../../core/scope.js";
+
+/** The ids of the agents a scope reaches. */
+function agentsInScope(db: SqliteDb, scope: Scope): string[] {
+  try {
+    const rows = db.prepare("SELECT id FROM agents").all() as Array<{ id: string }>;
+    return rows.map((r) => r.id).filter((id) => refAllowed(scope, id, "read"));
+  } catch {
+    return [];
+  }
+}
 import type {
   AltExecutorLike,
   EvalServiceLike,
@@ -482,8 +494,11 @@ export function createAgentsModule(): AgentsModule {
           {
             name: "agents",
             query: (db) => {
-              const d = queryAgents(db);
-              const l = queryAgentsList(db);
+              // A restricted user's totals count their agents only.
+              const scope = currentScope();
+              const only = scope ? agentsInScope(db, scope) : undefined;
+              const d = queryAgents(db, only);
+              const l = queryAgentsList(db, only);
               return (d || l) ? { ...(d ?? {}), ...(l ?? {}) } : null;
             },
           },

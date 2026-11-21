@@ -44,6 +44,12 @@ export interface NavView {
 	parent?: string;
 	/** Order within its group. Lower = leftmost. */
 	order?: number;
+	/**
+	 * Modules the view's page belongs to (the contributing module, its
+	 * `requires`, its own id). A user whose roles read none of them does not
+	 * get the entry; see filterNavForSession in nav.ts.
+	 */
+	modules?: string[];
 }
 
 export interface NavGroup {

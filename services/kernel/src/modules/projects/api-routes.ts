@@ -125,14 +125,14 @@ export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsR
   server.route("PUT", "/api/projects/:id/connector", ({ params, body }) => {
     const p = mustProject(params.id);
     return { project: projects.setConnector(p.id, parse(ConnectorBody, body)) };
-  });
+  }, { permission: "secrets:write" });
 
   server.route("GET", "/api/projects/:id/webhook-secret", ({ params }) => {
     const p = mustProject(params.id);
     const path = `/api/projects/webhook/${p.slug}`;
     const publicUrl = (process.env.KERNEL_PUBLIC_URL ?? "").replace(/\/$/, "");
     return { secret: projects.connectorSecrets(p.id).webhookSecret, path, url: publicUrl ? `${publicUrl}${path}` : "" };
-  });
+  }, { permission: "secrets:read" });
 
   server.route("POST", "/api/projects/:id/pull", async ({ params }) => {
     const p = mustProject(params.id);
@@ -151,6 +151,8 @@ export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsR
   });
 
   // ── The project's own accounts (Cloudflare, Datadog, AWS, git identity) ──
+  // Routes that hand out or replace a credential ask a user for `secrets`
+  // on top of `projects`: reading a project is not reading its AWS keys.
   const mustProvider = (p: string): AccountProvider => {
     if (!(ACCOUNT_PROVIDERS as readonly string[]).includes(p)) throw new HttpError(404, `Unknown account type: ${p}`);
     return p as AccountProvider;
@@ -170,7 +172,7 @@ export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsR
     } catch (err) {
       throw new HttpError(origin ? 403 : 404, err instanceof Error ? err.message : String(err));
     }
-  });
+  }, { permission: "secrets:read" });
 
   server.route("GET", "/api/projects/:id/accounts", ({ params }) => {
     const p = mustProject(params.id);
@@ -184,19 +186,19 @@ export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsR
     try {
       return { account: await accounts.set(p.id, provider, (body ?? {}) as Record<string, unknown>) };
     } catch (err) { return asHttp(err); }
-  });
+  }, { permission: "secrets:write" });
 
   server.route("POST", "/api/projects/:id/accounts/:provider/test", async ({ params }) => {
     const p = mustProject(params.id);
     return await accounts.test(p.id, mustProvider(params.provider));
-  });
+  }, { permission: "secrets:write" });
 
   // Google: linked on Google's consent screen, then the user picks what to read from what it can see.
   server.route("POST", "/api/projects/:id/accounts/google/connect", ({ params, body }) => {
     const p = mustProject(params.id);
     const returnTo = typeof (body as { return_to?: unknown } | undefined)?.return_to === "string" ? (body as { return_to: string }).return_to : "";
     try { return { authUrl: googleConsentUrl(p.id, returnTo) }; } catch (err) { throw new HttpError(400, err instanceof Error ? err.message : String(err)); }
-  });
+  }, { permission: "secrets:write" });
 
   server.route("GET", "/api/projects/:id/accounts/google/options", async ({ params }) => {
     const p = mustProject(params.id);
@@ -204,7 +206,7 @@ export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsR
     if (!a?.secrets.refresh_token) throw new HttpError(404, "El proyecto no tiene una cuenta de Google conectada");
     try { return await googleOptions(a.secrets.refresh_token, a.config.email ?? "", fetch); }
     catch (err) { throw new HttpError(502, err instanceof Error ? err.message : String(err)); }
-  });
+  }, { permission: "secrets:read" });
 
   server.route("DELETE", "/api/projects/:id/accounts/:provider", ({ params }) => {
     const p = mustProject(params.id);

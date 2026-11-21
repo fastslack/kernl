@@ -38,7 +38,7 @@ export function registerNotificationAdminRoutes(
       connected: status.connected,
       error: status.error ?? null,
     };
-  });
+  }, { permission: "settings:write" });
 
   // POST /api/notifications/:slug/request_qr — force the provider to request
   // a fresh QR code (useful when the current one expired).
@@ -52,7 +52,7 @@ export function registerNotificationAdminRoutes(
     const ok = await provider.requestQr();
     if (!ok) throw new HttpError(500, "request_qr failed", { ok });
     return { ok };
-  });
+  }, { permission: "settings:write" });
 
   // POST /api/notifications/:slug/logout — drop the session so the next
   // connection requires a fresh pairing.
@@ -68,5 +68,5 @@ export function registerNotificationAdminRoutes(
     const ok = typeof res === "boolean" ? res : !!res?.ok;
     if (!ok) throw new HttpError(500, "logout failed", { ok });
     return { ok };
-  });
+  }, { permission: "settings:write" });
 }
