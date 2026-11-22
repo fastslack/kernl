@@ -27,6 +27,12 @@ export function createGitLabChannelModule() {
       provider,
       db,
       hostOf: (c) => { try { return new URL(c.host).hostname.toLowerCase(); } catch { return ""; } },
+      // The token's user has to be a member of each project: its members page, one per repo.
+      fixHint: (c, missing) => {
+        const base = (c.host || "https://gitlab.com").replace(/\/+$/, "");
+        const pages = missing.map((p) => `${base}/${p}/-/project_members`).join(" ");
+        return `sumá al usuario del token como miembro (rol Reporter o más) y probá de nuevo: ${pages}`;
+      },
       addInput: (a) => ({
         name: String(a.name ?? ""),
         token: String(a.token ?? ""),

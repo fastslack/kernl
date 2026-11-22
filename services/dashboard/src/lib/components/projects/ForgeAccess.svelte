@@ -6,6 +6,7 @@
     account that already exists, or unlink it. A linked account is reserved: no other project uses it.
   */
   import { rpcPost } from '$lib/api.js';
+  import LinkedText from '$lib/components/ui/LinkedText.svelte';
 
   interface Link { kind: string; ref_id: string }
   interface Option { ref: string; label: string }
@@ -82,7 +83,7 @@
 <section class="forge">
   <h4>Acceso a los repos</h4>
   <p class="help">La cuenta con la que la oficina y Growth leen los repos de <b>{projectName}</b> y abren issues. Queda reservada: ningún otro proyecto la usa.</p>
-  {#if error}<p class="err" role="alert">{error}</p>{/if}
+  {#if error}<p class="err" role="alert"><LinkedText text={error} /></p>{/if}
   {#if notice}<p class="ok-note">{notice}</p>{/if}
   <ul class="rows">
     {#each FORGES as f (f.id)}

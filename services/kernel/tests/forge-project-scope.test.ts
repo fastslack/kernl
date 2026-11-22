@@ -177,6 +177,7 @@ describe("a connection added from a project has to reach its repos", () => {
   const rpcFor = (store: GitHubConnectionsService) => forgeConnectionRpc({
     prefix: "github", label: "GitHub", connections: store, provider: new GitHubRepoProvider(store), db,
     hostOf: () => "github.com", addInput: (a) => ({ name: String(a.name), token: String(a.token) }),
+    fixHint: () => "elegí ese repo: https://github.com/settings/personal-access-tokens",
   });
 
   it("refuses and drops a token that does not see the project's repo", async () => {
@@ -184,6 +185,8 @@ describe("a connection added from a project has to reach its repos", () => {
     const add = rpcFor(store).find((a) => a.name === "github.connections.add")!;
     globalThis.fetch = forge(false);
     await expect(add.handler({ name: "m", token: "pat", project_id: "matware" })).rejects.toThrow("no llega a fastslack/web");
+    // The refusal ends at the forge's page where the access is granted.
+    await expect(add.handler({ name: "m", token: "pat", project_id: "matware" })).rejects.toThrow(/: elegí ese repo: https:\/\/github\.com\/settings\/personal-access-tokens$/);
     expect(store.list()).toEqual([]);
     // Without a project there is nothing to reach: the token alone is enough.
     expect(await add.handler({ name: "m", token: "pat" })).toMatchObject({ name: "m" });

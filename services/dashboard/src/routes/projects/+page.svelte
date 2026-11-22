@@ -9,6 +9,7 @@
   */
   import { onMount, tick } from 'svelte';
   import { apiFetchRaw, readApiError, rpcPost } from '$lib/api.js';
+  import LinkedText from '$lib/components/ui/LinkedText.svelte';
   import Skeleton from '$shared/components/Skeleton.svelte';
   import BriefFields, { emptyBrief, type BriefDraft } from '$lib/components/projects/BriefFields.svelte';
   import DeployAccounts from '$lib/components/projects/DeployAccounts.svelte';
@@ -426,7 +427,7 @@
 <svelte:window on:click={() => (menuFor = '')} />
 
 <div class="pj k-form">
-{#if error}<div class="banner err" role="alert">{error}</div>{/if}
+{#if error}<div class="banner err" role="alert"><LinkedText text={error} /></div>{/if}
 
 <div class="layout">
   <!-- ── List ───────────────────────────────────────── -->

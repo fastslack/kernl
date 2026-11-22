@@ -29,6 +29,13 @@ export function createGitHubChannelModule() {
       provider,
       db,
       hostOf: () => "github.com",
+      // A token is scoped on its own settings page; an App reaches the repos its installation was given.
+      fixHint: (c, missing) => {
+        const them = missing.length > 1 ? "esos repos" : "ese repo";
+        return c.app_id
+          ? `sumá ${them} a la instalación de la app ("Repository access") y probá de nuevo: https://github.com/settings/installations/${encodeURIComponent(c.installation_id)}`
+          : `en el token fino, "Repository access", elegí ${them} y probá de nuevo: https://github.com/settings/personal-access-tokens`;
+      },
       addInput: (a) => ({
         name: String(a.name ?? ""),
         token: typeof a.token === "string" ? a.token : undefined,

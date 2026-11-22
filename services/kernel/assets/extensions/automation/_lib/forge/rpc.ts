@@ -40,6 +40,12 @@ export function forgeConnectionRpc<C extends ForgeConnectionRow, I>(spec: {
   db?: SqliteDb;
   /** The connection's host as a git remote names it ("github.com", "gitlab.com"). */
   hostOf: (c: C) => string;
+  /**
+   * How to give this connection access to the repos it misses, ending in the
+   * forge's page where that is done (a bare URL, which the dashboard turns
+   * into a link). Without it the refusal says only to grant access.
+   */
+  fixHint?: (c: C, missing: string[]) => string;
 }): RpcAction[] {
   const { prefix, label, connections, provider } = spec;
   const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
@@ -54,9 +60,9 @@ export function forgeConnectionRpc<C extends ForgeConnectionRow, I>(spec: {
     }
     return missing;
   };
-  const refusal = (missing: string[]) =>
-    `El token de ${label} es válido pero no llega a ${missing.join(", ")}: dale acceso a ${missing.length > 1 ? "esos repos" : "ese repo"} ` +
-    `(en un token fino de GitHub, "Repository access" con el repo elegido) y probá de nuevo.`;
+  const refusal = (c: C, missing: string[]) =>
+    `El token de ${label} es válido pero no llega a ${missing.join(", ")}: ` +
+    (spec.fixHint?.(c, missing) ?? `dale acceso a ${missing.length > 1 ? "esos repos" : "ese repo"} y probá de nuevo.`);
 
   return [
     {
@@ -75,7 +81,7 @@ export function forgeConnectionRpc<C extends ForgeConnectionRow, I>(spec: {
         const missing = await unreachable(c, str(args.project_id));
         if (missing.length) {
           connections.discard(c.id);
-          throw new Error(refusal(missing));
+          throw new Error(refusal(c, missing));
         }
         return { id: c.id, name: c.name, detail: test.detail };
       },
@@ -87,7 +93,7 @@ export function forgeConnectionRpc<C extends ForgeConnectionRow, I>(spec: {
         const c = connections.get(str(args.id));
         if (!c) throw new Error(`No existe esa conexión de ${label}`);
         const missing = await unreachable(c, str(args.project_id));
-        if (missing.length) throw new Error(refusal(missing));
+        if (missing.length) throw new Error(refusal(c, missing));
         return { ok: true };
       },
     },
