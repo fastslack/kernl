@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { accountDetail, accountIdent, accountState, accountTitle, formatUntil, isClaudeConnected, modelFamily, withClaudeAccounts, type ClaudeAccount } from "./claude-accounts.js";
+import { accountDetail, accountIdent, accountState, accountTitle, formatUntil, isClaudeConnected, modelFamily, reorderSteps, withClaudeAccounts, type ClaudeAccount } from "./claude-accounts.js";
 import type { CatalogProvider } from "./llm-connect.js";
 
 const NOW = new Date(2026, 9, 31, 12, 0, 0).getTime();
@@ -97,5 +97,23 @@ describe("isClaudeConnected", () => {
     expect(isClaudeConnected([p("nvidia", true), p("claude-code", true)])).toBe(true);
     expect(isClaudeConnected([p("claude-code", false)])).toBe(false);
     expect(isClaudeConnected([])).toBe(false);
+  });
+});
+
+describe("reorderSteps", () => {
+  const order = ["a", "b", "x", "c"]; // x: a disconnected account the popover does not show
+
+  it("drags up past a hidden account, one swap per place", () => {
+    expect(reorderSteps(order, "c", "b", false)).toEqual({ order: ["a", "c", "b", "x"], steps: ["up", "up"] });
+  });
+
+  it("drags down to after the target", () => {
+    expect(reorderSteps(order, "a", "c", true)).toEqual({ order: ["b", "x", "c", "a"], steps: ["down", "down", "down"] });
+  });
+
+  it("does nothing when the account lands where it already is", () => {
+    expect(reorderSteps(order, "b", "a", true).steps).toEqual([]);
+    expect(reorderSteps(order, "b", "b", false).steps).toEqual([]);
+    expect(reorderSteps(order, "zz", "a", false).steps).toEqual([]);
   });
 });

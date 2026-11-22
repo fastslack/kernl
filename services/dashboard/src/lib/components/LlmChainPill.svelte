@@ -1,8 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { flip } from 'svelte/animate';
   import { wsConnected } from '$lib/stores.js';
   import { t } from '$lib/i18n';
-  import { rpcPost } from '$lib/api';
+  import { rpcPost, put } from '$lib/api';
+  import { modelFamily, reorderSteps } from '$lib/claude-accounts.js';
   import {
     fmtSince, fmtCountdown, fmtElapsed, oldestInFlight, inFlightTotal, chainPollMs,
     callsForLink, usageForLink, utcDay, fmtTokens, fmtCost,
@@ -92,31 +94,118 @@
 
   // ── Claude accounts: how much of each subscription is used (5 h window, week, per-model week) ──
   type UsageWin = { key: 'session' | 'weekly' | 'model'; model?: string; pct: number; severity: string; resetsAt: string | null; blocking: boolean };
-  type AccRow = { id: string; name: string; email: string; primary: boolean; plan: string | null; windows: UsageWin[]; at: string; error?: string };
+  type KernelLimit = { model: string; until: string; detail?: string };
+  type ListedAccount = { id: string; label: string; connected: boolean; primary: boolean; down?: boolean; limits?: KernelLimit[]; identity?: { email?: string; organizationName?: string } | null };
+  type AccRow = {
+    id: string; name: string; email: string; org: string; primary: boolean; plan: string | null; windows: UsageWin[]; at: string; error?: string;
+    down: boolean; limits: KernelLimit[];
+  };
   let accounts: AccRow[] = [];
+  /** Every account id in the kernel's rotation order, the disconnected ones (hidden here) included. */
+  let accOrder: string[] = [];
   let accLoading = false;
+  let accSaving = false;
+  let accErr = '';
   let accReadAt = 0;
   const ACC_EVERY = 60_000;
+  const ACC_URL = '/api/llm/claude-code/accounts';
+  function rowsOf(list: ListedAccount[], prev: AccRow[], usage?: Map<string, { plan: string | null; windows: UsageWin[]; at: string; error?: string }>): AccRow[] {
+    const old = new Map(prev.map((a) => [a.id, a]));
+    return list.filter((a) => a.connected).map((a) => {
+      const u = usage?.get(a.id) ?? old.get(a.id);
+      const email = a.identity?.email ?? '';
+      return {
+        id: a.id, name: a.label || email.split('@')[0] || a.id, email, org: a.identity?.organizationName ?? '', primary: a.primary,
+        plan: u?.plan ?? null, windows: u?.windows ?? [], at: u?.at ?? '', error: u?.error, down: !!a.down, limits: a.limits ?? [],
+      };
+    });
+  }
   async function loadAccounts(force = false) {
-    if (accLoading || (!force && Date.now() - accReadAt < ACC_EVERY)) return;
+    if (accLoading || accSaving || (!force && Date.now() - accReadAt < ACC_EVERY)) return;
     accLoading = true;
     try {
       const [list, usage] = await Promise.all([
-        getJson<{ accounts: Array<{ id: string; label: string; connected: boolean; primary: boolean; identity?: { email?: string } }> }>('/api/llm/claude-code/accounts'),
+        getJson<{ accounts: ListedAccount[] }>(ACC_URL),
         getJson<{ accounts: Array<{ id: string; usage: { plan: string | null; windows: UsageWin[]; at: string; error?: string } }> }>(`/api/llm/claude-code/usage${force ? '?refresh=1' : ''}`),
       ]);
-      const byId = new Map(usage.accounts.map((u) => [u.id, u.usage]));
-      accounts = list.accounts.filter((a) => a.connected).map((a) => {
-        const u = byId.get(a.id);
-        const email = a.identity?.email ?? '';
-        return { id: a.id, name: a.label || email.split('@')[0] || a.id, email, primary: a.primary, plan: u?.plan ?? null, windows: u?.windows ?? [], at: u?.at ?? '', error: u?.error };
-      });
+      if (accSaving) return; // a drag landed meanwhile: its own answer is newer
+      accOrder = list.accounts.map((a) => a.id);
+      accounts = rowsOf(list.accounts, accounts, new Map(usage.accounts.map((u) => [u.id, u.usage])));
       accReadAt = Date.now();
     } catch { /* an older kernel without the usage route: no accounts block */ }
     finally { accLoading = false; }
   }
+
+  // ── Reordering: drag a row (or Alt+↑/↓ on its handle). The order is the rotation: calls go to the first one free. ──
+  let dragId: string | null = null;
+  let dropAt: { id: string; after: boolean } | null = null;
+  async function moveAccount(id: string, target: string, after: boolean) {
+    const { order, steps } = reorderSteps(accOrder, id, target, after);
+    if (!steps.length || accSaving) return;
+    const before = { accounts, accOrder };
+    // Show it at once; the kernel only swaps neighbours, so one PUT per place.
+    accOrder = order;
+    accounts = [...accounts].sort((x, y) => order.indexOf(x.id) - order.indexOf(y.id));
+    accSaving = true; accErr = '';
+    try {
+      let res: { accounts: ListedAccount[] } | null = null;
+      for (const move of steps) res = (await put(`${ACC_URL}/${encodeURIComponent(id)}`, { move })) as { accounts: ListedAccount[] };
+      if (res) { accOrder = res.accounts.map((a) => a.id); accounts = rowsOf(res.accounts, accounts); }
+    } catch (err) {
+      ({ accounts, accOrder } = before);
+      accErr = err instanceof Error ? err.message : String(err);
+      accSaving = false;
+      accReadAt = 0; void loadAccounts(); // a move may have gone through before the failure: read what the kernel kept
+      return;
+    }
+    accSaving = false;
+  }
+  function onDragStart(ev: DragEvent, id: string) {
+    dragId = id;
+    if (ev.dataTransfer) { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', id); }
+  }
+  function onDragOver(ev: DragEvent, id: string) {
+    if (!dragId) return;
+    ev.preventDefault();
+    if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
+    const box = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+    const after = ev.clientY > box.top + box.height / 2;
+    if (dropAt?.id !== id || dropAt.after !== after) dropAt = { id, after };
+  }
+  function onDrop(ev: DragEvent) {
+    ev.preventDefault();
+    if (dragId && dropAt) void moveAccount(dragId, dropAt.id, dropAt.after);
+    dragId = null; dropAt = null;
+  }
+  function onDragEnd() { dragId = null; dropAt = null; }
+  /** Leaving the list (not just crossing from one row to the next) clears the drop line. */
+  function onDragLeave(ev: DragEvent) {
+    if (!(ev.currentTarget as HTMLElement).contains(ev.relatedTarget as Node | null)) dropAt = null;
+  }
+  function onGripKey(ev: KeyboardEvent, i: number) {
+    if (!ev.altKey || (ev.key !== 'ArrowUp' && ev.key !== 'ArrowDown')) return;
+    ev.preventDefault();
+    const up = ev.key === 'ArrowUp';
+    const other = accounts[up ? i - 1 : i + 1];
+    if (other) void moveAccount(accounts[i].id, other.id, !up);
+  }
+
+  // ── What each row shows ──
+  const liveLimits = (a: AccRow) => a.limits.filter((l) => Date.parse(l.until) > Date.now());
+  /** Stopped for every call: a usage window says so, the kernel saw the session die, or it holds a whole-account limit. */
+  const isBlocked = (a: AccRow) => a.down || a.windows.some((w) => w.blocking) || liveLimits(a).some((l) => l.model === '*');
   /** The account calls go to now: the first one in order that nothing is stopping. */
-  $: inUse = accounts.find((a) => !a.windows.some((w) => w.blocking))?.id ?? null;
+  $: inUse = accounts.find((a) => !isBlocked(a))?.id ?? null;
+  /** The columns: the 5-hour window, the week, then each per-model week any account has, in that order. */
+  $: accCols = (() => {
+    const models: string[] = [];
+    for (const a of accounts) for (const w of a.windows) if (w.key === 'model' && w.model && !models.includes(w.model)) models.push(w.model);
+    const has = (k: string) => accounts.some((a) => a.windows.some((w) => w.key === k));
+    return [...(has('session') ? ['session'] : []), ...(has('weekly') ? ['weekly'] : []), ...models.map((m) => `model:${m}`)];
+  })();
+  const colLabel = (c: string, tr: (k: string) => string) => (c === 'session' ? tr('live.acc.session') : c === 'weekly' ? tr('live.acc.weekly') : modelFamily(c.slice(6)));
+  const winOf = (a: AccRow, c: string) => a.windows.find((w) => (c.startsWith('model:') ? w.key === 'model' && w.model === c.slice(6) : w.key === c));
+  $: accAt = accounts.reduce((m, a) => Math.max(m, a.at ? Date.parse(a.at) : 0), 0);
   const barColor = (w: UsageWin) => (w.blocking || w.pct >= 90 ? '#F43F5E' : w.pct >= 70 ? '#FBBF24' : '#34D399');
   /** "en 27 min", "a las 05:10", "jue 17:00". */
   function when(iso: string | null): string {
@@ -127,7 +216,24 @@
     const sameDay = d.toDateString() === new Date().toDateString();
     return d.toLocaleString(undefined, sameDay ? { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' } : { weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
   }
-  const blockedUntil = (a: AccRow) => a.windows.filter((w) => w.blocking && w.resetsAt).map((w) => w.resetsAt as string).sort().pop() ?? null;
+  const blockedUntil = (a: AccRow) => [
+    ...a.windows.filter((w) => w.blocking && w.resetsAt).map((w) => w.resetsAt as string),
+    ...liveLimits(a).filter((l) => l.model === '*').map((l) => l.until),
+  ].sort().pop() ?? null;
+  /** One short line — the dot's color already says stopped / free, so a stopped row says when it comes back — and the full sentence for the tooltip. */
+  function accState(a: AccRow, use: string | null, tr: (k: string, v?: Record<string, string>) => string): { tone: string; text: string; full: string } {
+    if (a.down) return { tone: 'bad', text: tr('live.acc.down'), full: tr('live.acc.down') };
+    if (isBlocked(a)) {
+      const u = blockedUntil(a);
+      return u ? { tone: 'bad', text: tr('live.acc.resets', { t: when(u) }), full: `${tr('live.acc.blocked')} · ${tr('live.acc.resets', { t: when(u) })}` }
+        : { tone: 'bad', text: tr('live.acc.blocked'), full: tr('live.acc.blocked') };
+    }
+    const ml = liveLimits(a).filter((l) => l.model !== '*').sort((x, y) => x.until.localeCompare(y.until))[0];
+    const base = a.id === use ? tr('live.acc.inUse') : tr('live.acc.free');
+    if (!ml) return { tone: a.id === use ? 'on' : 'idle', text: base, full: base };
+    const lim = tr('live.acc.modelLimited', { m: modelFamily(ml.model), t: when(ml.until) });
+    return { tone: a.id === use ? 'on' : 'warn', text: a.id === use ? `${base} · ${lim}` : lim, full: `${base} · ${lim}` };
+  }
 
   function toggleRow(link: ChainLink, i: number) {
     if (openIdx === i) { openIdx = null; detail = null; return; }
@@ -286,30 +392,58 @@
                 {/if}
               </div>
               {#if isClaudeCode(link) && accounts.length}
-                <div class="acc" aria-label={$t('live.acc.title')}>
-                  {#each accounts as a (a.id)}
-                    {@const until = blockedUntil(a)}
-                    {@const blocked = a.windows.some((w) => w.blocking)}
-                    <div class="acc-row" class:blocked class:on={a.id === inUse}>
-                      <div class="acc-head">
-                        <span class="acc-name" title={a.email}>{#if a.primary}<em title={$t('live.acc.primary')}>★</em>{/if}{a.name}</span>
-                        {#if a.plan}<span class="acc-plan">{a.plan}</span>{/if}
-                        <span class="acc-chip">{blocked ? $t('live.acc.blocked') : a.id === inUse ? $t('live.acc.inUse') : $t('live.acc.free')}</span>
-                        {#if blocked && until}<span class="acc-back">{$t('live.acc.resets', { t: when(until) })}</span>{/if}
-                      </div>
-                      {#each a.windows as w (w.key + (w.model ?? ''))}
-                        <div class="acc-bar" class:minor={w.key === 'model'} title={w.resetsAt ? `${new Date(w.resetsAt).toLocaleString()}` : ''}>
-                          <span class="k">{w.key === 'session' ? $t('live.acc.session') : w.key === 'weekly' ? $t('live.acc.weekly') : w.model}</span>
-                          <span class="track"><i class:stripe={w.blocking} style="width:{Math.max(w.pct, 2)}%;--b:{barColor(w)}"></i></span>
-                          <b style="color:{barColor(w)}">{w.pct}%</b>
-                          <small>{w.resetsAt ? $t('live.acc.renews', { t: when(w.resetsAt) }) : $t('live.acc.notRunning')}</small>
+                <section class="acc" aria-label={$t('live.acc.title')} style="--n:{accCols.length}">
+                  <div class="acc-grid acc-cap">
+                    <span class="acc-cap-t">{$t('live.acc.order')}</span>
+                    {#each accCols as c (c)}<span class="acc-cap-c">{colLabel(c, $t)}</span>{/each}
+                  </div>
+                  <ol class="acc-list" class:saving={accSaving} on:dragleave={onDragLeave}>
+                    {#each accounts as a, n (a.id)}
+                      {@const st = accState(a, inUse, $t)}
+                      <li
+                        class="acc-row acc-grid tone-{st.tone}"
+                        class:dragging={dragId === a.id}
+                        class:drop-before={dropAt?.id === a.id && !dropAt.after && dragId !== a.id}
+                        class:drop-after={dropAt?.id === a.id && dropAt.after && dragId !== a.id}
+                        draggable={accounts.length > 1 && !accSaving}
+                        on:dragstart={(e) => onDragStart(e, a.id)}
+                        on:dragover={(e) => onDragOver(e, a.id)}
+                        on:drop={onDrop}
+                        on:dragend={onDragEnd}
+                        animate:flip={{ duration: 180 }}
+                      >
+                        <button type="button" class="acc-grip" disabled={accounts.length < 2 || accSaving}
+                          title={$t('live.acc.dragHint')} aria-label={$t('live.acc.moveAria', { name: a.name })} on:keydown={(e) => onGripKey(e, n)}>
+                          <svg viewBox="0 0 10 16" aria-hidden="true"><circle cx="3" cy="3" r="1.2" /><circle cx="7" cy="3" r="1.2" /><circle cx="3" cy="8" r="1.2" /><circle cx="7" cy="8" r="1.2" /><circle cx="3" cy="13" r="1.2" /><circle cx="7" cy="13" r="1.2" /></svg>
+                        </button>
+                        <span class="acc-rank" title={n === 0 ? $t('live.acc.primary') : ''}>{n + 1}</span>
+                        <div class="acc-id" title={[a.email, a.org].filter(Boolean).join(' · ')}>
+                          <div class="acc-name"><span>{a.name}</span>{#if a.plan}<em class="acc-plan">{a.plan}</em>{/if}</div>
+                          <div class="acc-state" title={st.full}><i></i><span>{st.text}</span></div>
                         </div>
-                      {/each}
-                      {#if a.error}<div class="acc-err" title={a.error}>⚠ {a.error}</div>{/if}
-                    </div>
-                  {/each}
-                  <a class="acc-manage" href="/settings?section=ai&card=providers&connect=claude-code" on:click={close}>{$t('live.acc.manage')} →</a>
-                </div>
+                        {#each accCols as c (c)}
+                          {@const w = winOf(a, c)}
+                          {#if w}
+                            <div class="acc-m" class:hot={w.blocking} style="--b:{barColor(w)}"
+                              title="{colLabel(c, $t)}: {w.pct}%{w.resetsAt ? ` · ${new Date(w.resetsAt).toLocaleString()}` : ''}">
+                              <div class="acc-m-top"><b>{w.pct}<small>%</small></b><span>{w.resetsAt ? when(w.resetsAt) : $t('live.acc.notRunning')}</span></div>
+                              <span class="acc-track"><i style="width:{Math.min(100, Math.max(w.pct, 1.5))}%"></i></span>
+                            </div>
+                          {:else}
+                            <div class="acc-m none">—</div>
+                          {/if}
+                        {/each}
+                        {#if a.error}<div class="acc-err" title={a.error}>⚠ {a.error}</div>{/if}
+                      </li>
+                    {/each}
+                  </ol>
+                  <div class="acc-foot">
+                    {#if accErr}<span class="acc-ferr" title={accErr}>{$t('live.acc.moveFailed', { err: accErr })}</span>
+                    {:else if accSaving}<span>{$t('live.acc.saving')}</span>
+                    {:else}<span>{accounts.length > 1 ? $t('live.acc.dragHint') : ''}{#if accAt}{accounts.length > 1 ? ' · ' : ''}{$t('live.acc.read', { t: new Date(accAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }) })}{/if}</span>{/if}
+                    <a href="/settings?section=ai&card=providers&connect=claude-code" on:click={close}>{$t('live.acc.manage')} →</a>
+                  </div>
+                </section>
               {:else if isClaudeCode(link) && accLoading}
                 <div class="acc acc-wait">{$t('live.acc.loading')}</div>
               {/if}
@@ -410,33 +544,61 @@
 <style>
   .lc-alert { color: #fbbf24; font-size: 11px; margin-left: 5px; }
 
-  /* Claude accounts: one block per subscription, a bar per window. */
-  .acc { margin: 6px 0 2px 26px; display: flex; flex-direction: column; gap: 5px; }
-  .acc-wait { font-size: 10.5px; color: #94a3b8; }
-  .acc-row { padding: 6px 8px; border-radius: 8px; background: rgba(15, 23, 42, .55); border: 1px solid rgba(148, 163, 184, .14); }
-  .acc-row.on { border-color: rgba(52, 211, 153, .45); box-shadow: 0 0 12px -6px #34D399; }
-  .acc-row.blocked { border-color: rgba(244, 63, 94, .35); }
-  .acc-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; min-width: 0; }
-  .acc-name { font-size: 11.5px; font-weight: 700; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .acc-name em { font-style: normal; color: #FBBF24; margin-right: 3px; }
-  .acc-plan { font-size: 9.5px; text-transform: uppercase; letter-spacing: .5px; color: #94a3b8; border: 1px solid rgba(148, 163, 184, .3); border-radius: 4px; padding: 0 4px; }
-  .acc-chip { margin-left: auto; font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; padding: 1px 6px; border-radius: 999px; color: #94a3b8; background: rgba(148, 163, 184, .14); }
-  .acc-row.on .acc-chip { color: #052e1f; background: #34D399; }
-  .acc-row.blocked .acc-chip { color: #fff; background: #F43F5E; }
-  .acc-back { font-size: 10px; color: #fda4af; white-space: nowrap; }
-  .acc-bar { display: grid; grid-template-columns: 44px 1fr 34px 92px; align-items: center; gap: 6px; font-size: 10.5px; color: #cbd5e1; }
-  .acc-bar + .acc-bar { margin-top: 3px; }
-  .acc-bar .k { color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .acc-bar .track { height: 7px; border-radius: 999px; background: rgba(148, 163, 184, .16); overflow: hidden; }
-  .acc-bar .track i { display: block; height: 100%; border-radius: 999px; background: var(--b); box-shadow: 0 0 8px -1px var(--b); transition: width .4s ease; }
-  .acc-bar .track i.stripe { background: repeating-linear-gradient(135deg, var(--b) 0 6px, color-mix(in srgb, var(--b) 60%, #000) 6px 12px); }
-  .acc-bar.minor .track { height: 4px; }
-  .acc-bar.minor { opacity: .8; }
-  .acc-bar b { font-variant-numeric: tabular-nums; text-align: right; font-weight: 800; }
-  .acc-bar small { color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10px; }
-  .acc-err { margin-top: 3px; font-size: 10px; color: #fbbf24; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .acc-manage { align-self: flex-end; font-size: 10.5px; color: #67e8f9; text-decoration: none; }
-  .acc-manage:hover { text-decoration: underline; }
+  /* Claude accounts: a compact table in rotation order — one row per subscription, a column per usage window. */
+  .acc { margin: 0 8px 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: color-mix(in srgb, var(--surface-2) 55%, transparent); overflow: hidden; }
+  .acc-wait { margin: 0 8px 8px 10px; padding: 8px 10px; font-size: 11px; color: var(--text-3); }
+  .acc-grid { display: grid; grid-template-columns: 12px 14px minmax(0, 1fr) repeat(var(--n), 86px); column-gap: 10px; align-items: center; }
+  .acc-cap { padding: 6px 10px 5px; border-bottom: 1px solid var(--border); font-size: 9.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); }
+  .acc-cap-t { grid-column: 1 / 4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .acc-cap-c { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .acc-list { list-style: none; margin: 0; padding: 0; }
+  .acc-list.saving { cursor: progress; }
+  .acc-row { position: relative; padding: 7px 10px; border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); background: transparent; transition: background .12s, opacity .12s; }
+  .acc-row:first-child { border-top: 0; }
+  .acc-row:hover { background: color-mix(in srgb, var(--surface-2) 70%, transparent); }
+  .acc-row::before { content: ''; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px; border-radius: 0 2px 2px 0; background: transparent; }
+  .acc-row.tone-on::before { background: #34D399; }
+  .acc-row.tone-bad::before { background: #F43F5E; }
+  .acc-row.tone-warn::before { background: #FBBF24; }
+  .acc-row.dragging { opacity: .35; }
+  .acc-row.drop-before { box-shadow: inset 0 2px 0 #22D3EE; }
+  .acc-row.drop-after { box-shadow: inset 0 -2px 0 #22D3EE; }
+  .acc-grip { width: 12px; height: 20px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 3px; background: none; color: var(--text-3); cursor: grab; opacity: .55; }
+  .acc-grip svg { width: 8px; height: 13px; fill: currentColor; }
+  .acc-row:hover .acc-grip:not(:disabled), .acc-grip:focus-visible { opacity: 1; color: var(--text-1); }
+  .acc-grip:disabled { cursor: default; opacity: .2; }
+  .acc-grip:focus-visible { outline: 2px solid #22D3EE; outline-offset: 1px; }
+  .acc-rank { font-size: 11px; font-weight: 700; color: var(--text-3); text-align: center; font-variant-numeric: tabular-nums; }
+  .acc-row:first-child .acc-rank { color: #FBBF24; }
+  .acc-id { min-width: 0; }
+  .acc-name { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; font-weight: 700; color: var(--text-1); }
+  .acc-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .acc-plan { flex: none; font-style: normal; font-size: 8.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); padding: 0 4px; border-radius: 3px; border: 1px solid var(--border); line-height: 13px; }
+  .acc-state { display: flex; align-items: center; gap: 5px; margin-top: 1px; min-width: 0; font-size: 10.5px; color: var(--text-3); }
+  .acc-state span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .acc-state i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); opacity: .6; }
+  .tone-on .acc-state { color: #34D399; }
+  .tone-on .acc-state i { background: #34D399; opacity: 1; box-shadow: 0 0 0 2px color-mix(in srgb, #34D399 25%, transparent); }
+  .tone-bad .acc-state { color: #FB7185; }
+  .tone-bad .acc-state i { background: #F43F5E; opacity: 1; }
+  .tone-warn .acc-state { color: #FBBF24; }
+  .tone-warn .acc-state i { background: #FBBF24; opacity: 1; }
+  .acc-m { min-width: 0; }
+  .acc-m.none { font-size: 11px; color: var(--text-3); opacity: .5; }
+  .acc-m-top { display: flex; align-items: baseline; justify-content: space-between; gap: 4px; margin-bottom: 3px; }
+  .acc-m-top b { font-size: 12px; font-weight: 700; color: var(--b); font-variant-numeric: tabular-nums; }
+  .acc-m-top b small { font-size: 9px; font-weight: 600; margin-left: 1px; opacity: .8; }
+  .acc-m-top span { font-size: 9.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+  .acc-track { display: block; height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--text-3) 22%, transparent); overflow: hidden; }
+  .acc-track i { display: block; height: 100%; border-radius: 2px; background: var(--b); transition: width .4s ease; }
+  .acc-m.hot .acc-track i { background: repeating-linear-gradient(135deg, var(--b) 0 4px, color-mix(in srgb, var(--b) 55%, #000) 4px 8px); }
+  .acc-err { grid-column: 3 / -1; margin-top: 4px; font-size: 10px; color: #FBBF24; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .acc-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 10px 6px; border-top: 1px solid var(--border); font-size: 10px; color: var(--text-3); }
+  .acc-foot span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .acc-foot .acc-ferr { color: #FB7185; }
+  .acc-foot a { flex: none; font-weight: 600; color: #22D3EE; text-decoration: none; }
+  .acc-foot a:hover { text-decoration: underline; }
+  @media (prefers-reduced-motion: reduce) { .acc-row, .acc-track i { transition: none; } }
 
   .lc-dots { display: inline-flex; gap: 3px; margin-left: 6px; }
   .lc-dots i { width: 6px; height: 6px; border-radius: 50%; box-shadow: 0 0 6px currentColor; }
@@ -457,20 +619,16 @@
   }
 
   .lc-pop {
-    position: absolute; right: 0; top: calc(100% + 8px); z-index: var(--z-modal, 40); width: 460px; max-width: calc(100vw - 24px);
+    position: absolute; right: 0; top: calc(100% + 8px); z-index: var(--z-modal, 40); width: 500px; max-width: calc(100vw - 24px);
     max-height: calc(100vh - var(--header-h, 60px) - 24px); display: flex; flex-direction: column;
-    border-radius: 14px; overflow: hidden; color: var(--text-1);
-    background:
-      radial-gradient(360px 120px at 0% 0%, color-mix(in srgb, #22D3EE 12%, transparent), transparent 70%),
-      radial-gradient(320px 140px at 100% 100%, color-mix(in srgb, #A78BFA 12%, transparent), transparent 70%),
-      linear-gradient(160deg, color-mix(in srgb, #A78BFA 10%, var(--surface-1)), var(--surface-1) 45%);
-    border: 1px solid color-mix(in srgb, #22D3EE 30%, var(--border));
-    box-shadow: 0 18px 40px -12px rgba(0, 0, 0, .6), 0 0 0 1px rgba(255, 255, 255, .02);
+    border-radius: 12px; overflow: hidden; color: var(--text-1);
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    box-shadow: 0 20px 44px -16px rgba(0, 0, 0, .65), 0 0 0 1px rgba(255, 255, 255, .02);
   }
   .lc-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px 10px; border-bottom: 1px solid var(--border); flex: none; }
   .lc-title {
-    font-size: 14px; font-weight: 800; letter-spacing: -.01em;
-    background: linear-gradient(90deg, #22D3EE, #A78BFA 60%, #F472B6); -webkit-background-clip: text; background-clip: text; color: transparent;
+    font-size: 13.5px; font-weight: 700; letter-spacing: -.01em; color: var(--text-1);
   }
   .lc-sub { font-size: 11px; color: var(--text-3); margin-top: 1px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .lc-sub-run {
@@ -489,14 +647,14 @@
   .lc-list { list-style: none; margin: 0; padding: 6px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; min-height: 0; flex: 1 1 auto; }
 
   .lc-row {
-    position: relative; overflow: hidden; border-radius: 10px;
-    background: linear-gradient(150deg, color-mix(in srgb, var(--c) 10%, transparent), color-mix(in srgb, var(--c) 4%, transparent) 70%);
-    border: 1px solid color-mix(in srgb, var(--c) 22%, transparent); transition: background .15s, border-color .2s, box-shadow .2s;
+    position: relative; overflow: hidden; border-radius: 9px;
+    background: color-mix(in srgb, var(--surface-2) 45%, transparent);
+    border: 1px solid var(--border); transition: background .15s, border-color .2s, box-shadow .2s;
     flex: none;
   }
-  .lc-row:hover { background: color-mix(in srgb, var(--c) 13%, transparent); }
-  .lc-row.open { border-color: color-mix(in srgb, var(--c) 55%, transparent); box-shadow: 0 10px 24px -18px var(--c); }
-  .lc-row.busy { border-color: color-mix(in srgb, var(--c) 50%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--c) 18%, transparent), 0 8px 22px -14px var(--c); }
+  .lc-row:hover { background: color-mix(in srgb, var(--surface-2) 75%, transparent); }
+  .lc-row.open { border-color: color-mix(in srgb, var(--c) 45%, var(--border)); }
+  .lc-row.busy { border-color: color-mix(in srgb, var(--c) 40%, var(--border)); }
   /* The work sweep: a light bar running along the top edge while a call is out. */
   .lc-row.busy::before {
     content: ''; position: absolute; left: 0; top: 0; height: 2px; width: 40%; pointer-events: none;
@@ -512,7 +670,7 @@
   }
   .lc-rank { font-size: 11px; font-weight: 800; color: var(--text-3); text-align: center; }
   .lc-row:first-child .lc-rank { color: #FBBF24; }
-  .lc-dot { position: relative; width: 10px; height: 10px; border-radius: 50%; background: var(--c); box-shadow: 0 0 10px var(--c); }
+  .lc-dot { position: relative; width: 8px; height: 8px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 18%, transparent); }
   .busy .lc-dot { animation: breathe 1.4s ease-in-out infinite; color: var(--c); }
   .busy .lc-dot::after {
     content: ''; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--c); opacity: 0;
@@ -529,21 +687,20 @@
   .lc-reconnect { display: inline-block; margin: -2px 0 8px 42px; font-size: 11px; font-weight: 600; color: #F43F5E; text-decoration: none; }
   .lc-reconnect:hover { text-decoration: underline; }
   .lc-run {
-    display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: 999px; white-space: nowrap; font-size: 10px;
-    color: var(--c); border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); background: color-mix(in srgb, var(--c) 16%, transparent);
-    box-shadow: 0 0 10px -2px color-mix(in srgb, var(--c) 70%, transparent);
+    display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: 6px; white-space: nowrap; font-size: 10px;
+    color: var(--c); border: 1px solid color-mix(in srgb, var(--c) 40%, transparent); background: color-mix(in srgb, var(--c) 10%, transparent);
   }
   .lc-run b { font-weight: 800; }
   .lc-clock { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--text-1); }
   .lc-status {
-    font-size: 9.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; padding: 3px 7px; border-radius: 999px; white-space: nowrap;
-    color: var(--tone); background: color-mix(in srgb, var(--tone) 15%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 40%, transparent);
+    font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2px 6px; border-radius: 5px; white-space: nowrap;
+    color: var(--tone); background: color-mix(in srgb, var(--tone) 12%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 30%, transparent);
   }
   .lc-chev { width: 12px; height: 12px; fill: none; stroke: var(--text-3); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; transition: transform .2s ease-out; }
   .open .lc-chev { transform: rotate(180deg); stroke: var(--c); }
   .lc-score {
-    flex: none; min-width: 34px; text-align: center; padding: 4px 6px; border-radius: 8px; font-size: 12.5px; font-weight: 800; color: #fff; text-decoration: none;
-    background: color-mix(in srgb, var(--band) 45%, transparent); box-shadow: inset 0 -2px 0 var(--band); font-variant-numeric: tabular-nums;
+    flex: none; min-width: 32px; text-align: center; padding: 3px 6px; border-radius: 6px; font-size: 12px; font-weight: 700; color: var(--band); text-decoration: none;
+    background: color-mix(in srgb, var(--band) 14%, transparent); border: 1px solid color-mix(in srgb, var(--band) 35%, transparent); font-variant-numeric: tabular-nums;
   }
   .lc-score:hover { filter: brightness(1.15); }
   .lc-score.none { color: var(--text-3); background: var(--surface-2); box-shadow: none; font-weight: 500; }

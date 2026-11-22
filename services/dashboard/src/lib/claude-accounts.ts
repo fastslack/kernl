@@ -127,3 +127,19 @@ export function withClaudeAccounts(rows: CatalogProvider[], accounts: ClaudeAcco
   }
   return out;
 }
+
+/**
+ * Dragging `id` onto `target` (before it, or after it with `after`): the new
+ * order and the one-step moves the kernel needs to get there. The kernel only
+ * swaps an account with its neighbour (`PUT …/accounts/:id {move}`), so the
+ * steps run over the whole list, disconnected accounts included — they hold
+ * their place in the rotation even though the live popover hides them.
+ */
+export function reorderSteps(order: string[], id: string, target: string, after: boolean): { order: string[]; steps: Array<"up" | "down"> } {
+  const from = order.indexOf(id);
+  if (from < 0 || id === target || !order.includes(target)) return { order, steps: [] };
+  const next = order.filter((x) => x !== id);
+  next.splice(next.indexOf(target) + (after ? 1 : 0), 0, id);
+  const to = next.indexOf(id);
+  return { order: to === from ? order : next, steps: Array(Math.abs(to - from)).fill(to < from ? "up" : "down") };
+}
