@@ -152,6 +152,12 @@ services:
       # onion key lives in the data volume, so the address survives restarts.
       KERNEL_TOR: ${KERNEL_TOR:-0}
       KERNEL_INSTANCE_NAME: ${KERNEL_INSTANCE_NAME:-}
+      # The address people open the dashboard at, when it is not this machine's
+      # localhost (e.g. https://kernl.example.com behind a tunnel). Google's
+      # consent screen sends the browser back there, so add
+      # <DASHBOARD_PUBLIC_URL>/auth/google/callback to the OAuth client's
+      # "Authorized redirect URIs" in Google Cloud.
+      DASHBOARD_PUBLIC_URL: ${DASHBOARD_PUBLIC_URL:-}
       # KERNEL_AUTH_TOKEN intentionally unset: the kernel generates a random
       # token on first boot and persists it to /app/data/.kernel-auth-token
       # (mode 600) in the kernel-data volume. Read it once and paste it into

@@ -23,6 +23,18 @@ export function googleClient(): GoogleClient {
   return c;
 }
 
+/**
+ * Where Google sends the browser back after consent: the dashboard's public URL when the instance is
+ * reached from another machine (DASHBOARD_PUBLIC_URL), `http://localhost:<port>` otherwise or when that
+ * URL is itself loopback. Must match google-sync's `dashboardRedirectUri`: both ride on one registered redirect.
+ */
+export function googleRedirectUri(dashboardPort: number, publicBase = process.env.DASHBOARD_PUBLIC_URL ?? ""): string {
+  let u: URL | null = null;
+  try { u = new URL(publicBase.trim()); } catch { u = null; }
+  const remote = u && (u.protocol === "http:" || u.protocol === "https:") && !["localhost", "127.0.0.1", "[::1]", "::1"].includes(u.hostname);
+  return remote && u ? `${`${u.origin}${u.pathname}`.replace(/\/+$/, "")}/auth/google/callback` : `http://localhost:${dashboardPort}/auth/google/callback`;
+}
+
 const TTL = 15 * 60_000;
 const pending = new Map<string, { projectId: string; at: number }>();
 

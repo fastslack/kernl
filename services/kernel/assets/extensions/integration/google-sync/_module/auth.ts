@@ -17,8 +17,27 @@ export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/webmasters.readonly",
 ];
 
-/** The redirect URI the Google Cloud OAuth client must list ("Authorized redirect URIs"). */
-export const dashboardRedirectUri = (dashboardPort: number) => `http://localhost:${dashboardPort}/auth/google/callback`;
+/**
+ * The redirect URI the Google Cloud OAuth client must list ("Authorized redirect URIs").
+ *
+ * Google sends the browser back to this address, so it has to be one the browser can reach: the
+ * dashboard's public URL (DASHBOARD_PUBLIC_URL) when the instance is reached from another machine,
+ * `http://localhost:<port>` otherwise. A loopback public URL keeps the localhost one, which is the
+ * address existing installs already registered. Same rule as the project link (projects/google-link.ts).
+ */
+export function dashboardRedirectUri(dashboardPort: number, publicBase = process.env.DASHBOARD_PUBLIC_URL ?? ""): string {
+  const base = publicDashboardBase(publicBase);
+  return base ? `${base}/auth/google/callback` : `http://localhost:${dashboardPort}/auth/google/callback`;
+}
+
+/** A non-loopback http(s) dashboard URL without its trailing slash, or "" when there is none. */
+export function publicDashboardBase(raw: string): string {
+  let u: URL;
+  try { u = new URL(raw.trim()); } catch { return ""; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return "";
+  if (["localhost", "127.0.0.1", "[::1]", "::1"].includes(u.hostname)) return "";
+  return `${u.origin}${u.pathname}`.replace(/\/+$/, "");
+}
 
 export class GoogleAuth {
   private callbackServer: Server | null = null;
