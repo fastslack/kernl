@@ -392,7 +392,9 @@ export function cinemaAgentDrivers(deps: CinemaDriverDeps): AgentDriver[] {
         // Without a public URL, peers can't fetch the bytes. We still
         // record local rows; the federation agent can re-broadcast later
         // once DASHBOARD_PUBLIC_URL is set.
-        const publicBase = (process.env.DASHBOARD_PUBLIC_URL ?? "").replace(/\/$/, "");
+        // A loopback URL (the .env.example default) is no address for a peer: same as unset.
+        const rawBase = (process.env.DASHBOARD_PUBLIC_URL ?? "").replace(/\/$/, "");
+        const publicBase = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(rawBase) ? "" : rawBase;
 
         let recorded = 0;
         let published = 0;

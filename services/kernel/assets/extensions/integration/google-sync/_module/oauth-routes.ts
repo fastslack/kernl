@@ -4,7 +4,7 @@
  * GET  /api/google/status       — Auth state + credential check + last sync info
  * POST /api/google/auth/start   — Returns the Google auth URL (redirect to Google)
  * GET  /auth/google/callback    — OAuth redirect handler (Google sends code here; a project's own
- *                                  Google link, Proyectos → Cuentas, goes back to the projects module)
+ *                                  Google link, Proyectos → Despliegue, goes back to the projects module)
  * POST /api/google/revoke       — Revoke stored tokens
  */
 
@@ -65,7 +65,7 @@ export function registerGoogleOAuthRoutes(
       return;
     }
 
-    // A project's own Google account (Proyectos → Cuentas) rides on this same registered redirect.
+    // A project's own Google account (Proyectos → Despliegue → Google) rides on this same registered redirect.
     if (projects.isGoogleLinkState(state)) {
       const r = await projects.completeGoogleLink(state, code);
       if (!r.ok) log.warn(`Google OAuth (project link): ${r.error}`);

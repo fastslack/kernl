@@ -10,7 +10,7 @@ import { DraftNotifier } from "./draft-notifier.js";
 import { placesTool } from "./places.js";
 import { outboxTools, projectTools, type RunLookup, type FlowOfAgent } from "./tools.js";
 import { ProjectAccountsService, deployEnvForRepo } from "./accounts.js";
-import { configureGoogleClient } from "./google-link.js";
+import { configureGoogleClient, googleRedirectUri } from "./google-link.js";
 import { registerProjectsRoutes, type ProjectsRouteDeps } from "./api-routes.js";
 
 /** data/projects/{slug}/ — each project's home (BRIEF.md, MEMORY.md, assets/). */
@@ -107,7 +107,7 @@ export function createProjectsModule(): ProjectsModule {
       configureGoogleClient(() => {
         const g = (ctx.config as unknown as { google?: { clientId?: string; clientSecret?: string } }).google;
         return g?.clientId && g.clientSecret
-          ? { clientId: g.clientId, clientSecret: g.clientSecret, redirectUri: `http://localhost:${ctx.config.dashboard.port}/auth/google/callback` }
+          ? { clientId: g.clientId, clientSecret: g.clientSecret, redirectUri: googleRedirectUri(ctx.config.dashboard.port) }
           : null;
       });
       connectorTimer = setInterval(() => {
