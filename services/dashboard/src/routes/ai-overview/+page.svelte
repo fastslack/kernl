@@ -6,13 +6,16 @@
     went, what today cost) with the ways in. Six tiles carry the numbers. Under
     them, three columns: what is running and what just ran; the offices by
     activity; the models of the last 7 days and the agents that need a look
-    (auto-paused, failing in a row, or a poor success rate). Every agent and
-    office opens where it lives (the 3D), so nothing here is a dead end.
+    (auto-paused, failing in a row, or a poor success rate). A click on an
+    agent or an office opens the 3D's own panel on the right, here; the chief's
+    office opens the same way to answer the questions waiting on the operator.
+    A modified click still follows the link to the 3D.
   */
   import { onDestroy, onMount } from 'svelte';
   import { skills, automations } from '$lib/stores.js';
   import { locale } from '$lib/i18n';
   import { PALETTE } from '$lib/components/bench/model.js';
+  import type WorldSidePanelsT from '../agents-flow/WorldSidePanels.svelte';
 
   interface Agent { id: string; name: string; flow_id?: string; active?: number; role?: string; consecutive_failures?: number; auto_paused_at?: string; auto_pause_reason?: string; model?: string }
   interface Flow { id: string; name: string; color: string; paused?: number; active?: number }
@@ -24,7 +27,7 @@
     es: {
       title: 'IA', working: '{n} agentes trabajando ahora', calm: 'Todo tranquilo: ningún agente trabajando ahora',
       success: 'éxito', recentRuns: 'de las últimas {n} corridas', failures: '{n} con error', today: 'hoy', tokens: 'tokens', cost: 'gastado hoy',
-      open3d: 'Abrir el 3D', newAgent: 'Nuevo agente', offices: 'Oficinas', evolutions: 'Evoluciones', skillsBtn: 'Skills',
+      open3d: 'Abrir el 3D', chief: 'Chief', chiefT: 'Preguntas que esperan tu respuesta', newAgent: 'Nuevo agente', offices: 'Oficinas', evolutions: 'Evoluciones', skillsBtn: 'Skills',
       kAgents: 'agentes activos', kOffices: 'oficinas encendidas', kSched: 'tareas programadas', kCost: 'gasto 7 días', kSkills: 'skills', kAuto: 'automatizaciones', of: 'de',
       live: 'En vivo', liveNone: 'Nadie está trabajando en este momento. Las oficinas arrancan solas según su agenda.',
       last: 'Últimas corridas', ok: 'terminó', failed: 'falló', running: 'trabajando', cancelled: 'cancelada',
@@ -36,7 +39,7 @@
     en: {
       title: 'AI', working: '{n} agents working right now', calm: 'All quiet: no agent working right now',
       success: 'success', recentRuns: 'of the last {n} runs', failures: '{n} failed', today: 'today', tokens: 'tokens', cost: 'spent today',
-      open3d: 'Open the 3D', newAgent: 'New agent', offices: 'Offices', evolutions: 'Evolutions', skillsBtn: 'Skills',
+      open3d: 'Open the 3D', chief: 'Chief', chiefT: 'Questions waiting on you', newAgent: 'New agent', offices: 'Offices', evolutions: 'Evolutions', skillsBtn: 'Skills',
       kAgents: 'active agents', kOffices: 'offices on', kSched: 'scheduled jobs', kCost: 'spend 7 days', kSkills: 'skills', kAuto: 'automations', of: 'of',
       live: 'Live', liveNone: 'Nobody is working right now. Offices start on their own schedule.',
       last: 'Latest runs', ok: 'done', failed: 'failed', running: 'working', cancelled: 'cancelled',
@@ -59,6 +62,21 @@
   let byDay: Array<{ key: string; costUsd: number; calls: number }> = [];
   let loaded = false;
   let now = Date.now();
+  /** The raw graph payload: the side panels read the same one the 3D does. */
+  let graph: any = null;
+
+  // The 3D's panels load on demand (they pull in the 3D's modules), right after the first paint.
+  let Panels: typeof WorldSidePanelsT | null = null;
+  let panels: WorldSidePanelsT | null = null;
+  let inbox = 0;
+  let pendingOpen: ((p: WorldSidePanelsT) => void) | null = null;
+  $: if (panels && pendingOpen) { const f = pendingOpen; pendingOpen = null; f(panels); }
+  /** A plain click opens the panel here; a modified one (new tab, …) follows the link to the 3D. */
+  function side(e: MouseEvent, f: (p: WorldSidePanelsT) => void) {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.preventDefault();
+    if (panels) f(panels); else pendingOpen = f;
+  }
 
   const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
   async function load() {
@@ -70,13 +88,14 @@
       fetch(`/api/llm/usage?from=${today}&to=${today}&group=model`).then((r) => r.json()).catch(() => ({ rows: [] })),
       fetch(`/api/llm/usage?from=${from}&to=${today}&group=day`).then((r) => r.json()).catch(() => ({ rows: [] })),
     ]);
+    graph = g;
     agents = g.agents ?? []; flows = g.flows ?? []; runs = g.recentRuns ?? []; stats = g.stats ?? {}; schedules = g.schedules ?? [];
     usage7 = u7.rows ?? []; usageToday = ut.rows ?? []; byDay = ud.rows ?? [];
     loaded = true;
   }
   let poll: ReturnType<typeof setInterval>;
   let tick: ReturnType<typeof setInterval>;
-  onMount(() => { void load(); poll = setInterval(load, 20_000); tick = setInterval(() => (now = Date.now()), 1000); });
+  onMount(() => { void import('../agents-flow/WorldSidePanels.svelte').then((m) => (Panels = m.default)); void load(); poll = setInterval(load, 20_000); tick = setInterval(() => (now = Date.now()), 1000); });
   onDestroy(() => { clearInterval(poll); clearInterval(tick); });
 
   // ── derived ──
@@ -160,6 +179,9 @@
     </div>
     <nav class="quick" aria-label="Accesos">
       <a class="q primary" href="/agents-flow"><span>◈</span>{tx.open3d}</a>
+      <a class="q chief" class:ask={inbox > 0} href="/agents-flow" title={tx.chiefT} on:click={(e) => side(e, (p) => p.openChief())}>
+        <span>✪</span>{tx.chief}{#if inbox > 0}<em class="badge num">{inbox}</em>{/if}
+      </a>
       <a class="q" href="/agents"><span>＋</span>{tx.newAgent}</a>
       <a class="q" href="/agents-flow?view=offices"><span>▦</span>{tx.offices}</a>
       <a class="q" href="/autogenesis"><span>⟲</span>{tx.evolutions}</a>
@@ -185,7 +207,7 @@
         <ul class="live">
           {#each liveRuns as r (r.id)}
             <li style="--oc: {colorOf(r.agent_id)}">
-              <a href="/agents-flow?agent={r.agent_id}">
+              <a href="/agents-flow?agent={r.agent_id}" on:click={(e) => side(e, (p) => p.openAgent(r.agent_id))}>
                 <span class="dot live"></span>
                 <span class="who"><b>{nameOf(r.agent_id)}</b><small>{officeOf(r.agent_id)}</small></span>
                 <span class="el num">{elapsed(r.started_at)}</span>
@@ -200,7 +222,7 @@
       <ul class="runs">
         {#each doneRuns.slice(0, 14) as r (r.id)}
           <li style="--sc: {ST[r.status] ?? '#94A3B8'}; --oc: {colorOf(r.agent_id)}">
-            <a href="/agents-flow?agent={r.agent_id}" title={clean(r.error || r.result).slice(0, 400)}>
+            <a href="/agents-flow?agent={r.agent_id}" on:click={(e) => side(e, (p) => p.openAgent(r.agent_id))} title={clean(r.error || r.result).slice(0, 400)}>
               <span class="dot"></span>
               <span class="who"><b>{nameOf(r.agent_id)}</b><small>{clean(r.error || r.result).slice(0, 90) || statusTxt(r.status)}</small></span>
               <span class="meta"><span class="num">{durTxt(dur(r))}</span><small>{since(r.completed_at || r.started_at)}</small></span>
@@ -216,7 +238,7 @@
       <ul class="offices">
         {#each officeRows as o (o.f.id)}
           <li class:off={!!o.f.paused} style="--oc: {o.f.color || '#94A3B8'}">
-            <a href="/agents-flow?office={o.f.id}">
+            <a href="/agents-flow?office={o.f.id}" on:click={(e) => side(e, (p) => p.openOffice(o.f.id))}>
               <span class="mark">{o.f.name.slice(0, 2).toUpperCase()}</span>
               <span class="who"><b>{o.f.name}</b><small>{fill(tx.agentsN, { n: o.members })}{o.f.paused ? ` · ${tx.paused}` : ''}</small></span>
               <span class="act"><i style="width: {(100 * o.recent) / maxRecent}%"></i></span>
@@ -256,7 +278,7 @@
         <ul class="attn">
           {#each attention as x (x.a.id)}
             <li class:hot={x.weight >= 2}>
-              <a href="/agents-flow?agent={x.a.id}"><span class="dot"></span><span class="who"><b>{x.a.name}</b><small>{x.why}</small></span><span class="go">›</span></a>
+              <a href="/agents-flow?agent={x.a.id}" on:click={(e) => side(e, (p) => p.openAgent(x.a.id))}><span class="dot"></span><span class="who"><b>{x.a.name}</b><small>{x.why}</small></span><span class="go">›</span></a>
             </li>
           {/each}
         </ul>
@@ -266,6 +288,9 @@
     </section>
   </div>
   {#if !loaded}<div class="loading" aria-hidden="true"></div>{/if}
+  {#if Panels}
+    <svelte:component this={Panels} bind:this={panels} {graph} on:refresh={load} on:inbox={(e) => (inbox = e.detail.count)} />
+  {/if}
 </div>
 
 <style>
@@ -294,13 +319,18 @@
   .facts .bad { color: #fda4af; }
   .hero.busy .ring .arc { animation: breathe 2.6s ease-in-out infinite; }
   @keyframes breathe { 50% { filter: drop-shadow(0 0 10px #34D399); } }
-  .quick { display: grid; grid-template-columns: repeat(5, auto); gap: 6px; }
+  .quick { display: grid; grid-template-columns: repeat(6, auto); gap: 6px; }
   .q { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 12px; min-width: 74px; border-radius: 11px; font-size: 11px; font-weight: 700; color: var(--text-2);
     background: color-mix(in srgb, var(--surface-2, #1f2230) 70%, transparent); border: 1px solid var(--border); transition: transform .15s, border-color .15s, color .15s; }
   .q span { font-size: 16px; color: #c4b5fd; }
   .q:hover { transform: translateY(-1px); color: var(--text-1); border-color: #A78BFA; }
   .q.primary { color: #0b1020; background: linear-gradient(135deg, #C4B5FD, #A78BFA); border-color: transparent; box-shadow: 0 8px 22px -12px #A78BFA; }
   .q.primary span { color: #0b1020; }
+  .q.chief { position: relative; }
+  .q.chief span { color: #e8c96a; }
+  .q.chief.ask { border-color: color-mix(in srgb, #F43F5E 55%, var(--border)); color: var(--text-1); }
+  .badge { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px;
+    display: grid; place-items: center; font: 800 10px/1 inherit; font-style: normal; color: #fff; background: #F43F5E; box-shadow: 0 0 10px -2px #F43F5E; }
 
   .tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
   .tile { display: flex; flex-direction: column; padding: 8px 12px; border-radius: 12px; min-width: 0;
@@ -371,7 +401,7 @@
   @media (max-height: 760px) { .hero { padding: 8px 14px; } .ring, .ring svg { width: 60px; height: 60px; } .htxt h1 { font-size: 18px; } .q { padding: 6px 9px; min-width: 64px; } .tile b { font-size: 18px; } .days { height: 48px; } }
   @media (max-width: 1100px) {
     .ai { height: auto; overflow: visible; }
-    .hero { grid-template-columns: auto 1fr; } .quick { grid-column: 1 / -1; grid-template-columns: repeat(5, 1fr); }
+    .hero { grid-template-columns: auto 1fr; } .quick { grid-column: 1 / -1; grid-template-columns: repeat(6, 1fr); }
     .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .cols { grid-template-columns: 1fr; } .card { max-height: 70vh; }
   }

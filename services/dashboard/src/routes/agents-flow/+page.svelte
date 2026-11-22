@@ -13,6 +13,7 @@
   import LearningLibrary from './LearningLibrary.svelte';
   import EngineRoom from './EngineRoom.svelte';
   import Constellation from './Constellation.svelte';
+  import WorldSidePanels from './WorldSidePanels.svelte';
   import OfficeDirectory from '$lib/components/office/OfficeDirectory.svelte';
   import OfficeRail from '$lib/components/office/OfficeRail.svelte';
   import CommandBar from '$lib/components/office/CommandBar.svelte';
@@ -341,6 +342,8 @@
   const NO_TOAST: ToastState = { message: '', kind: 'success', actionLabel: '', leadId: '' };
 
   let world: AgentWorld3D | null = null;
+  /** The world's agent and chief panels while the directory (no 3D) is shown. */
+  let sidePanels: WorldSidePanels | null = null;
   let rail: OfficeRail | null = null;
   let wizardOpen = false;
   let panelOfficeId: string | null = null;
@@ -585,6 +588,7 @@
 
   function openPanel(flowId: string) {
     world?.closeRightPanels();
+    sidePanels?.close();
     panelOfficeId = flowId;
     activityOpen = false;
     world?.selectAgent(null);
@@ -930,9 +934,10 @@
           <OfficeDirectory model={railModel} loading={!dataLoaded} error={dataError} inbox={inboxCount} {powerBusy}
             on:select={(e) => openPanel(e.detail.id)}
             on:power={(e) => setOfficePower(e.detail.id, e.detail.paused)}
-            on:headquarters={() => enterWorld(() => world?.openHeadquartersInbox())}
-            on:agent={(e) => enterWorld(() => world?.focusAgentById(e.detail.id))}
+            on:headquarters={() => { panelOfficeId = null; sidePanels?.openChief(); }}
+            on:agent={(e) => { panelOfficeId = null; sidePanels?.openAgent(e.detail.id); }}
             on:retry={refresh} />
+          <WorldSidePanels bind:this={sidePanels} graph={graphData} on:refresh={refresh} on:inbox={(e) => (inboxCount = e.detail.count)} />
         {/if}
         <OfficePanel
           open={!!panelOffice}
@@ -952,7 +957,7 @@
           initialPanelView={panelInitialView}
           on:close={() => { panelOfficeId = null; panelInitialView = null; }}
           on:changed={refresh}
-          on:agentopen={(e) => { panelOfficeId = null; world?.focusAgentById(e.detail.id); }}
+          on:agentopen={(e) => { panelOfficeId = null; if (directoryView) sidePanels?.openAgent(e.detail.id); else world?.focusAgentById(e.detail.id); }}
           on:deleted={onOfficeDeleted}
         />
         <ActivityPanel

@@ -66,6 +66,7 @@
   import RegisterRepoModal from './RegisterRepoModal.svelte';
   import EmailModal from './EmailModal.svelte';
   import DraftModal from './DraftModal.svelte';
+  import './panel-globals.css';
   import BootLoader from './BootLoader.svelte';
   import MeetingPanels from './MeetingPanels.svelte';
   import MyOfficePanel from './MyOfficePanel.svelte';
@@ -5276,10 +5277,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .fb{position:absolute;inset:0;z-index:30;display:flex;align-items:center;justify-content:center;gap:8px;background:#0d0f18;font:400 12px 'Manrope',sans-serif;color:#8a8fa8}
   .fb-icon{font-size:20px;color:#d4a84b}
 
-  /* Containers that host a <CopyTextBtn /> overlay. The component positions
-     itself absolutely in the top-right corner and fades in on hover. */
-  :global(.copy-wrap){position:relative}
-
   /* Skip chip while a construction crew builds a new office. */
   .construction-skip{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);z-index:12;
     padding:7px 16px;border-radius:999px;cursor:pointer;
@@ -5289,67 +5286,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .construction-skip:hover{color:#ffe7a8;border-color:#f2b705}
   .construction-skip:focus-visible{outline:2px solid #f2b705;outline-offset:2px}
 
-  /* ── Markdown output (run.result / step.content) ──
-     Global, so it styles every `.ip-out-md` pane — the drawer's, My Office's
-     and the meeting panels' — from here. Each of those components carries its
-     own scoped `.ip-out-md` box rule. */
-  :global(.ip-out-md .md-h){font:700 13px 'Syne',sans-serif;color:#e5e8f0;margin:12px 0 5px;letter-spacing:.3px}
-  :global(.ip-out-md h3.md-h){font-size:14.5px;color:#fff}
-  :global(.ip-out-md h4.md-h){font-size:13px;color:#e5e8f0}
-  :global(.ip-out-md h5.md-h){font-size:12px;color:#c8ccd8;text-transform:uppercase;letter-spacing:.6px}
-  :global(.ip-out-md .md-p){margin:6px 0}
-  :global(.ip-out-md .md-ul),
-  :global(.ip-out-md .md-ol){margin:4px 0 4px 18px;padding:0}
-  :global(.ip-out-md .md-ul li),
-  :global(.ip-out-md .md-ol li){margin:2px 0}
-  :global(.ip-out-md strong){color:#fff;font-weight:600}
-  :global(.ip-out-md em){color:#c8ccd8;font-style:italic}
-  :global(.ip-out-md .md-code){
-    font:500 10px 'JetBrains Mono',monospace;
-    background:rgba(120,130,160,.14);color:#e0e4f0;padding:1px 5px;border-radius:3px;
-  }
-  :global(.ip-out-md .md-codeblock){
-    font:500 10px/1.55 'JetBrains Mono',monospace;
-    background:rgba(0,0,0,.38);color:#d8dcea;
-    border:1px solid rgba(120,130,160,.18);border-radius:6px;
-    padding:8px 10px;margin:6px 0;
-    white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;
-    max-height:320px;overflow-y:auto;
-    scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
-  }
-  :global(.ip-out-md .md-trunc-hint){
-    margin:8px 0 2px;padding:6px 10px;
-    font:500 10px/1.4 'JetBrains Mono',monospace;
-    color:#c9a84c;background:rgba(201,168,76,.08);
-    border:1px dashed rgba(201,168,76,.35);border-radius:5px;
-    letter-spacing:.2px;
-  }
-  :global(.ip-out-md .md-envelope){
-    margin-top:10px; border:1px solid rgba(120,130,160,.18);
-    border-radius:5px; background:rgba(255,255,255,.02);
-  }
-  :global(.ip-out-md .md-envelope > summary){
-    cursor:pointer; padding:5px 10px; font:600 9px 'JetBrains Mono',monospace;
-    color:#7e84a3; letter-spacing:.7px; text-transform:uppercase;
-    list-style:none;
-  }
-  :global(.ip-out-md .md-envelope > summary::-webkit-details-marker){display:none;}
-  :global(.ip-out-md .md-envelope > summary::before){content:'▸  ';color:#5a5f7a;}
-  :global(.ip-out-md .md-envelope[open] > summary::before){content:'▾  ';}
-  :global(.ip-out-md .md-envelope > summary:hover){color:#cbd0e8;}
-  :global(.ip-out-md .md-envelope[open]){background:rgba(255,255,255,.04);}
-  :global(.ip-out-md .md-envelope > .md-codeblock){margin:0;border:none;border-top:1px solid rgba(120,130,160,.12);border-radius:0;}
-  :global(.ip-out-md a){color:#8ab4ff;text-decoration:underline;text-underline-offset:2px}
-  :global(.ip-out-md a:hover){color:#b3cfff}
-  :global(.ip-out-md .ip-uuid-link){
-    display:inline-flex;align-items:center;gap:4px;
-    font:600 10px 'JetBrains Mono',monospace;
-    padding:1px 6px;margin:0 1px;border-radius:4px;
-    background:rgba(99,102,241,.18);border:1px solid rgba(99,102,241,.38);color:#a4a8ff;
-    cursor:pointer;transition:all .12s;
-  }
-  :global(.ip-out-md .ip-uuid-link::before){content:'📄';font-size:9px;filter:saturate(.7)}
-  :global(.ip-out-md .ip-uuid-link:hover){background:rgba(99,102,241,.32);border-color:#8b8cf6;color:#d8daff}
   /* Floating toast that confirms a "send to fixer" dispatch after the
      report modal closes. Anchored top-center to stay clear of the HQ bar. */
   .fixer-toast{
