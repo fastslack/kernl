@@ -41,6 +41,7 @@ import { AgentFeedbackService } from "./services/feedback-service.js";
 import { OfficeTeamError, DISTRIBUTE_CHAIN_LABEL, TOP_RANK_IDS_SQL } from "./office-team.js";
 import { protectedReason, ProtectedAgentError } from "./protected-agents.js";
 import { CLAUDE_ACCESS_WAITING, CLAUDE_LIMIT_WAITING } from "../../sdk/claude-access.js";
+import { listAgentsBusy } from "../../sdk/agent-busy.js";
 import { DecisionService, type Suggestion } from "./services/decisions-service.js";
 import { EnvFactsService, type EnvFact } from "./services/env-facts-service.js";
 import { SubjectHoldsService, type HoldKind, type SubjectHold } from "./services/subject-holds-service.js";
@@ -2171,6 +2172,8 @@ export class AgentService {
     stats: Record<string, { total_runs: number; completed: number; failed: number; success_rate: number }>;
     flows: AgentFlow[];
     ranks: AgentRank[];
+    /** Agents busy on work that is not a run of theirs (sdk/agent-busy.ts), by id, with what they are on. */
+    busy: Array<{ agent_id: string; tag: string; title: string }>;
   } {
     // Include inactive agents so the 3D can render pending-approval ones
     // dimmed instead of hiding them entirely. The frontend differentiates
@@ -2217,7 +2220,14 @@ export class AgentService {
 
     const flows = this.listFlows();
     const ranks = this.listRanks();
-    return { agents, chains, triggers, schedules, recentRuns, stats, flows, ranks };
+    // Reported by id or by slug; the dashboard knows agents by id.
+    const byKey = new Map<string, string>();
+    for (const a of agents as Array<Agent & { slug?: string | null }>) { byKey.set(a.id, a.id); if (a.slug) byKey.set(a.slug, a.id); }
+    const busy = listAgentsBusy().flatMap((b) => {
+      const id = byKey.get(b.agent);
+      return id ? [{ agent_id: id, tag: b.tag ?? "", title: b.title ?? "" }] : [];
+    });
+    return { agents, chains, triggers, schedules, recentRuns, stats, flows, ranks, busy };
   }
 
   // ── Prompt version lineage (Autogenesis RSPL) ──────────

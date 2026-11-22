@@ -79,6 +79,8 @@
     stats: Record<string, StatsData>;
     flows: FlowData[];
     ranks: RankData[];
+    /** Agents busy on work that is not a run of theirs (a DevOps ticket's checks on the host); absent on older kernels. */
+    busy?: Array<{ agent_id: string; tag: string; title: string }>;
   }
   // ── Constants ──────────────────────────────────
   const PALETTE = [
@@ -172,6 +174,9 @@
   $: triggers = graphData?.triggers ?? [];
   $: schedules = graphData?.schedules ?? [];
   $: runs = graphData?.recentRuns ?? [];
+  // Their run ended but the work goes on for them (tests, a preview, end-to-end checks): counted as working, or an
+  // office in full swing read "0 working".
+  $: busyAgents = graphData?.busy ?? [];
   $: stats = graphData?.stats ?? {};
   $: todayRuns = runs.filter(r => (r.created_at || '').startsWith(new Date().toISOString().slice(0, 10))).length;
   $: runningAgents = new Set(runs.filter(r => r.status === 'running').map(r => r.agent_id));
@@ -298,9 +303,12 @@
     for (const r of runs) {
       if (r.status === 'running' && r.goal && !out.has(r.agent_id)) out.set(r.agent_id, goalBadge(r.goal));
     }
+    for (const b of busyAgents) {
+      if (!out.has(b.agent_id) && (b.tag || b.title)) out.set(b.agent_id, { tag: b.tag, title: b.title });
+    }
     return out;
   })();
-  $: effectiveRunning = new Set([...runningAgents, ...liveRunningAgents,
+  $: effectiveRunning = new Set([...runningAgents, ...liveRunningAgents, ...busyAgents.map(b => b.agent_id),
       ...(hostResolverId ? [hostResolverId] : []), ...(hostDeployerId ? [hostDeployerId] : [])]);
 
   // ── Fetch ──────────────────────────────────────
