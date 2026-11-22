@@ -162,6 +162,8 @@
 </script>
 
 <div class="ai">
+  <!-- The page scrolls inside .body when it does not fit (narrow screens); the side panels stay docked to .ai's visible box. -->
+  <div class="body">
   <!-- ── hero ── -->
   <section class="hero" class:busy={liveRuns.length > 0}>
     <div class="ring" aria-label="{okRate ?? '—'}% {tx.success}">
@@ -287,6 +289,7 @@
       {/if}
     </section>
   </div>
+  </div>
   {#if !loaded}<div class="loading" aria-hidden="true"></div>{/if}
   {#if Panels}
     <svelte:component this={Panels} bind:this={panels} {graph} on:refresh={load} on:inbox={(e) => (inbox = e.detail.count)} />
@@ -295,7 +298,8 @@
 
 <style>
   /* One screen: hero, tiles and three columns that share the height; each column scrolls inside if it must. */
-  .ai { height: 100%; min-height: 0; box-sizing: border-box; padding: 12px 18px 14px; display: flex; flex-direction: column; gap: 10px; overflow: hidden; position: relative; }
+  .ai { height: 100%; min-height: 0; overflow: hidden; position: relative; }
+  .body { height: 100%; min-height: 0; box-sizing: border-box; padding: 12px 18px 14px; display: flex; flex-direction: column; gap: 10px; }
   .num { font-variant-numeric: tabular-nums; }
   a { color: inherit; text-decoration: none; }
 
@@ -399,10 +403,27 @@
   @keyframes shimmer { to { background-position: -200% 0; } }
   @media (prefers-reduced-motion: reduce) { .dot.live, .hero.busy .ring .arc, .loading { animation: none; } }
   @media (max-height: 760px) { .hero { padding: 8px 14px; } .ring, .ring svg { width: 60px; height: 60px; } .htxt h1 { font-size: 18px; } .q { padding: 6px 9px; min-width: 64px; } .tile b { font-size: 18px; } .days { height: 48px; } }
+  /* Narrow: one column that scrolls; every card takes its content's height, capped, and scrolls its own list. */
   @media (max-width: 1100px) {
-    .ai { height: auto; overflow: visible; }
-    .hero { grid-template-columns: auto 1fr; } .quick { grid-column: 1 / -1; grid-template-columns: repeat(6, 1fr); }
+    .body { overflow-y: auto; overscroll-behavior: contain; }
+    .hero { grid-template-columns: auto minmax(0, 1fr); } .quick { grid-column: 1 / -1; grid-template-columns: repeat(6, minmax(0, 1fr)); }
+    .q { min-width: 0; }
     .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    .cols { grid-template-columns: 1fr; } .card { max-height: 70vh; }
+    .cols { flex: none; grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-auto-rows: auto; }
+    .card { max-height: 70vh; }
+    .live { max-height: 30vh; }
+    .runs, .offices, .attn { flex: 0 1 auto; }
+  }
+  @media (max-width: 700px) {
+    .body { padding: 10px 12px 12px; }
+    .hero { padding: 10px 12px; gap: 12px; }
+    .ring, .ring svg { width: 60px; height: 60px; }
+    .htxt h1 { font-size: 17px; }
+    .quick { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .tile b { font-size: 19px; }
+    .offices li a { grid-template-columns: 26px minmax(0, 1fr) auto; }
+    .offices .act { display: none; }
+    .models li { grid-template-columns: minmax(0, 1fr) 48px auto; }
   }
 </style>
