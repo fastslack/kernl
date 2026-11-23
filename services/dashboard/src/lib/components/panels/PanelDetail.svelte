@@ -104,6 +104,8 @@
   // The stages the record goes through, when the view lists them: where it is, what it went past.
   $: stageField = view.order?.length ? chips.find((f) => view.order?.includes(f.text)) ?? null : null;
   $: stageAt = stageField ? (view.order ?? []).indexOf(stageField.text) : -1;
+  // The stage already reads in the stepper: its chip is not repeated in the head.
+  $: headChips = stageField && stageAt >= 0 ? chips.filter((f) => f !== stageField) : chips;
 
   const alertTone = (key: string): string | null =>
     /error|fail|fallo/i.test(key) ? RED : /question|pregunta|feedback|blocked|bloque/i.test(key) ? '#FBBF24' : null;
@@ -171,6 +173,8 @@
     pause: 'M9 5v14M15 5v14', resume: 'M8 5l11 7-11 7z',
     unblock: 'M7 11V8a5 5 0 0 1 9.6-2M5 11h14v9H5z', to: 'M4 12h12m-4-5 5 5-5 5M20 5v14',
   };
+  /** Holding and unblocking read by their verb alone ("Pausar este issue" → "Pausar"); the full label is the tooltip. */
+  const shortLabel = (x: Act, label: string) => ((GROUP[x.verb] ?? 3) === 1 || (GROUP[x.verb] ?? 3) === 2 ? label.split(/\s+/)[0] : label);
   const actHue = (x: Act) => (x.verb === 'unblock' ? '#34D399' : x.verb === 'pause' ? '#FBBF24' : x.verb === 'resume' ? '#22D3EE' : GROUP[x.verb] === 0 ? '#A78BFA' : hueOf(x.id));
 
   let busy = '';
@@ -209,10 +213,24 @@
   const go = (k: string) => { if (k) dispatch('open', k); };
 
   let root: HTMLElement;
+  // ---- the stages, zoomed: every name, one above the line and the next below
+  let zoom = false;
+  $: if (polled) zoom = false;
+  /** Mounts the zoomed view on <body>: the drawer around the panel clips and transforms what is inside it. */
+  /** The current stage, scrolled to the middle when the track is wider than the card. */
+  function centerIf(node: HTMLElement, on: boolean) {
+    if (on) requestAnimationFrame(() => node.scrollIntoView({ inline: 'center', block: 'nearest' }));
+  }
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return { destroy() { node.remove(); } };
+  }
+
   function onKey(e: KeyboardEvent) {
     if (!root?.isConnected || e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target as HTMLElement | null;
     if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    if (zoom) { if (e.key === 'Escape') { zoom = false; e.preventDefault(); e.stopPropagation(); } return; }
     if (e.key === 'Escape' && rowKey) { if (confirming) confirming = ''; else if (openAction) openAction = null; else dispatch('back'); e.preventDefault(); return; }
     if (e.key === 'ArrowLeft' && prevKey) { go(prevKey); e.preventDefault(); return; }
     if (e.key === 'ArrowRight' && nextKey) { go(nextKey); e.preventDefault(); return; }
@@ -224,89 +242,128 @@
   }
 </script>
 
-<svelte:window on:keydown={onKey} />
+<!-- Capture: Escape on the zoomed stages must reach here before the drawer around the panel closes. -->
+<svelte:window on:keydown|capture={onKey} />
 
 <div class="pd" bind:this={root}>
-  {#if rowKey}
-    <nav class="pd-nav">
-      <button class="pd-back" type="button" on:click={() => dispatch('back')} aria-label={en ? 'Back' : 'Volver'} title={en ? 'Back (Esc)' : 'Volver (Esc)'}>
-        <Icon name="arrow-l" size={15} />
-      </button>
-      <button class="pd-key" type="button" on:click={() => copy(rowKey ?? '', '__key')} title={en ? 'Copy' : 'Copiar'}>
-        <span>{rowKey}</span>{#if copied === '__key'}<Icon name="check" size={12} />{/if}
-      </button>
-      {#if siblings.length > 1 && at >= 0}
-        <div class="pd-walk">
-          <button type="button" disabled={!prevKey} on:click={() => go(prevKey)} aria-label={en ? 'Previous' : 'Anterior'} title="←"><Icon name="arrow-l" size={13} /></button>
-          <span>{at + 1} <small>/ {siblings.length}</small></span>
-          <button type="button" class="pd-next" disabled={!nextKey} on:click={() => go(nextKey)} aria-label={en ? 'Next' : 'Siguiente'} title="→"><Icon name="arrow-l" size={13} /></button>
-        </div>
-      {/if}
-    </nav>
-  {/if}
+  <!-- Everything you act on stays in one block on top, pinned while the record scrolls under it. -->
+  <div class="pd-top" class:pinned={!!rowKey}>
+    {#if rowKey || headChips.length || flags.length || links.length}
+      <div class="pd-line">
+        {#if rowKey}
+          <button class="pd-back" type="button" on:click={() => dispatch('back')} aria-label={en ? 'Back' : 'Volver'} title={en ? 'Back (Esc)' : 'Volver (Esc)'}>
+            <Icon name="arrow-l" size={14} />
+          </button>
+          <button class="pd-key" type="button" on:click={() => copy(rowKey ?? '', '__key')} title={en ? 'Copy' : 'Copiar'}>
+            <span>{rowKey}</span>{#if copied === '__key'}<Icon name="check" size={11} />{/if}
+          </button>
+        {/if}
+        {#each headChips as f (f.key)}
+          <span class="pd-chip" style="--tone:{tone(f.text)}" title={f.label}><i aria-hidden="true"></i>{chipText(f)}</span>
+        {/each}
+        {#each flags as f (f.key)}
+          <span class="pd-chip pd-chip--flag" class:live={isLive(f.key)} style="--tone:{isLive(f.key) ? tone('working') : /held|paus|hold/i.test(f.key) ? '#FBBF24' : hueOf(f.key)}"><i aria-hidden="true"></i>{f.label}</span>
+        {/each}
+        {#each links as f (f.key)}
+          <a class="pd-btnlink" href={hrefOf('url', f.text)} target="_blank" rel="noopener noreferrer" title={f.text} style="--hue:{hueOf(f.key)}">
+            <Icon name="globe" size={12} />{f.label}<span aria-hidden="true">↗</span>
+          </a>
+        {/each}
+        {#if rowKey && siblings.length > 1 && at >= 0}
+          <div class="pd-walk">
+            <button type="button" disabled={!prevKey} on:click={() => go(prevKey)} aria-label={en ? 'Previous' : 'Anterior'} title="←"><Icon name="arrow-l" size={12} /></button>
+            <span>{at + 1}<small>/{siblings.length}</small></span>
+            <button type="button" class="pd-next" disabled={!nextKey} on:click={() => go(nextKey)} aria-label={en ? 'Next' : 'Siguiente'} title="→"><Icon name="arrow-l" size={12} /></button>
+          </div>
+        {/if}
+      </div>
+    {/if}
 
-  {#if title || chips.length || flags.length || links.length}
-    <header class="pd-head">
-      {#if title}<h3 class="pd-title">{title.text}</h3>{/if}
-      {#if chips.length || flags.length}
-        <div class="pd-chips">
-          {#each chips as f (f.key)}
-            <span class="pd-chip" style="--tone:{tone(f.text)}" title={f.label}><i aria-hidden="true"></i>{chipText(f)}</span>
-          {/each}
-          {#each flags as f (f.key)}
-            <span class="pd-chip pd-chip--flag" class:live={isLive(f.key)} style="--tone:{isLive(f.key) ? tone('working') : /held|paus|hold/i.test(f.key) ? '#FBBF24' : hueOf(f.key)}"><i aria-hidden="true"></i>{f.label}</span>
-          {/each}
-        </div>
-      {/if}
-      {#if links.length}
-        <div class="pd-links">
-          {#each links as f (f.key)}
-            <a class="pd-btnlink" href={hrefOf('url', f.text)} target="_blank" rel="noopener noreferrer" title={f.text} style="--hue:{hueOf(f.key)}">
-              <Icon name="globe" size={13} />{f.label}<span aria-hidden="true">↗</span>
-            </a>
-          {/each}
-        </div>
-      {/if}
-    </header>
-  {/if}
+    {#if title}<h3 class="pd-title" title={title.text}>{title.text}</h3>{/if}
 
-  {#if error}<p class="pd-err" role="alert">{error}</p>{/if}
-  {#if !row && !error}<div class="pd-skel" aria-hidden="true"><span></span><span></span><span></span></div>{/if}
+    {#if (stageField && stageAt >= 0) || acts.length}
+      <div class="pd-ctl">
+        {#if stageField && stageAt >= 0}
+          {@const order = view.order ?? []}
+          <!-- The compact stepper opens its full, labelled view on click (or Enter/Space). -->
+          <div class="pd-stage" style="--tone:{tone(stageField.text)}" role="button" tabindex="0"
+            aria-label={`${stageField.label}: ${humanize(stageField.text)} (${stageAt + 1}/${order.length}). ${en ? 'Show every stage' : 'Ver todas las etapas'}`}
+            title={en ? 'Show every stage' : 'Ver todas las etapas'}
+            on:click={() => (zoom = true)} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); zoom = true; } }}>
+            <span class="pd-stage-now"><i aria-hidden="true"></i>{humanize(stageField.text)}<small>{stageAt + 1}/{order.length}</small></span>
+            <ol class="pd-steps" aria-hidden="true">
+              {#each order as st, i (st)}
+                <li class:past={i < stageAt} class:now={i === stageAt} style="--tone:{tone(st)}"><i></i></li>
+              {/each}
+            </ol>
+            <span class="pd-stage-zoom" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5" /><path d="m20 20-4.2-4.2M11 8.5v5M8.5 11h5" /></svg>
+            </span>
+          </div>
+          {#if zoom}
+            <div class="pd-zoom" use:portal role="presentation" on:click|self={() => (zoom = false)}>
+              <div class="pd-zoom-card" role="dialog" aria-modal="true" aria-label={stageField.label} style="--n:{order.length}">
+                <header class="pd-zoom-head">
+                  <h4>{stageField.label}</h4>
+                  <span class="pd-stage-now" style="--tone:{tone(stageField.text)}"><i aria-hidden="true"></i>{humanize(stageField.text)}<small>{stageAt + 1}/{order.length}</small></span>
+                  <button type="button" class="pd-zoom-x" on:click={() => (zoom = false)} aria-label={en ? 'Close' : 'Cerrar'} title={en ? 'Close (Esc)' : 'Cerrar (Esc)'}>
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
+                  </button>
+                </header>
+                <div class="pd-zoom-scroll">
+                  <ol class="pd-zoom-steps">
+                    {#each order as st, i (st)}
+                      <li class:past={i < stageAt} class:now={i === stageAt} class:up={i % 2 === 0} style="--tone:{tone(st)}" use:centerIf={i === stageAt}>
+                        <span class="pd-zl" title={humanize(st)}><b>{i + 1}</b>{humanize(st)}</span>
+                        <i aria-hidden="true">{#if i < stageAt}<svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10" /></svg>{/if}</i>
+                      </li>
+                    {/each}
+                  </ol>
+                </div>
+                <footer class="pd-zoom-legend">
+                  <span><i class="lg-past"></i>{en ? 'Done' : 'Hecha'}</span>
+                  <span><i class="lg-now" style="--tone:{tone(stageField.text)}"></i>{en ? 'Now' : 'Ahora'}</span>
+                  <span><i class="lg-next"></i>{en ? 'Next' : 'Pendiente'}</span>
+                </footer>
+              </div>
+            </div>
+          {/if}
+        {/if}
 
-  {#if stageField && stageAt >= 0}
-    <ol class="pd-steps" aria-label={stageField.label}>
-      {#each view.order ?? [] as st, i (st)}
-        <li class:past={i < stageAt} class:now={i === stageAt} style="--tone:{tone(st)}" title={humanize(st)}>
-          <i aria-hidden="true"></i><span>{humanize(st)}</span>
-        </li>
-      {/each}
-    </ol>
-  {/if}
+        {#if acts.length}
+          <div class="pd-bar-acts" role="toolbar" aria-label={en ? 'Actions' : 'Acciones'}>
+            {#each groups as g, gi (gi)}
+              <div class="pd-grp">
+                {#each g as x (x.id)}
+                  {@const label = textOf(x.a.label, $locale)}
+                  <button type="button" class="pd-act" class:icon={GROUP[x.verb] === 0 && confirming !== x.id} class:on={openAction === x.id} class:ask={confirming === x.id} class:busy={busy === x.id}
+                    disabled={x.disabled || (!!busy && busy !== x.id)} style="--hue:{actHue(x)}" on:click={() => act(x)}
+                    aria-label={label} aria-keyshortcuts={x.hotkey ? String(x.hotkey) : undefined}
+                    title={x.disabled ? `${label} · ${en ? 'does nothing on this one now' : 'no aplica ahora'}` : x.hotkey ? `${label} (${x.hotkey})` : label}>
+                    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d={GLYPH[x.verb] ?? 'M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5z'} /></svg>
+                    <span class="pd-act-l">{confirming === x.id ? textOf(x.a.confirm, $locale) || (en ? 'Sure?' : '¿Seguro?') : shortLabel(x, label)}</span>
+                    {#if x.hotkey && !x.disabled}<kbd aria-hidden="true">{x.hotkey}</kbd>{/if}
+                  </button>
+                {/each}
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
 
-  {#if acts.length}
-    <div class="pd-bar-acts" role="toolbar" aria-label={en ? 'Actions' : 'Acciones'}>
-      {#each groups as g, gi (gi)}
-        <div class="pd-grp">
-          {#each g as x (x.id)}
-            <button type="button" class="pd-act" class:on={openAction === x.id} class:ask={confirming === x.id} class:busy={busy === x.id}
-              disabled={x.disabled || (!!busy && busy !== x.id)} style="--hue:{actHue(x)}" on:click={() => act(x)}
-              title={x.disabled ? (en ? 'Does nothing on this one now' : 'No aplica ahora') : x.hotkey ? `${textOf(x.a.label, $locale)} (${x.hotkey})` : textOf(x.a.label, $locale)}>
-              <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d={GLYPH[x.verb] ?? 'M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5z'} /></svg>
-              <span>{confirming === x.id ? textOf(x.a.confirm, $locale) || (en ? 'Sure?' : '¿Seguro?') : textOf(x.a.label, $locale)}</span>
-              {#if x.hotkey && !x.disabled}<kbd>{x.hotkey}</kbd>{/if}
-            </button>
-          {/each}
-        </div>
-      {/each}
-    </div>
     {#if toast}
       <p class="pd-toast" class:ok={toast.ok} role="status"><Icon name={toast.ok ? 'check' : 'alert'} size={13} />{toast.text}</p>
     {/if}
     {#if openAction && spec.actions?.[openAction]}
-      {#key `${rowKey}:${openAction}`}<PanelForm {flowId} actionId={openAction} action={spec.actions[openAction]} preset={rowKey ? { key: rowKey } : {}} />{/key}
+      <div class="pd-form">
+        {#key `${rowKey}:${openAction}`}<PanelForm {flowId} actionId={openAction} action={spec.actions[openAction]} preset={rowKey ? { key: rowKey } : {}} />{/key}
+      </div>
     {/if}
-  {/if}
+  </div>
 
+  {#if error}<p class="pd-err" role="alert">{error}</p>{/if}
+  {#if !row && !error}<div class="pd-skel" aria-hidden="true"><span></span><span></span><span></span></div>{/if}
   <div class="pd-grid" class:solo={!numbers.length && !plain.length && !tags.length && !contact.length}>
     <div class="pd-main">
       {#each alerts as f (f.key)}
@@ -462,107 +519,135 @@
 </div>
 
 <style>
-  .pd { display: flex; flex-direction: column; gap: 12px; font-family: 'Manrope', sans-serif; container-type: inline-size; }
+  .pd { display: flex; flex-direction: column; gap: 10px; font-family: 'Manrope', sans-serif; container-type: inline-size; }
 
-  /* ---- top line: back, key, walk */
-  .pd-nav { display: flex; align-items: center; gap: 8px; }
+  /* ---- the command block: one line of identity, the title, one line of control. Pinned on an opened record. */
+  .pd-top { display: flex; flex-direction: column; gap: 7px; }
+  .pd-top.pinned {
+    position: sticky; top: -4px; z-index: 4; margin: -4px -6px 0; padding: 6px 6px 9px;
+    background: color-mix(in srgb, var(--surface-1) 94%, transparent); backdrop-filter: blur(10px);
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  }
+  .pd-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
   .pd-back {
-    flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; cursor: pointer;
+    flex: none; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; cursor: pointer;
     color: #22D3EE; background: color-mix(in srgb, #22D3EE 12%, var(--surface-2)); border: 1px solid color-mix(in srgb, #22D3EE 40%, var(--border));
     transition: transform .2s ease-out, box-shadow .2s, background .2s;
   }
   .pd-back:hover { transform: translateX(-2px); background: color-mix(in srgb, #22D3EE 22%, var(--surface-2)); box-shadow: 0 8px 18px -12px #22D3EE; }
   .pd-key {
-    display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 7px; cursor: copy;
-    font: 700 12px ui-monospace, 'JetBrains Mono', monospace; color: var(--text-1);
-    background: var(--surface-1); border: 1px solid var(--border);
+    display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border-radius: 7px; cursor: copy;
+    font: 700 11.5px ui-monospace, 'JetBrains Mono', monospace; color: var(--text-1);
+    background: var(--surface-2); border: 1px solid var(--border);
   }
   .pd-key :global(svg) { color: #34D399; }
   .pd-key:hover { border-color: color-mix(in srgb, #22D3EE 50%, var(--border)); }
-  .pd-walk { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; padding: 2px; border-radius: 9px; background: color-mix(in srgb, var(--surface-1) 70%, #000); border: 1px solid var(--border); }
-  .pd-walk span { padding: 0 8px; font: 800 12px 'Manrope', sans-serif; color: var(--text-1); font-variant-numeric: tabular-nums; }
+  .pd-walk { margin-left: auto; display: inline-flex; align-items: center; gap: 1px; padding: 1px; border-radius: 8px; background: color-mix(in srgb, var(--surface-1) 70%, #000); border: 1px solid var(--border); }
+  .pd-walk span { padding: 0 5px; font: 800 11.5px 'Manrope', sans-serif; color: var(--text-1); font-variant-numeric: tabular-nums; }
   .pd-walk small { color: var(--text-3, var(--text-2)); font-weight: 600; }
-  .pd-walk button { display: grid; place-items: center; width: 26px; height: 24px; border: 0; border-radius: 7px; cursor: pointer; background: transparent; color: var(--text-2); }
+  .pd-walk button { display: grid; place-items: center; width: 24px; height: 22px; border: 0; border-radius: 6px; cursor: pointer; background: transparent; color: var(--text-2); }
   .pd-walk button:hover:not(:disabled) { background: var(--surface-2); color: var(--text-1); }
   .pd-walk button:disabled { opacity: .3; cursor: default; }
   .pd-walk .pd-next :global(svg) { transform: scaleX(-1); }
   .pd-back:focus-visible, .pd-key:focus-visible, .pd-walk button:focus-visible { outline: 2px solid #22D3EE; outline-offset: 2px; }
 
-  /* ---- head */
-  .pd-head { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-  .pd-title { margin: 0; font: 800 18px/1.3 var(--font-display, 'Manrope'), sans-serif; color: var(--text-1); overflow-wrap: anywhere; }
+  .pd-title {
+    margin: 0; font: 800 15.5px/1.3 var(--font-display, 'Manrope'), sans-serif; color: var(--text-1); overflow-wrap: anywhere;
+    display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
   .pd-chips, .pd-links { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .pd-chip {
-    display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; white-space: nowrap;
-    font: 800 10px 'Manrope', sans-serif; text-transform: uppercase; letter-spacing: .05em;
+    display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 999px; white-space: nowrap;
+    font: 800 9.5px 'Manrope', sans-serif; text-transform: uppercase; letter-spacing: .05em;
     color: color-mix(in srgb, var(--tone) 70%, white); background: color-mix(in srgb, var(--tone) 18%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent);
   }
-  .pd-chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--tone); box-shadow: 0 0 8px var(--tone); }
+  .pd-chip i { width: 6px; height: 6px; border-radius: 50%; background: var(--tone); box-shadow: 0 0 8px var(--tone); }
   .pd-chip--flag { text-transform: none; letter-spacing: 0; font-size: 11px; font-weight: 700; }
   .pd-chip--flag.live i { animation: pd-pulse 1.4s ease-in-out infinite; }
-  .pd-chip--sm { padding: 1px 8px; font-size: 9.5px; }
+  .pd-chip--sm { height: 18px; padding: 0 7px; font-size: 9px; }
   @keyframes pd-pulse { 50% { opacity: .35; } }
   .pd-btnlink {
-    display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: 8px; text-decoration: none;
-    font: 700 12px 'Manrope', sans-serif; color: var(--text-1);
-    background: linear-gradient(160deg, color-mix(in srgb, var(--hue) 16%, var(--surface-1)), var(--surface-1) 75%);
-    border: 1px solid color-mix(in srgb, var(--hue) 38%, var(--border)); transition: border-color .2s, box-shadow .2s, transform .2s;
+    display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 7px; text-decoration: none;
+    font: 700 11px 'Manrope', sans-serif; color: var(--text-1);
+    background: color-mix(in srgb, var(--hue) 12%, var(--surface-2));
+    border: 1px solid color-mix(in srgb, var(--hue) 38%, var(--border)); transition: border-color .2s, box-shadow .2s;
   }
   .pd-btnlink :global(svg), .pd-btnlink span { color: var(--hue); }
-  .pd-btnlink:hover { transform: translateY(-1px); border-color: var(--hue); box-shadow: 0 8px 18px -12px var(--hue); }
+  .pd-btnlink:hover { border-color: var(--hue); box-shadow: 0 8px 18px -12px var(--hue); }
   .pd-btnlink:focus-visible { outline: 2px solid var(--hue); outline-offset: 2px; }
 
-  /* ---- stepper */
-  .pd-steps { list-style: none; margin: 0; padding: 8px 10px; display: flex; gap: 0; overflow-x: auto; scrollbar-width: thin; border-radius: 12px; background: var(--surface-1); border: 1px solid var(--border); }
-  .pd-steps li { position: relative; flex: 1 0 auto; min-width: 22px; display: flex; flex-direction: column; align-items: center; gap: 5px; }
-  .pd-steps li::before { content: ''; position: absolute; top: 5px; right: 50%; width: 100%; height: 2px; background: var(--border); }
+  /* ---- control line: where it is in its stages, and what you can do to it */
+  .pd-ctl { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
+  .pd-stage {
+    flex: 1 1 240px; min-width: 0; display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 6px 0 4px;
+    border-radius: 11px; background: color-mix(in srgb, var(--surface-1) 70%, #000); border: 1px solid var(--border);
+    cursor: zoom-in; transition: border-color .15s, box-shadow .15s, background .15s;
+  }
+  .pd-stage:hover { border-color: color-mix(in srgb, #22D3EE 45%, var(--border)); background: color-mix(in srgb, #22D3EE 5%, color-mix(in srgb, var(--surface-1) 70%, #000)); box-shadow: 0 8px 20px -14px #22D3EE; }
+  .pd-stage:focus-visible { outline: 2px solid #22D3EE; outline-offset: 2px; }
+  .pd-stage-zoom {
+    flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; color: var(--text-3, var(--text-2));
+    transition: color .15s, background .15s, transform .15s;
+  }
+  .pd-stage:hover .pd-stage-zoom, .pd-stage:focus-visible .pd-stage-zoom { color: #22D3EE; background: color-mix(in srgb, #22D3EE 16%, transparent); transform: scale(1.08); }
+  .pd-stage-now {
+    flex: none; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border-radius: 8px; white-space: nowrap;
+    font: 800 10px 'Manrope', sans-serif; text-transform: uppercase; letter-spacing: .05em;
+    color: color-mix(in srgb, var(--tone) 72%, white); background: color-mix(in srgb, var(--tone) 18%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent);
+  }
+  .pd-stage-now i { width: 7px; height: 7px; border-radius: 50%; background: var(--tone); box-shadow: 0 0 8px var(--tone); }
+  .pd-stage-now small { font-size: 10px; font-weight: 700; letter-spacing: 0; color: var(--text-3, var(--text-2)); }
+  .pd-steps { list-style: none; margin: 0; padding: 0; flex: 1; min-width: 0; display: flex; align-items: center; }
+  .pd-steps li { position: relative; flex: 1 1 0; min-width: 7px; height: 14px; display: grid; place-items: center; }
+  .pd-steps li::before { content: ''; position: absolute; top: 6px; right: 50%; width: 100%; height: 2px; background: var(--border); }
   .pd-steps li:first-child::before { display: none; }
   .pd-steps li.past::before, .pd-steps li.now::before { background: linear-gradient(90deg, color-mix(in srgb, #22D3EE 60%, transparent), color-mix(in srgb, #A78BFA 60%, transparent)); }
-  .pd-steps i { position: relative; z-index: 1; width: 12px; height: 12px; border-radius: 50%; background: var(--surface-2); border: 2px solid var(--border); }
+  .pd-steps i { position: relative; z-index: 1; width: 8px; height: 8px; border-radius: 50%; background: var(--surface-2); border: 1.5px solid var(--border); transition: transform .15s; }
   .pd-steps li.past i { background: color-mix(in srgb, #22D3EE 60%, var(--surface-2)); border-color: transparent; }
-  .pd-steps li.now i { background: var(--tone); border-color: color-mix(in srgb, var(--tone) 50%, white); box-shadow: 0 0 0 4px color-mix(in srgb, var(--tone) 22%, transparent), 0 0 12px var(--tone); }
-  .pd-steps span { font: 600 9.5px 'Manrope', sans-serif; color: var(--text-3, var(--text-2)); white-space: nowrap; opacity: 0; transition: opacity .15s; }
-  .pd-steps li.now span { opacity: 1; font-weight: 800; color: color-mix(in srgb, var(--tone) 70%, white); }
-  .pd-steps:hover span { opacity: 1; }
-  @container (min-width: 900px) { .pd-steps span { opacity: 1; } }
+  .pd-steps li.now i { width: 11px; height: 11px; background: var(--tone); border-color: color-mix(in srgb, var(--tone) 50%, white); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 22%, transparent), 0 0 10px var(--tone); }
 
-  /* ---- action bar */
-  .pd-bar-acts { display: flex; flex-wrap: wrap; gap: 8px; }
-  .pd-grp { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border-radius: 11px; background: color-mix(in srgb, var(--surface-1) 70%, #000); border: 1px solid var(--border); box-shadow: inset 0 1px 2px rgba(0, 0, 0, .35); }
+  /* ---- action bar: the queue moves as icons, holding and unblocking with their verb; keys 1–9 as tiny badges */
+  .pd-bar-acts { flex: 0 1 auto; display: flex; flex-wrap: wrap; gap: 6px; }
+  .pd-grp { display: inline-flex; gap: 1px; padding: 2px; border-radius: 11px; background: color-mix(in srgb, var(--surface-1) 70%, #000); border: 1px solid var(--border); box-shadow: inset 0 1px 2px rgba(0, 0, 0, .35); }
   .pd-act {
-    display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 0; border-radius: 8px; cursor: pointer; white-space: nowrap;
+    position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 30px; min-width: 32px; padding: 0 10px; border: 0; border-radius: 8px; cursor: pointer; white-space: nowrap;
     font: 700 12px 'Manrope', sans-serif; color: var(--text-1); background: transparent;
     transition: background .15s, box-shadow .15s, color .15s;
   }
+  .pd-act.icon { padding: 0; width: 32px; }
+  .pd-act.icon .pd-act-l { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .pd-act svg { color: var(--hue); flex: none; }
   .pd-act kbd {
-    display: grid; place-items: center; min-width: 16px; height: 16px; padding: 0 3px; border-radius: 4px;
-    font: 700 9.5px ui-monospace, monospace; color: var(--text-3, var(--text-2)); background: var(--surface-2); border: 1px solid var(--border);
+    display: grid; place-items: center; min-width: 14px; height: 14px; padding: 0 2px; border-radius: 4px;
+    font: 700 9px ui-monospace, monospace; color: var(--text-3, var(--text-2)); background: var(--surface-2); border: 1px solid var(--border);
   }
+  .pd-act.icon kbd { position: absolute; right: 1px; bottom: 1px; min-width: 11px; height: 11px; font-size: 8px; border-radius: 3px; opacity: .85; }
   .pd-act:hover:not(:disabled), .pd-act.on {
     background: linear-gradient(180deg, color-mix(in srgb, var(--hue) 22%, var(--surface-2)), color-mix(in srgb, var(--hue) 10%, var(--surface-2)));
     box-shadow: 0 1px 0 rgba(255, 255, 255, .06) inset, inset 0 -2px 0 var(--hue);
   }
   .pd-act.ask { background: color-mix(in srgb, #F43F5E 22%, var(--surface-2)); box-shadow: inset 0 -2px 0 #F43F5E; }
   .pd-act.busy svg { animation: pd-spin .8s linear infinite; }
-  .pd-act:disabled { opacity: .32; cursor: not-allowed; }
+  .pd-act:disabled { opacity: .3; cursor: not-allowed; }
   .pd-act:focus-visible { outline: 2px solid var(--hue); outline-offset: 1px; }
   @keyframes pd-spin { to { transform: rotate(360deg); } }
   .pd-toast {
-    margin: 0; display: flex; align-items: center; gap: 7px; padding: 7px 11px; border-radius: 9px; font: 600 12px 'Manrope', sans-serif;
+    margin: 0; display: flex; align-items: center; gap: 7px; padding: 6px 10px; border-radius: 9px; font: 600 12px 'Manrope', sans-serif;
     color: #ff9fb5; background: color-mix(in srgb, #F43F5E 12%, transparent); border: 1px solid color-mix(in srgb, #F43F5E 35%, transparent);
     animation: pd-in .2s ease-out;
   }
   .pd-toast.ok { color: #34D399; background: color-mix(in srgb, #34D399 12%, transparent); border-color: color-mix(in srgb, #34D399 35%, transparent); }
+  .pd-form { max-height: 46vh; overflow-y: auto; }
   @keyframes pd-in { from { opacity: 0; transform: translateY(-3px); } }
 
   /* ---- body: main column, side column */
-  .pd-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
-  @container (min-width: 820px) { .pd-grid:not(.solo) { grid-template-columns: minmax(0, 1fr) minmax(260px, 320px); } .pd-side { order: 2; } }
-  .pd-main, .pd-side { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .pd-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-items: start; }
+  /* The side column (numbers, facts, labels) sits beside the work from a mid width on, not under it. */
+  @container (min-width: 600px) { .pd-grid:not(.solo) { grid-template-columns: minmax(0, 1fr) minmax(210px, 280px); } .pd-side { order: 2; } }
+  .pd-main, .pd-side { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
   .pd-main:empty { display: none; }
 
-  .pd-card { display: flex; flex-direction: column; gap: 8px; padding: 11px 13px; border-radius: 12px; background: var(--surface-1); border: 1px solid var(--border); min-width: 0; }
+  .pd-card { display: flex; flex-direction: column; gap: 7px; padding: 9px 11px; border-radius: 12px; background: var(--surface-1); border: 1px solid var(--border); min-width: 0; }
   .pd-h { margin: 0; display: flex; align-items: center; gap: 7px; font: 800 10.5px 'Manrope', sans-serif; text-transform: uppercase; letter-spacing: .06em; color: var(--text-2); }
   .pd-h::before { content: ''; width: 3px; height: 11px; border-radius: 2px; background: linear-gradient(#22D3EE, #A78BFA); flex: none; }
   .pd-h-n { margin-left: auto; font-size: 12px; color: var(--text-1); }
@@ -574,7 +659,7 @@
   .pd-alert .pd-h { color: color-mix(in srgb, var(--hue) 75%, white); }
   .pd-alert .pd-h::before { background: var(--hue); }
   .pd-alert pre { margin: 0; font: 500 12px/1.55 ui-monospace, 'JetBrains Mono', monospace; color: var(--text-1); white-space: pre-wrap; overflow-wrap: anywhere; }
-  .folded { max-height: 9.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+  .folded { max-height: 6.4em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
 
   .pd-note { background: linear-gradient(160deg, color-mix(in srgb, var(--hue) 9%, var(--surface-1)), var(--surface-1) 60%); border-color: color-mix(in srgb, var(--hue) 26%, var(--border)); }
   .pd-note p { margin: 0; font: 500 13px/1.6 'Manrope', sans-serif; color: var(--text-1); white-space: pre-wrap; }
@@ -583,9 +668,9 @@
   /* ---- a list of records (parts) */
   .pd-prog { height: 5px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
   .pd-prog span { display: block; height: 100%; background: linear-gradient(90deg, #22D3EE, #34D399); box-shadow: 0 0 10px -2px #34D399; }
-  .pd-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .pd-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
   .pd-li {
-    width: 100%; display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 9px; text-align: left;
+    width: 100%; display: flex; align-items: center; gap: 8px; padding: 5px 9px; border-radius: 8px; text-align: left;
     font: inherit; color: var(--text-1); background: var(--surface-2); border: 1px solid transparent;
   }
   button.pd-li { cursor: pointer; transition: border-color .15s, background .15s; }
@@ -600,7 +685,7 @@
   .pd-li-go { color: var(--text-3, var(--text-2)); font-size: 16px; }
 
   /* ---- history */
-  .pd-hist { list-style: none; margin: 0; padding: 0 0 0 4px; display: flex; flex-direction: column; max-height: 420px; overflow-y: auto; scrollbar-width: thin; }
+  .pd-hist { list-style: none; margin: 0; padding: 0 0 0 4px; display: flex; flex-direction: column; max-height: 300px; overflow-y: auto; scrollbar-width: thin; }
   .pd-hist li { position: relative; display: flex; gap: 10px; padding: 0 0 10px; }
   .pd-hist li::before { content: ''; position: absolute; left: 4px; top: 12px; bottom: 0; width: 1px; background: var(--border); }
   .pd-hist li:last-child::before { display: none; }
@@ -672,9 +757,78 @@
 
   .pd-err { margin: 0; padding: 8px 12px; border-radius: 10px; background: color-mix(in srgb, #F43F5E 12%, transparent); border: 1px solid color-mix(in srgb, #F43F5E 40%, transparent); color: #ff9fb5; font: 600 12px 'Manrope', sans-serif; }
 
+
+  /* ---- the stages, zoomed: a wide track, names alternating above and below so every one reads in full */
+  .pd-zoom {
+    position: fixed; inset: 0; z-index: 1000; display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; padding: 24px 16px;
+    background: rgba(3, 6, 12, .62); backdrop-filter: blur(6px); animation: pd-fade .16s ease-out;
+  }
+  .pd-zoom-card {
+    width: min(calc(var(--n) * 66px + 100px), 1240px, 100%); min-width: 0; max-height: calc(100vh - 48px); display: flex; flex-direction: column; gap: 14px;
+    padding: 16px 18px 14px; border-radius: 16px; font-family: 'Manrope', sans-serif;
+    background: linear-gradient(170deg, color-mix(in srgb, #22D3EE 6%, var(--surface-1)), var(--surface-1) 40%);
+    border: 1px solid color-mix(in srgb, #22D3EE 22%, var(--border)); box-shadow: 0 30px 80px -30px rgba(0, 0, 0, .9);
+    animation: pd-pop .2s cubic-bezier(.2, .9, .3, 1.2);
+  }
+  .pd-zoom-head { display: flex; align-items: center; gap: 10px; }
+  .pd-zoom-head h4 { margin: 0; font: 800 11px 'Manrope', sans-serif; text-transform: uppercase; letter-spacing: .07em; color: var(--text-2); display: flex; align-items: center; gap: 7px; }
+  .pd-zoom-head h4::before { content: ''; width: 3px; height: 12px; border-radius: 2px; background: linear-gradient(#22D3EE, #A78BFA); }
+  .pd-zoom-x {
+    margin-left: auto; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; cursor: pointer;
+    color: var(--text-2); background: var(--surface-2); border: 1px solid var(--border); transition: color .15s, border-color .15s;
+  }
+  .pd-zoom-x:hover { color: var(--text-1); border-color: color-mix(in srgb, #F43F5E 50%, var(--border)); }
+  .pd-zoom-x:focus-visible { outline: 2px solid #22D3EE; outline-offset: 2px; }
+  .pd-zoom-scroll { overflow-x: auto; overflow-y: hidden; padding: 4px 0 8px; scrollbar-width: thin; }
+  .pd-zoom-steps { list-style: none; margin: 0; padding: 0 22px; display: grid; grid-template-columns: repeat(var(--n), minmax(64px, 1fr)); min-width: calc(var(--n) * 64px); }
+  .pd-zoom-steps li { position: relative; height: 128px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }
+  .pd-zoom-steps li.up { justify-content: flex-start; }
+  /* the track, through the middle of every column */
+  .pd-zoom-steps li::before { content: ''; position: absolute; top: 63px; left: 0; right: 0; height: 2px; background: var(--border); }
+  .pd-zoom-steps li:first-child::before { left: 50%; }
+  .pd-zoom-steps li:last-child::before { right: 50%; }
+  .pd-zoom-steps li.past::before { background: linear-gradient(90deg, #22D3EE, #A78BFA); }
+  .pd-zoom-steps li.now::before { background: linear-gradient(90deg, #A78BFA 50%, var(--border) 50%); }
+  .pd-zoom-steps i {
+    position: absolute; top: 56px; left: 50%; z-index: 1; width: 16px; height: 16px; margin-left: -8px; border-radius: 50%;
+    display: grid; place-items: center; color: #04121a; background: var(--surface-2); border: 2px solid var(--border);
+  }
+  .pd-zoom-steps li.past i { background: #22D3EE; border-color: color-mix(in srgb, #22D3EE 60%, white); }
+  .pd-zoom-steps li.now i {
+    top: 52px; width: 24px; height: 24px; margin-left: -12px; background: var(--tone); border: 3px solid color-mix(in srgb, var(--tone) 45%, white);
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--tone) 20%, transparent), 0 0 22px var(--tone); animation: pd-glow 2s ease-in-out infinite;
+  }
+  /* a stem joins each name to its dot */
+  .pd-zoom-steps li::after { content: ''; position: absolute; left: 50%; width: 1px; background: color-mix(in srgb, var(--border) 80%, transparent); }
+  .pd-zoom-steps li.up::after { top: 32px; height: 22px; }
+  .pd-zoom-steps li:not(.up)::after { top: 74px; height: 22px; }
+  .pd-zoom-steps li.now::after { background: var(--tone); }
+  .pd-zl {
+    position: relative; z-index: 1; max-width: 134px; overflow: hidden; text-overflow: ellipsis; display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 8px; white-space: nowrap;
+    font: 700 11.5px 'Manrope', sans-serif; color: var(--text-3, var(--text-2)); background: var(--surface-2); border: 1px solid var(--border);
+  }
+  .pd-zl b { display: grid; place-items: center; min-width: 16px; height: 16px; padding: 0 3px; border-radius: 5px; font: 800 9.5px ui-monospace, monospace; color: var(--text-3, var(--text-2)); background: color-mix(in srgb, var(--surface-1) 70%, #000); }
+  .pd-zoom-steps li.past .pd-zl { color: var(--text-1); border-color: color-mix(in srgb, #22D3EE 30%, var(--border)); }
+  .pd-zoom-steps li.past .pd-zl b { color: #22D3EE; }
+  .pd-zoom-steps li.now .pd-zl {
+    font-weight: 800; color: color-mix(in srgb, var(--tone) 75%, white); background: color-mix(in srgb, var(--tone) 18%, var(--surface-2));
+    border-color: color-mix(in srgb, var(--tone) 60%, transparent); box-shadow: 0 8px 22px -12px var(--tone);
+  }
+  .pd-zoom-steps li.now .pd-zl b { color: #04121a; background: var(--tone); }
+  .pd-zoom-legend { display: flex; justify-content: center; gap: 18px; font: 600 11px 'Manrope', sans-serif; color: var(--text-3, var(--text-2)); }
+  .pd-zoom-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .pd-zoom-legend i { width: 9px; height: 9px; border-radius: 50%; }
+  .lg-past { background: #22D3EE; }
+  .lg-now { background: var(--tone); box-shadow: 0 0 8px var(--tone); }
+  .lg-next { background: var(--surface-2); border: 1.5px solid var(--border); }
+  @keyframes pd-fade { from { opacity: 0; } }
+  @keyframes pd-pop { from { opacity: 0; transform: scale(.94) translateY(6px); } }
+  @keyframes pd-glow { 50% { box-shadow: 0 0 0 9px color-mix(in srgb, var(--tone) 12%, transparent), 0 0 26px var(--tone); } }
+
   @media (prefers-reduced-motion: reduce) {
-    .pd-back, .pd-btnlink, .pd-act, .pd-steps span, .pd-cp, button.pd-li { transition: none; }
-    .pd-back:hover, .pd-btnlink:hover { transform: none; }
-    .pd-skel span, .pd-chip--flag.live i, .pd-li-dot.live, .pd-act.busy svg, .pd-toast { animation: none; }
+    .pd-back, .pd-btnlink, .pd-act, .pd-steps i, .pd-cp, button.pd-li { transition: none; }
+    .pd-back:hover, .pd-steps li:hover i { transform: none; }
+    .pd-skel span, .pd-chip--flag.live i, .pd-li-dot.live, .pd-act.busy svg, .pd-toast, .pd-zoom, .pd-zoom-card, .pd-zoom-steps li.now i { animation: none; }
+    .pd-stage, .pd-stage-zoom { transition: none; }
   }
 </style>
