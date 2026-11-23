@@ -53,7 +53,7 @@
     return acc;
   }, {} as Record<string, { channel: string; flow: string; items: Item[] }>)).sort((a, b) => b.items.length - a.items.length);
 
-  const review = (channel: string) => goto(`/outbox?project=${encodeURIComponent(projectId)}&channel=${encodeURIComponent(channel)}`);
+  const review = (channel: string) => goto(`/inbox?kind=approve&project=${encodeURIComponent(projectId)}&channel=${encodeURIComponent(channel)}`);
 </script>
 
 {#if groups.length}

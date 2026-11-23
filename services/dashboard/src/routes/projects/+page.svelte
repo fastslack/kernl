@@ -459,7 +459,7 @@
             <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
             <span class="num pending" class:hot={(p.pending_drafts ?? 0) > 0}
               title={(p.pending_drafts ?? 0) > 0 ? 'Borradores que prepararon los agentes y esperan tu OK: tocá para revisarlos en Aprobaciones' : 'Nada esperando tu aprobación'}
-              on:click={(e) => { if ((p.pending_drafts ?? 0) > 0) { e.stopPropagation(); void goto(`/outbox?project=${encodeURIComponent(p.id)}`); } }}>{p.pending_drafts ?? 0}<small>por aprobar</small></span>
+              on:click={(e) => { if ((p.pending_drafts ?? 0) > 0) { e.stopPropagation(); void goto(`/inbox?kind=approve&project=${encodeURIComponent(p.id)}`); } }}>{p.pending_drafts ?? 0}<small>por aprobar</small></span>
             <span class="num leads" title="Leads de este proyecto">{p.leads ?? 0}<small>leads</small></span>
           </button>
           <button class="more" aria-label="Más acciones para {p.name}" on:click|stopPropagation={() => (menuFor = menuFor === p.id ? '' : p.id)}>⋯</button>

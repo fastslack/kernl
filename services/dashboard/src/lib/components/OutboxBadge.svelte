@@ -1,6 +1,6 @@
 <script lang="ts">
   /*
-    Header button for /outbox: how many drafts the agents are waiting on you
+    Header button for the Bandeja: how many drafts the agents are waiting on you
     to approve. Polls the count every minute and when the window regains focus.
   */
   import { onMount, onDestroy } from 'svelte';
