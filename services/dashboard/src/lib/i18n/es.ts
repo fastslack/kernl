@@ -240,6 +240,8 @@ const es: Record<I18nKey, string> = {
   "live.d.error": "No se pudieron leer los detalles: {err}",
   "live.d.noCaller": "sin etiqueta",
   "live.d.bench": "Bench",
+  "bench.eyebrow": "Los modelos, de un vistazo",
+  "bench.question": "¿Qué modelo conviene usar?",
   "bench.title": "Bench de modelos",
   "bench.meta": "suite v{v} · corrida del {when} · {n} modelos",
   "bench.metaEmpty": "{tasks} tareas · {n} modelos configurados",

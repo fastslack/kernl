@@ -64,21 +64,18 @@
 </script>
 
 {#if questions.length === 0}
-	<div class="oq-empty">{$t('office.chief.no_questions')}</div>
+	<div class="ol-empty">{$t('office.chief.no_questions')}</div>
 {/if}
 
 {#if questions.length > 0}
-	<div class="oq-title">
+	<h4 class="ol-h oq-h">
 		{$t('office.chief.needs_answer', { n: String(questions.length) })}
-		{#if owed.length > 0}<span class="oq-owed">{$t('office.chief.owed_title', { n: String(owed.length) })}</span>{/if}
-	</div>
+		{#if owed.length > 0}<span class="ol-chip" style="--c:#FB923C"><i aria-hidden="true"></i>{$t('office.chief.owed_title', { n: String(owed.length) })}</span>{/if}
+	</h4>
 	<QuestionAgeGroups {questions} open={questions} {nameOf} colorOf={() => color} {busy} {send}
 		onAnswer={answer} onDismiss={dismiss} onFree={free} onTake={take} onDone={done} />
 {/if}
 
 <style>
-	.oq-empty { padding: 24px 16px; text-align: center; color: #6a6f82; font: 500 12px 'Manrope', sans-serif; }
-	.oq-title { margin: 14px 0 8px; color: #f0b874; font: 700 10px 'JetBrains Mono', monospace; letter-spacing: .08em; text-transform: uppercase; }
-	.oq-title:first-child { margin-top: 0; }
-	.oq-owed { margin-left: 8px; padding: 1px 7px; border: 1px solid rgba(240,184,116,.35); border-radius: 999px; font-size: 9px; }
+	.oq-h { margin: 0 0 8px; }
 </style>

@@ -72,9 +72,9 @@
     <RuntimeSection bind:this={runtimeSection} {store} {compact} {running} />
 
     <!-- ── What it can do (read-only) ── -->
-    <div class="cfg-group">
+    <div class="ol-card cfg-group">
       <header class="cfg-gh">
-        <h3 class="cfg-h">{$t('agent.config.scope_title')} <span class="cfg-ro">{$t('agent.config.read_only')}</span></h3>
+        <h3 class="ol-h cfg-h">{$t('agent.config.scope_title')} <span class="ol-chip soft cfg-ro">{$t('agent.config.read_only')}</span></h3>
         <p class="cfg-sub">{$t('agent.config.scope_sub')}</p>
       </header>
 
@@ -97,7 +97,7 @@
         </div>
         {#if tools.length}
           <div class="cfg-chips">
-            {#each tools as tool (tool)}<code class="cfg-chip" title={tool}>{shortTool(tool)}</code>{/each}
+            {#each tools as tool (tool)}<code class="ol-chip soft cfg-chip" title={tool}>{shortTool(tool)}</code>{/each}
           </div>
         {:else}
           <span class="cfg-empty">{$t('agent.config.tools_all')}</span>
@@ -124,9 +124,9 @@
 
     <!-- ── Appearance ── -->
     {#if skins.length > 1}
-      <div class="cfg-group">
+      <div class="ol-card cfg-group">
         <header class="cfg-gh">
-          <h3 class="cfg-h">{$t('agent.config.look_title')}</h3>
+          <h3 class="ol-h cfg-h">{$t('agent.config.look_title')}</h3>
           <p class="cfg-sub">{$t('agent.config.look_sub')}</p>
         </header>
         <div class="cfg-row cfg-row-inline">
@@ -143,7 +143,7 @@
       </div>
     {/if}
   {:else}
-    <p class="cfg-loading">{$t('agent.config.loading')}</p>
+    <p class="ol-empty cfg-loading">{$t('agent.config.loading')}</p>
   {/if}
 </div>
 
@@ -161,33 +161,21 @@
   /* RuntimeSection carries its own bottom margin for when it sat in a stack. */
   .ip-body :global(.rt){margin-bottom:0}
 
-  /* Same card as RuntimeSection's groups. */
-  .cfg-group{
-    padding:12px 14px 4px;border-radius:10px;
-    background:rgba(255,255,255,.018);border:1px solid rgba(120,130,160,.14);
-  }
-  .cfg-gh{margin-bottom:6px}
-  .cfg-h{
-    margin:0;display:flex;align-items:center;gap:8px;
-    font:600 10.5px 'Syne',sans-serif;
-    color:#c9cde0;text-transform:uppercase;letter-spacing:1.4px;
-  }
-  .cfg-ro{
-    font:600 8.5px 'JetBrains Mono',monospace;letter-spacing:.5px;text-transform:none;
-    padding:1px 6px;border-radius:4px;color:#8a8fa8;
-    background:rgba(120,130,160,.1);border:1px solid rgba(120,130,160,.2);
-  }
-  .cfg-sub{margin:3px 0 0;font:500 11px/1.4 'Manrope',sans-serif;color:#7d8299}
+  /* ol-card + ol-h; only the rhythm inside is local. */
+  .cfg-group{gap:0;padding:10px 12px 2px}
+  .cfg-gh{margin-bottom:4px}
+  .cfg-ro{height:18px;padding:0 7px;font-size:10px;--c:#94A3B8}
+  .cfg-sub{margin:3px 0 0;font:500 11px/1.4 var(--font-body);color:var(--text-3)}
 
   .cfg-row{
     display:grid;grid-template-columns:minmax(150px,38%) minmax(0,1fr);gap:4px 14px;
-    padding:9px 0;border-top:1px solid rgba(120,130,160,.08);align-items:start;
+    padding:8px 0;border-top:1px solid var(--border);align-items:start;
   }
   .cfg-gh + .cfg-row{border-top:0}
   .cfg-row-inline{align-items:center}
   .cfg-row-l{display:flex;flex-direction:column;gap:2px;min-width:0}
-  .cfg-l{display:flex;align-items:center;gap:6px;font:600 12px 'Manrope',sans-serif;color:#dde0ea}
-  .cfg-h2{font:500 10.5px/1.35 'Manrope',sans-serif;color:#7d8299}
+  .cfg-l{display:flex;align-items:center;gap:6px;font:600 12px var(--font-body);color:var(--text-1)}
+  .cfg-h2{font:500 10.5px/1.35 var(--font-body);color:var(--text-3)}
   .cfg-count{
     font:600 9px 'JetBrains Mono',monospace;color:#8a8fa8;
     padding:0 5px;border-radius:4px;background:rgba(120,130,160,.12);
@@ -196,13 +184,10 @@
   .cfg-pre{
     margin:0;max-height:96px;overflow:auto;white-space:pre-wrap;word-break:break-word;
     font:500 11px/1.45 'JetBrains Mono',monospace;color:#c4c8d6;
-    padding:6px 8px;border-radius:6px;background:rgba(10,12,20,.6);border:1px solid rgba(120,130,160,.12);
+    padding:6px 8px;border-radius:8px;background:color-mix(in srgb, var(--surface-2) 60%, #000);border:1px solid var(--border);
   }
   .cfg-chips{display:flex;flex-wrap:wrap;gap:4px;max-height:96px;overflow:auto}
-  .cfg-chip{
-    font:500 10px 'JetBrains Mono',monospace;color:#b8bdd0;
-    padding:2px 6px;border-radius:4px;background:rgba(120,130,160,.1);border:1px solid rgba(120,130,160,.16);
-  }
+  .cfg-chip{--c:#22D3EE;height:20px;padding:0 7px;font:500 10px var(--font-mono, monospace)}
   .cfg-vars{
     display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 10px;
     font:500 10.5px 'JetBrains Mono',monospace;max-height:96px;overflow:auto;
@@ -212,13 +197,12 @@
 
   .cfg-skin{display:flex;flex-direction:column;gap:4px;min-width:0}
   .cfg-sel{
-    width:100%;background:rgba(20,24,38,.85);color:#dde0ea;
-    border:1px solid rgba(120,130,160,.3);border-radius:6px;
+    width:100%;background:var(--surface-2);color:var(--text-1);
+    border:1px solid var(--border-h);border-radius:10px;
     padding:6px 10px;font:600 12px 'Manrope',sans-serif;cursor:pointer;outline:none;
   }
   .cfg-sel:hover{border-color:rgba(120,130,160,.55)}
-  .cfg-sel:focus{border-color:rgba(120,170,255,.6);box-shadow:0 0 0 2px rgba(120,170,255,.12)}
+  .cfg-sel:focus{border-color:var(--gold);box-shadow:0 0 0 2px color-mix(in srgb, var(--gold) 18%, transparent)}
   .cfg-sel:disabled{opacity:.5;cursor:not-allowed}
 
-  .cfg-loading{margin:0;font:500 11px 'Manrope',sans-serif;color:#8a8fa8}
 </style>

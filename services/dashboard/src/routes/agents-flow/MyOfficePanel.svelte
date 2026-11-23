@@ -492,62 +492,90 @@
   {@const needsYou = pendingQuestions.length + owedQuestions.length + errorGroups.length}
   <div class="info-panel office-reports-panel">
     <!-- Header: whose office, what the chief is doing, and the two ways to
-         reach the chief itself. -->
-    <div class="ip-head mo-head">
-      <div class="ip-glyph mo-glyph" aria-hidden="true">&#9733;</div>
-      <div class="ip-head-txt">
-        <div class="ip-name">{$t('office.chief.title')}</div>
-        <div class="mo-status">
-          {#if chiefRunning}
-            <span class="mo-chip mo-chip-run"><span class="mo-pulse"></span>{$t('office.chief.status_running', { name: chief?.name ?? 'Chief' })}</span>
-          {:else}
-            <span class="mo-chip">{$t('office.chief.status_idle', { name: chief?.name ?? 'Chief' })}</span>
+         reach the chief itself. Echoes the directory's gold ◆ Dirección button. -->
+    <div class="mo-head">
+      <div class="ol-mhead">
+        <span class="ol-mark lg mo-mark" aria-hidden="true">◆</span>
+        <div class="ol-ttl">
+          <p class="ol-eyebrow">{$t('office.rail.headquarters')}</p>
+          <h2 class="ol-title">{$t('office.chief.title')}</h2>
+          <div class="mo-status">
+            {#if chiefRunning}
+              <span class="ol-chip soft mo-chip-run" style="--c:#7cc4ff"><i aria-hidden="true"></i>{$t('office.chief.status_running', { name: chief?.name ?? 'Chief' })}</span>
+            {:else}
+              <span class="ol-chip soft" style="--c:#94A3B8"><i aria-hidden="true"></i>{$t('office.chief.status_idle', { name: chief?.name ?? 'Chief' })}</span>
+            {/if}
+            {#if triageCount > 0}
+              <span class="ol-chip soft" style="--c:#f0b874"><i aria-hidden="true"></i>{$t('office.chief.status_triage', { n: String(triageCount) })}</span>
+            {/if}
+          </div>
+        </div>
+        <div class="mo-head-actions">
+          {#if chief}
+            <button class="ol-btn ghost mo-sm" type="button" on:click={openChiefChat} title={$t('office.chief.talk_title')}>
+              {$t('office.chief.talk')}
+            </button>
+            <button class="ol-btn mo-sm" type="button" title={$t('office.chief.open_agent_title')}
+                    on:click={() => { selectAgent(chief.id); showMyOfficePanel = false; }}>
+              {$t('office.chief.open_agent')} →
+            </button>
           {/if}
-          {#if triageCount > 0}
-            <span class="mo-chip mo-chip-q">{$t('office.chief.status_triage', { n: String(triageCount) })}</span>
-          {/if}
+          <button class="ol-btn ghost mo-sm mo-x" on:click={() => showMyOfficePanel = false} aria-label={$t('office.chief.close')}>×</button>
         </div>
       </div>
-      <div class="mo-head-actions">
-        {#if chief}
-          <button class="mo-btn" type="button" on:click={openChiefChat} title={$t('office.chief.talk_title')}>
-            {$t('office.chief.talk')}
-          </button>
-          <button class="mo-btn mo-btn-primary" type="button" title={$t('office.chief.open_agent_title')}
-                  on:click={() => { selectAgent(chief.id); showMyOfficePanel = false; }}>
-            {$t('office.chief.open_agent')} →
-          </button>
-        {/if}
-        <button class="ip-close" on:click={() => showMyOfficePanel = false} aria-label={$t('office.chief.close')}>×</button>
-      </div>
-    </div>
 
-    <div class="ip-tabs mo-tabs" role="tablist">
-      <button class="ip-tab" role="tab" aria-selected={myOfficeTab === 'overview'} class:active={myOfficeTab === 'overview'}
-              on:click={() => myOfficeTab = 'overview'}>
-        {$t('office.chief.tab_now')}
-        {#if needsYou > 0}<span class="mo-tab-badge mo-tab-badge-q">{needsYou}</span>{/if}
-      </button>
-      <button class="ip-tab" role="tab" aria-selected={myOfficeTab === 'questions'} class:active={myOfficeTab === 'questions'}
-              on:click={() => myOfficeTab = 'questions'}>
-        {$t('office.chief.tab_questions')}
-        {#if pendingQuestions.length + owedQuestions.length > 0}<span class="mo-tab-badge mo-tab-badge-q" title={$t('office.chief.waiting_you', { n: String(pendingQuestions.length + owedQuestions.length) })}>{pendingQuestions.length + owedQuestions.length}</span>{/if}
-      </button>
-      <button class="ip-tab" role="tab" aria-selected={myOfficeTab === 'errors'} class:active={myOfficeTab === 'errors'}
-              on:click={() => myOfficeTab = 'errors'}>
-        {$t('office.chief.tab_errors')}
-        {#if errorGroups.length > 0}<span class="mo-tab-badge mo-tab-badge-err">{errorGroups.length}</span>{/if}
-      </button>
-      <button class="ip-tab" role="tab" aria-selected={myOfficeTab === 'activity'} class:active={myOfficeTab === 'activity'}
-              on:click={() => myOfficeTab = 'activity'}>
-        {$t('office.chief.tab_activity')}
-        {#if activityReports.length > 0}<span class="mo-tab-badge">{activityReports.length}</span>{/if}
-      </button>
-      <button class="ip-tab" role="tab" aria-selected={myOfficeTab === 'kernl'} class:active={myOfficeTab === 'kernl'}
-              on:click={() => myOfficeTab = 'kernl'} title={$t('office.kernl.tab_title')}>
-        {$t('office.kernl.tab')}
-        {#if kernlCount > 0}<span class="mo-tab-badge mo-tab-badge-q">{kernlCount}</span>{/if}
-      </button>
+      <!-- The counts, as filters: each one opens the tab that lists it. -->
+      <div class="ol-kpis mo-kpis">
+        <button class="ol-kpi" class:on={myOfficeTab === 'questions'} class:alert={pendingQuestions.length > 0}
+                style="--c: {pendingQuestions.length ? '#FBBF24' : '#34D399'}" aria-pressed={myOfficeTab === 'questions'}
+                on:click={() => myOfficeTab = 'questions'}
+                title={$t('office.chief.waiting_you', { n: String(pendingQuestions.length + owedQuestions.length) })}>
+          <b>{pendingQuestions.length}</b><small>{$t('office.chief.tab_questions')}</small>
+        </button>
+        <button class="ol-kpi" class:on={myOfficeTab === 'questions' && owedQuestions.length > 0}
+                style="--c: #F472B6" aria-pressed={myOfficeTab === 'questions' && owedQuestions.length > 0}
+                on:click={() => myOfficeTab = 'questions'} title={$t('office.q_age.owed_hint')}>
+          <b>{owedQuestions.length}</b><small>{$t('office.q_age.owed_badge')}</small>
+        </button>
+        <button class="ol-kpi" class:on={myOfficeTab === 'errors'}
+                style="--c: {errorGroups.length ? '#FB7185' : '#94A3B8'}" aria-pressed={myOfficeTab === 'errors'}
+                on:click={() => myOfficeTab = 'errors'}>
+          <b>{errorGroups.length}</b><small>{$t('office.chief.tab_errors')}</small>
+        </button>
+        <button class="ol-kpi" class:on={myOfficeTab === 'activity'} class:live={chiefRunning}
+                style="--c: #22D3EE" aria-pressed={myOfficeTab === 'activity'}
+                on:click={() => myOfficeTab = 'activity'}>
+          <b>{activityReports.length}</b><small>{$t('office.chief.tab_activity')}</small>
+        </button>
+      </div>
+
+      <div class="ol-seg mo-tabs" role="tablist">
+        <button role="tab" aria-selected={myOfficeTab === 'overview'} class:on={myOfficeTab === 'overview'}
+                on:click={() => myOfficeTab = 'overview'}>
+          {$t('office.chief.tab_now')}
+          {#if needsYou > 0}<em class="mo-em-q">{needsYou}</em>{/if}
+        </button>
+        <button role="tab" aria-selected={myOfficeTab === 'questions'} class:on={myOfficeTab === 'questions'}
+                on:click={() => myOfficeTab = 'questions'}>
+          {$t('office.chief.tab_questions')}
+          {#if pendingQuestions.length + owedQuestions.length > 0}<em class="mo-em-q" title={$t('office.chief.waiting_you', { n: String(pendingQuestions.length + owedQuestions.length) })}>{pendingQuestions.length + owedQuestions.length}</em>{/if}
+        </button>
+        <button role="tab" aria-selected={myOfficeTab === 'errors'} class:on={myOfficeTab === 'errors'} style="--c:#FB7185"
+                on:click={() => myOfficeTab = 'errors'}>
+          {$t('office.chief.tab_errors')}
+          {#if errorGroups.length > 0}<em class="mo-em-err">{errorGroups.length}</em>{/if}
+        </button>
+        <button role="tab" aria-selected={myOfficeTab === 'activity'} class:on={myOfficeTab === 'activity'} style="--c:#22D3EE"
+                on:click={() => myOfficeTab = 'activity'}>
+          {$t('office.chief.tab_activity')}
+          {#if activityReports.length > 0}<em>{activityReports.length}</em>{/if}
+        </button>
+        <button role="tab" aria-selected={myOfficeTab === 'kernl'} class:on={myOfficeTab === 'kernl'} style="--c:#A78BFA"
+                on:click={() => myOfficeTab = 'kernl'} title={$t('office.kernl.tab_title')}>
+          {$t('office.kernl.tab')}
+          {#if kernlCount > 0}<em class="mo-em-q">{kernlCount}</em>{/if}
+        </button>
+      </div>
     </div>
 
     <div class="or-scroll">
@@ -565,7 +593,7 @@
             {/each}
           </div>
         {:else if needsYou === 0}
-          <div class="mo-allgood">
+          <div class="ol-card mo-allgood" style="--oc:#34D399">
             <span class="mo-allgood-ico" aria-hidden="true">✓</span>
             <div>
               <div class="mo-allgood-t">{$t('office.chief.all_good')}</div>
@@ -575,8 +603,8 @@
         {/if}
 
         {#if owedQuestions.length > 0}
-          <div class="or-section">
-            <span class="or-section-title or-section-q">{$t('office.chief.owed_title', { n: String(owedQuestions.length) })}</span>
+          <div class="ol-h mo-sec mo-sec-q">
+            <span class="mo-sec-t">{$t('office.chief.owed_title', { n: String(owedQuestions.length) })}</span>
           </div>
           <div class="bq-list">
             {#each owedQuestions as q (q.id)}
@@ -590,10 +618,10 @@
         {/if}
 
         {#if pendingQuestions.length > 0}
-          <div class="or-section">
-            <span class="or-section-title or-section-q">{$t('office.chief.needs_answer', { n: String(pendingQuestions.length) })}</span>
+          <div class="ol-h mo-sec mo-sec-q">
+            <span class="mo-sec-t">{$t('office.chief.needs_answer', { n: String(pendingQuestions.length) })}</span>
             {#if pendingQuestions.length > 2}
-              <button class="or-section-more" on:click={() => myOfficeTab = 'questions'}>{$t('office.chief.see_all')} →</button>
+              <button class="ol-clear mo-more-link" on:click={() => myOfficeTab = 'questions'}>{$t('office.chief.see_all')} →</button>
             {/if}
           </div>
           <div class="bq-list">
@@ -608,10 +636,10 @@
         {/if}
 
         {#if errorGroups.length > 0}
-          <div class="or-section">
-            <span class="or-section-title or-section-fail">{$t('office.chief.needs_fix', { n: String(errorGroups.length) })}</span>
+          <div class="ol-h mo-sec mo-sec-fail">
+            <span class="mo-sec-t">{$t('office.chief.needs_fix', { n: String(errorGroups.length) })}</span>
             {#if errorGroups.length > 3}
-              <button class="or-section-more" on:click={() => myOfficeTab = 'errors'}>{$t('office.chief.see_all')} →</button>
+              <button class="ol-clear mo-more-link" on:click={() => myOfficeTab = 'errors'}>{$t('office.chief.see_all')} →</button>
             {/if}
           </div>
           <div class="office-reports-list">
@@ -630,25 +658,27 @@
         {/if}
 
         {#if activityReports.length > 0}
-          <div class="or-section">
-            <span class="or-section-title">{$t('office.chief.latest_activity')}</span>
-            <button class="or-section-more" on:click={() => myOfficeTab = 'activity'}>{$t('office.chief.see_all')} →</button>
+          <div class="ol-h mo-sec">
+            <span class="mo-sec-t">{$t('office.chief.latest_activity')}</span>
+            <button class="ol-clear mo-more-link" on:click={() => myOfficeTab = 'activity'}>{$t('office.chief.see_all')} →</button>
           </div>
-          <div class="office-reports-list">
+          <ul class="ol-list mo-list">
             {#each activityReports.slice(0, 3) as report (reportKey(report))}
-              <button class="or-card" class:or-handoff={report.status === 'handoff'} on:click={() => openReport = report}>
-                <div class="or-card-header">
-                  <span class="or-dot" style="background:{report.color}"></span>
+              <li>
+                <button class="ol-row mo-row" style:--oc={report.color} on:click={() => openReport = report}>
+                  <span class="ol-mark" aria-hidden="true">{report.agentName.slice(0, 2).toUpperCase()}</span>
+                  <span class="ol-row-txt">
+                    <b>{report.agentName}</b>
+                    <small>{plainPreview(report.text, 140)}</small>
+                  </span>
                   <span class="or-status" class:status-ok={report.status === 'completed'} class:status-handoff={report.status === 'handoff'}>
                     {report.status === 'completed' ? '✓' : '→'}
                   </span>
-                  <span class="or-name" style="color:{report.color}">{report.agentName}</span>
                   <span class="or-time">{fmtRelTime(new Date(report.ts).toISOString())}</span>
-                </div>
-                <div class="or-card-body">{plainPreview(report.text, 140)}</div>
-              </button>
+                </button>
+              </li>
             {/each}
-          </div>
+          </ul>
         {/if}
 
       {:else if myOfficeTab === 'questions'}
@@ -665,24 +695,24 @@
             {/each}
           </div>
         {:else if openQuestions.length === 0}
-          <div class="or-empty">{$t('office.chief.no_questions')}</div>
+          <div class="ol-empty">{$t('office.chief.no_questions')}</div>
           {#if triageCount > 0}
-            <div class="or-section-hint mo-center">{$t('office.chief.status_triage', { n: String(triageCount) })}</div>
+            <div class="mo-hint mo-center">{$t('office.chief.status_triage', { n: String(triageCount) })}</div>
           {/if}
         {:else}
-          <div class="or-section">
-            <span class="or-section-title or-section-q">{$t('office.chief.needs_answer', { n: String(openQuestions.length) })}</span>
+          <div class="ol-h mo-sec mo-sec-q">
+            <span class="mo-sec-t">{$t('office.chief.needs_answer', { n: String(openQuestions.length) })}</span>
             {#if owedQuestions.length > 0}
-              <span class="mo-owed-chip" title={$t('office.q_age.owed_hint')}>{$t('office.chief.owed_title', { n: String(owedQuestions.length) })}</span>
+              <span class="ol-chip mo-owed-chip" style="--c:#F472B6" title={$t('office.q_age.owed_hint')}><i aria-hidden="true"></i>{$t('office.chief.owed_title', { n: String(owedQuestions.length) })}</span>
             {/if}
             {#if pendingQuestions.length > 0}
-              <button class="mo-bulk-btn mo-bulk-dismiss" on:click={() => dismissAllQuestions()} disabled={bulkBusy}>
+              <button class="ol-btn ghost mo-sm mo-bulk" on:click={() => dismissAllQuestions()} disabled={bulkBusy}>
                 {bulkBusy ? '…' : $t('office.chief.dismiss_all', { n: String(pendingQuestions.length) })}
               </button>
             {/if}
           </div>
           {#if triageCount > 0}
-            <div class="or-section-hint mo-age-triage">{$t('office.chief.status_triage', { n: String(triageCount) })}</div>
+            <div class="mo-hint mo-age-triage">{$t('office.chief.status_triage', { n: String(triageCount) })}</div>
           {/if}
           <div class="mo-age-groups">
             <QuestionAgeGroups questions={openQuestions} open={openQuestions} nameOf={agentNameOf} colorOf={flowColor}
@@ -693,15 +723,19 @@
         {/if}
         {#if chiefAnswered.length > 0}
           <details class="bq-chief-history">
-            <summary>{$t('office.chief.resolved_by_chief', { n: String(chiefAnswered.length) })}</summary>
+            <summary class="ol-h">{$t('office.chief.resolved_by_chief', { n: String(chiefAnswered.length) })}</summary>
+            <div class="ol-list">
             {#each chiefAnswered as q (q.id)}
-              <div class="bq-chief-row">
-                <span class="bq-from-dot" style="background:{flowColor(q.from_agent_id)}"></span>
-                <span class="bq-from">{agentNameOf(q.from_agent_id)}</span>
-                <span class="bq-chief-q">{q.question}</span>
+              <div class="ol-row bq-chief-row" style:--oc={flowColor(q.from_agent_id)}>
+                <span class="ol-mark" aria-hidden="true">{agentNameOf(q.from_agent_id).slice(0, 2).toUpperCase()}</span>
+                <span class="ol-row-txt">
+                  <b>{agentNameOf(q.from_agent_id)}</b>
+                  <small class="bq-chief-q">{q.question}</small>
+                </span>
                 <span class="bq-chief-a">→ {q.selected_option}</span>
               </div>
             {/each}
+            </div>
           </details>
         {/if}
 
@@ -719,13 +753,13 @@
             {/each}
           </div>
         {:else if errorGroups.length === 0}
-          <div class="or-empty">{$t('office.chief.no_errors')}</div>
+          <div class="ol-empty">{$t('office.chief.no_errors')}</div>
         {:else}
-          <div class="or-section">
-            <span class="or-section-title or-section-fail">
+          <div class="ol-h mo-sec mo-sec-fail">
+            <span class="mo-sec-t">
               {$t('office.chief.errors_summary', { groups: String(errorGroups.length), n: String(errorReports.length) })}
             </span>
-            <button class="mo-bulk-btn mo-bulk-clear" on:click={clearErrors}>{$t('office.chief.dismiss_all_errors')}</button>
+            <button class="ol-btn danger mo-sm mo-bulk" on:click={clearErrors}>{$t('office.chief.dismiss_all_errors')}</button>
           </div>
           <div class="office-reports-list">
             {#each errorGroups as g (g.key)}
@@ -758,40 +792,40 @@
             {/each}
           </div>
         {:else if activityReports.length === 0}
-          <div class="or-empty">{$t('office.chief.no_activity')}</div>
+          <div class="ol-empty">{$t('office.chief.no_activity')}</div>
         {:else}
           {@const byAgent = [...new Map(activityReports.map(r => [r.agentId, r])).values()]}
-          <div class="mo-filters" role="group" aria-label={$t('office.chief.filter_aria')}>
-            <button class="mo-filter" class:on={!activityAgent} on:click={() => activityAgent = null}>
-              {$t('office.chief.filter_all')} <span>{activityReports.length}</span>
+          <div class="ol-seg mo-filters" role="group" aria-label={$t('office.chief.filter_aria')}>
+            <button class:on={!activityAgent} on:click={() => activityAgent = null}>
+              {$t('office.chief.filter_all')} <em>{activityReports.length}</em>
             </button>
             {#each byAgent as a (a.agentId)}
-              <button class="mo-filter" class:on={activityAgent === a.agentId} style="--c:{a.color}"
+              <button class:on={activityAgent === a.agentId} style="--c:{a.color}"
                       on:click={() => activityAgent = activityAgent === a.agentId ? null : a.agentId}>
-                <span class="mo-filter-dot"></span>{a.agentName}
-                <span>{activityReports.filter(r => r.agentId === a.agentId).length}</span>
+                <span class="mo-filter-dot" aria-hidden="true"></span>{a.agentName}
+                <em>{activityReports.filter(r => r.agentId === a.agentId).length}</em>
               </button>
             {/each}
           </div>
-          <div class="office-reports-list">
+          <ul class="ol-list mo-list">
             {#each activityReports.filter(r => !activityAgent || r.agentId === activityAgent) as report (reportKey(report))}
               {@const k = reportKey(report)}
-              <div class="or-card mo-act" class:or-handoff={report.status === 'handoff'} class:mo-act-open={expandedKey === k}
+              <li class="mo-act" class:mo-act-open={expandedKey === k} style:--oc={report.color}
                    out:slide|local={{ duration: 280, easing: quintOut }}>
-                <button class="mo-act-head" type="button" aria-expanded={expandedKey === k}
+                <button class="ol-row mo-row" class:on={expandedKey === k} type="button" aria-expanded={expandedKey === k}
                         on:click={() => expandedKey = expandedKey === k ? null : k}>
-                  <div class="or-card-header">
-                    <span class="or-dot" style="background:{report.color}"></span>
-                    <span class="or-status" class:status-ok={report.status === 'completed'} class:status-handoff={report.status === 'handoff'}>
-                      {report.status === 'completed' ? '✓' : '→'}
-                    </span>
-                    <span class="or-name" style="color:{report.color}">{report.agentName}</span>
-                    <span class="or-time">{fmtRelTime(new Date(report.ts).toISOString())}</span>
-                    <span class="mo-caret" aria-hidden="true">{expandedKey === k ? '▾' : '▸'}</span>
-                  </div>
-                  {#if expandedKey !== k}
-                    <div class="or-card-body">{plainPreview(report.text, 160)}</div>
-                  {/if}
+                  <span class="ol-mark" aria-hidden="true">{report.agentName.slice(0, 2).toUpperCase()}</span>
+                  <span class="ol-row-txt">
+                    <b>{report.agentName}</b>
+                    {#if expandedKey !== k}
+                      <small>{plainPreview(report.text, 160)}</small>
+                    {/if}
+                  </span>
+                  <span class="or-status" class:status-ok={report.status === 'completed'} class:status-handoff={report.status === 'handoff'}>
+                    {report.status === 'completed' ? '✓' : '→'}
+                  </span>
+                  <span class="or-time">{fmtRelTime(new Date(report.ts).toISOString())}</span>
+                  <span class="mo-caret" aria-hidden="true">{expandedKey === k ? '▾' : '▸'}</span>
                 </button>
                 {#if expandedKey === k}
                   <div class="mo-act-body ip-out-md" on:click={onOutputClick} role="presentation" transition:slide|local={{ duration: 200 }}>
@@ -802,9 +836,9 @@
                     <button class="mo-link mo-link-dim" type="button" on:click={() => dismissReport(report)}>{$t('office.chief.dismiss')}</button>
                   </div>
                 {/if}
-              </div>
+              </li>
             {/each}
-          </div>
+          </ul>
         {/if}
       {:else if myOfficeTab === 'kernl'}
         <KernlBugsTab bind:count={kernlCount} {onOutputClick} />
@@ -816,13 +850,13 @@
       <div class="or-footer">
         {#if myOfficeTab === 'activity' || myOfficeTab === 'overview'}
           {#if activityReports.length > 0}
-            <button class="office-clear-btn office-clear-btn-soft" on:click={clearActivity}>{$t('office.chief.mark_activity_read')}</button>
+            <button class="ol-btn ghost mo-sm" on:click={clearActivity}>{$t('office.chief.mark_activity_read')}</button>
           {/if}
         {:else if myOfficeTab === 'errors' && errorReports.length > 0}
-          <button class="office-clear-btn office-clear-btn-soft" on:click={clearErrors}>{$t('office.chief.dismiss_all_errors')}</button>
+          <button class="ol-btn ghost mo-sm" on:click={clearErrors}>{$t('office.chief.dismiss_all_errors')}</button>
         {/if}
         <div class="mo-more">
-          <button class="office-clear-btn" type="button" aria-haspopup="menu" aria-expanded={moreOpen}
+          <button class="ol-btn ghost mo-sm" type="button" aria-haspopup="menu" aria-expanded={moreOpen}
                   on:click|stopPropagation={() => moreOpen = !moreOpen} title={$t('office.chief.more')}>⋯</button>
           {#if moreOpen}
             <div class="mo-more-menu" role="menu">
@@ -842,26 +876,26 @@
 <!-- Report Detail Modal -->
 {#if openReport}
   <div class="modal-overlay" on:click={() => openReport = null} role="button" tabindex="-1" on:keydown={e => e.key === 'Escape' && (openReport = null)}>
-    <div class="report-modal" on:click|stopPropagation role="presentation">
+    <div class="report-modal" style:--oc={openReport.color} on:click|stopPropagation role="presentation">
       <div class="rm-head">
-        <div class="rm-head-left">
-          <span class="rm-dot" style="background:{openReport.color}"></span>
-          <span class="rm-status"
+        <div class="ol-mhead rm-head-left">
+          <span class="ol-mark" aria-hidden="true">{openReport.agentName.slice(0, 2).toUpperCase()}</span>
+          <span class="rm-name">{openReport.agentName}</span>
+          <span class="ol-chip rm-status"
             class:status-ok={openReport.status === 'completed'}
             class:status-fail={openReport.status === 'failed'}
             class:status-handoff={openReport.status === 'handoff'}>
-            {openReport.status === 'completed' ? $t('office.chief.st_completed') : openReport.status === 'failed' ? $t('office.chief.st_failed') : $t('office.chief.st_handoff')}
+            <i aria-hidden="true"></i>{openReport.status === 'completed' ? $t('office.chief.st_completed') : openReport.status === 'failed' ? $t('office.chief.st_failed') : $t('office.chief.st_handoff')}
           </span>
-          <span class="rm-name" style="color:{openReport.color}">{openReport.agentName}</span>
         </div>
         <div class="rm-head-right">
           <span class="rm-time">{new Date(openReport.ts).toLocaleString()}</span>
-          <button class="rm-close" on:click={() => openReport = null} aria-label={$t('office.chief.close')}>×</button>
+          <button class="ol-btn ghost mo-sm mo-x" on:click={() => openReport = null} aria-label={$t('office.chief.close')}>×</button>
         </div>
       </div>
       <div class="rm-body ip-out-md" on:click={onOutputClick} role="presentation">
         {#if fullReportLoading && !fullReportText}
-          <div style="color:#6a6f82;font:500 11px 'JetBrains Mono',monospace">{$t('office.chief.loading_report')}</div>
+          <div class="rm-loading">{$t('office.chief.loading_report')}</div>
         {/if}
         {@html formatRunOutput(reportParts.body)}
         {#if reportParts.choices}
@@ -869,7 +903,7 @@
             {#if reportParts.choices.question}<div class="rm-choices-q">{reportParts.choices.question}</div>{/if}
             <div class="rm-choices-opts">
               {#each reportParts.choices.options as opt, j (j)}
-                <button class="rm-choice" on:click|stopPropagation={() => answerReportChoice(opt)}>
+                <button class="ol-btn ghost rm-choice" on:click|stopPropagation={() => answerReportChoice(opt)}>
                   <span class="rm-choice-idx">{j + 1}</span><span class="rm-choice-lbl">{opt}</span>
                 </button>
               {/each}
@@ -880,17 +914,17 @@
       <div class="rm-actions">
         <!-- Desestimar: drops this report (and its repeats, for a failure)
              from the office without acting on it. -->
-        <button class="rm-action rm-action-dismiss" on:click={() => openReport && dismissOpenReport(openReport)}>
+        <button class="ol-btn ghost mo-sm rm-action-dismiss" on:click={() => openReport && dismissOpenReport(openReport)}>
           {openReportGroupSize > 1 ? $t('office.chief.dismiss_n', { n: String(openReportGroupSize) }) : $t('office.chief.dismiss')}
         </button>
         <span class="rm-spacer"></span>
-        <button class="rm-action" on:click={() => openReport && copy(displayReportText, 'report-' + openReport.ts)}>
+        <button class="ol-btn ghost mo-sm" on:click={() => openReport && copy(displayReportText, 'report-' + openReport.ts)}>
           {copiedKey === 'report-' + openReport?.ts ? '✓ ' + $t('office.chief.copied') : '⧉ ' + $t('office.chief.copy')}
         </button>
         {#if isLlmConfigError(displayReportText)}
-          <a class="rm-action rm-action-fix" href={LLM_SETTINGS_HREF}>⚙ {$t('office.chief.configure_llm')} →</a>
+          <a class="ol-btn ghost mo-sm rm-action-fix" href={LLM_SETTINGS_HREF}>⚙ {$t('office.chief.configure_llm')} →</a>
         {/if}
-        <button class="rm-action" on:click={() => {
+        <button class="ol-btn ghost mo-sm" on:click={() => {
           if (openReport) {
             selectAgent(openReport.agentId);
             showMyOfficePanel = false;
@@ -901,15 +935,16 @@
         </button>
         {#if activeFixer}
           <div class="rm-fixer-wrap">
-            <button class="rm-action rm-fixer-primary" on:click={sendReportToFixer} disabled={sendingToFixer}
+            <button class="ol-btn mo-sm rm-fixer-primary" class:rm-split={fixerCandidates.length > 1} on:click={sendReportToFixer} disabled={sendingToFixer}
                     title={$t('office.chief.send_to_title', { name: activeFixer.name })}>
               {sendingToFixer ? '⏳ …' : `🛠 ${$t('office.chief.send_to', { name: activeFixer.name })}`}
             </button>
             {#if fixerCandidates.length > 1}
-              <button class="rm-fixer-dropdown" on:click|stopPropagation={() => fixerPickerOpen = !fixerPickerOpen}
+              <button class="ol-btn mo-sm rm-fixer-dropdown" on:click|stopPropagation={() => fixerPickerOpen = !fixerPickerOpen}
                       disabled={sendingToFixer} title={$t('office.chief.pick_fixer')} aria-haspopup="true" aria-expanded={fixerPickerOpen}>▾</button>
             {/if}
             {#if fixerPickerOpen}
+              <!-- svelte-ignore a11y-interactive-supports-focus a11y-click-events-have-key-events -->
               <div class="rm-fixer-menu" role="menu" on:click|stopPropagation>
                 {#each fixerCandidates as cand}
                   <button class="rm-fixer-menu-item" class:rm-fixer-menu-active={cand.id === activeFixer.id}
@@ -931,434 +966,147 @@
 {/if}
 
 <style>
-  /* ═══════════════════════════════════════════════════════════════
-     INFO PANEL — editorial/technical console, refined & data-dense
-     ═══════════════════════════════════════════════════════════════ */
+  /* The office look (ol-mhead, ol-kpi, ol-seg, ol-card, ol-row, ol-btn, ol-chip) draws the parts;
+     what stays here is the drawer frame, its scroll, and the pieces with no global class. */
   .info-panel{
     /* Flush with the 3D's top, right and bottom edges: a gutter there only
        took width from the world. The container's rounded corners clip it. */
     position:absolute;top:0;right:0;bottom:0;
     width:min(720px, 55vw); min-width:560px;
     overflow:hidden;
-    background:linear-gradient(180deg, rgba(16,18,28,.96) 0%, rgba(11,13,20,.97) 100%);
     backdrop-filter:blur(16px) saturate(1.1);
-    border-left:1px solid rgba(120,130,160,.15);
+    border-left:1px solid color-mix(in srgb, var(--gold) 30%, var(--border));
     box-shadow:-20px 0 60px -20px rgba(0,0,0,.6);
     z-index:10;
     animation:slide .25s cubic-bezier(.2,.9,.25,1);
     display:flex;flex-direction:column;
-    color:#d8dae3;
-    --flow-color:#3dd6c8;
+    color:var(--text-1);
   }
   .info-panel::before{
     content:'';position:absolute;top:0;left:0;bottom:0;width:2px;
-    background:linear-gradient(180deg, var(--flow-color) 0%, transparent 70%);
+    background:linear-gradient(180deg, #FBBF24, #F472B6 40%, transparent 75%);
     opacity:.75;pointer-events:none;
   }
   @keyframes slide{from{transform:translateX(20px);opacity:0}}
-
-  /* ── Header ───────────────────── */
-  .ip-head{
-    display:flex;justify-content:space-between;align-items:flex-start;gap:12px;
-    padding:18px 18px 12px;
-    border-bottom:1px solid rgba(120,130,160,.08);
-    flex-shrink:0;
-  }  .ip-glyph{
-    width:32px;height:32px;border-radius:8px;
-    display:grid;place-items:center;
-    font:500 15px 'JetBrains Mono',monospace;
-    color:var(--flow-color);
-    background:color-mix(in srgb, var(--flow-color) 8%, transparent);
-    border:1px solid color-mix(in srgb, var(--flow-color) 30%, transparent);
-    flex-shrink:0;
-  }
-  /* One rhythm for the whole header. The name, the identity row and the tag
-     row used ad-hoc 4px/5px margins, so nothing lined up with anything. */
-  .ip-head-txt{min-width:0;flex:1;display:flex;flex-direction:column;gap:7px}
-  .ip-name{
-    font:600 17px/1.1 'Syne',sans-serif;
-    color:#f0f2f7;
-    letter-spacing:-.01em;
-    word-break:break-word;
-    display:inline-flex;align-items:center;gap:8px;
-  }
-  /* Wraps instead of overflowing: a long flow name plus an id used to push the
-     row past the panel edge. */
-  .ip-close{
-    background:rgba(255,255,255,.03);border:1px solid rgba(120,130,160,.12);
-    color:#8a8fa8;
-    width:28px;height:28px;
-    border-radius:8px;
-    font:400 18px/1 'Syne',sans-serif;
-    cursor:pointer;transition:all .15s;
-    display:grid;place-items:center;
-    flex-shrink:0;
-  }
-  .ip-close:hover{background:rgba(239,93,110,.12);border-color:rgba(239,93,110,.3);color:#ef5d6e}
-
-  /* ── Tabs ─────────────────────── */
-  .ip-tabs{
-    display:flex;gap:2px;
-    padding:0 18px;
-    border-bottom:1px solid rgba(120,130,160,.08);
-    flex-shrink:0;
-  }
-  .ip-tab{
-    position:relative;
-    padding:12px 16px;
-    font:600 10px 'Syne',sans-serif;letter-spacing:1px;text-transform:uppercase;
-    background:none;border:none;
-    color:#6a6f82;cursor:pointer;transition:color .15s;
-    display:inline-flex;align-items:center;gap:6px;
-  }
-  .ip-tab:hover{color:#b0b5c8}
-  .ip-tab.active{color:#f0f2f7}
-  .ip-tab.active::after{
-    content:'';position:absolute;bottom:-1px;left:12px;right:12px;height:2px;
-    background:var(--flow-color);border-radius:2px 2px 0 0;
+  .office-reports-panel{
+    background:radial-gradient(120% 50% at 0% 0%, color-mix(in srgb, var(--gold) 9%, transparent), transparent 60%), linear-gradient(180deg, rgba(16,18,28,.97), rgba(11,13,20,.98));
   }
 
-  /* ── "Configure LLM" chip ──
-     A run that dies with no provider configured is not a report, it is a task.
-     The kernel already names the screen in prose ("Settings → AI"); this is
-     that sentence as something you can click, wherever the failure surfaces:
-     the chat error banner, the failed reply, and the office error card. */
-    /* Under a card rather than beside a message: own line, indented to the card. */
+  /* ── Head: mark + Dirección + gradient title, KPI filters, tabs ── */
+  .mo-head{display:flex;flex-direction:column;gap:10px;padding:14px 16px 10px;border-bottom:1px solid var(--border);flex-shrink:0}
+  .mo-mark{--oc:var(--gold);color:var(--gold);font-size:18px;text-shadow:0 0 12px var(--gold)}
+  .mo-status{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:4px}
+  .mo-chip-run i{animation:mo-pulse 1.4s ease-in-out infinite}
+  @keyframes mo-pulse{50%{opacity:.35;transform:scale(.8)}}
+  .mo-head-actions{display:flex;align-items:center;gap:6px;flex:none;align-self:flex-start}
+  .mo-sm{height:30px;padding:0 11px;font-size:12px}
+  .mo-x{width:30px;padding:0;justify-content:center;font-size:17px;line-height:1}
+  .mo-x:hover:not(:disabled){color:#ef5d6e;border-color:rgba(239,93,110,.45)}
+  .mo-kpis{grid-template-columns:repeat(4, minmax(0, 1fr));gap:8px}
+  .mo-kpis .ol-kpi{padding:5px 10px}
+  .mo-kpis .ol-kpi b{font-size:18px}
+  .mo-tabs{align-self:flex-start;max-width:100%;overflow-x:auto;scrollbar-width:none}
+  .mo-tabs em{font-variant-numeric:tabular-nums}
+  .mo-tabs .mo-em-q{color:#f0b874}
+  .mo-tabs .mo-em-err{color:#fb7185}
 
-  /* ── Modal ──────────────────── */
-  .modal-overlay{position:fixed;inset:0;z-index:var(--z-modal);background:rgba(0,0,0,.6);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center}
+  /* ── Body ── */
+  /* Single scrollable body: the question cards AND the report lists share one
+     scrollbar instead of each fighting for height inside the flex column. */
+  .or-scroll{
+    flex:1;min-height:0;overflow-y:auto;padding-bottom:8px;
+    scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--gold) 30%, transparent) transparent;
+  }
+  .mo-sec{padding:12px 16px 6px}
+  .mo-sec-t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mo-sec-q{color:#f0b874}
+  .mo-sec-fail{color:#fb7185}
+  .mo-more-link{margin-left:auto;text-transform:none;letter-spacing:0;font-weight:600}
+  .mo-bulk{margin-left:auto;height:26px;font-size:11px;text-transform:none;letter-spacing:0}
+  .mo-owed-chip{text-transform:none;letter-spacing:0}
+  .mo-hint{font-size:11px;color:var(--text-3)}
+  .mo-center{text-align:center;padding:0 16px 16px}
+  .mo-age-triage{padding:0 16px 4px}
+  .mo-age-groups{padding:0 16px 12px}
+  .bq-list{display:flex;flex-direction:column;gap:8px;padding:0 16px 8px}
+  .office-reports-list{padding:0 16px 8px;display:flex;flex-direction:column;gap:6px}
+  .mo-list{padding:0 16px 8px}
+  .mo-row{padding:6px 10px}
+  .mo-row .ol-row-txt small{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical}
+  .or-status{
+    font:800 10px var(--font-body);
+    width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;
+    border-radius:50%;flex-shrink:0;
+  }
+  .or-status.status-ok{background:rgba(120,220,140,.15);color:#78dc8c;box-shadow:0 0 8px -2px #78dc8c}
+  .or-status.status-handoff{background:rgba(61,214,200,.15);color:#3dd6c8;box-shadow:0 0 8px -2px #3dd6c8}
+  .or-time{flex-shrink:0;font-size:10.5px;color:var(--text-3);white-space:nowrap;font-variant-numeric:tabular-nums}
+
+  .mo-allgood{flex-direction:row;align-items:center;gap:12px;margin:12px 16px}
+  .mo-allgood-ico{
+    width:30px;height:30px;border-radius:50%;display:grid;place-items:center;flex:none;
+    color:#0a0e14;background:#34D399;box-shadow:0 0 14px -2px #34D399;font:800 15px var(--font-body);
+  }
+  .mo-allgood-t{font:700 13.5px var(--font-display);color:var(--text-1)}
+  .mo-allgood-s{font-size:11.5px;color:var(--text-2)}
+
+  /* Resolved by the chief: a read-only fold of rows. */
+  .bq-chief-history{margin:10px 16px}
+  .bq-chief-history summary{cursor:pointer;padding:4px 0 6px;list-style:none}
+  .bq-chief-history summary::-webkit-details-marker{display:none}
+  .bq-chief-row .ol-row-txt small{white-space:nowrap}
+  .bq-chief-a{flex-shrink:0;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;font-weight:700;color:#8fd6a8}
+
+  /* Activity: an agent filter, rows that open in place. */
+  .mo-filters{margin:12px 16px 8px;flex-wrap:wrap;max-width:calc(100% - 32px)}
+  .mo-filter-dot{width:7px;height:7px;border-radius:50%;background:var(--c);box-shadow:0 0 6px var(--c)}
+  .mo-act{display:flex;flex-direction:column;gap:4px}
+  .mo-caret{color:var(--text-3);font-size:10px}
+  .mo-act-body{margin:0 4px 2px;max-height:420px}
+  .mo-group-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:0 6px 6px}
+  .mo-link{background:none;border:none;padding:0;cursor:pointer;font:600 11.5px var(--font-body);color:#9fb4e8}
+  .mo-link:hover{color:#c4d3f7;text-decoration:underline;text-underline-offset:2px}
+  .mo-link-dim{color:var(--text-3)}
+  .mo-link-dim:hover{color:var(--text-1)}
 
   /* ── Markdown output (run.result / step.content) ── */
   .ip-out-md{
-    font:400 12.5px/1.6 'Manrope',sans-serif;color:#d0d4e0;
-    padding:14px 18px;border-radius:6px;background:rgba(0,0,0,.22);
+    font:400 12.5px/1.6 var(--font-body);color:var(--text-1);
+    padding:12px 16px;border-radius:10px;background:rgba(0,0,0,.22);border:1px solid color-mix(in srgb, var(--oc, var(--gold)) 16%, var(--border));
     word-break:break-word;overflow-wrap:anywhere;max-height:380px;overflow-y:auto;
     scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
   }
 
-  /* ── My Office reports panel ── */
-  .office-reports-panel{
-    border-color:rgba(201,168,76,.35);
-    background:linear-gradient(180deg, rgba(201,168,76,.06) 0%, #0d1020 40%);
-  }
-  .or-empty{padding:24px 16px;text-align:center;color:#6a6f82;font:500 12px 'Manrope',sans-serif}
-  /* Single scrollable body for the My Office panel — wraps the pending
-   * question cards AND the report list so they share one scrollbar instead
-   * of each fighting for height inside the flex column. */
-  .or-scroll{
-    flex:1;min-height:0;overflow-y:auto;
-    scrollbar-width:thin;scrollbar-color:rgba(201,168,76,.25) transparent;
-  }
-  .office-reports-list{
-    padding:8px 10px;
-    display:flex;flex-direction:column;gap:6px;
-  }
-
-  /* ── My Office tabs ────────────────────────────── */
-  .mo-tabs{
-    padding:0 14px;
-    border-bottom:1px solid rgba(120,130,160,.1);
-    flex-shrink:0;
-  }
-  .mo-tab-badge{
-    display:inline-flex;align-items:center;justify-content:center;
-    min-width:18px;height:16px;padding:0 5px;margin-left:6px;
-    border-radius:8px;
-    font:700 9px 'JetBrains Mono',monospace;
-    background:rgba(120,130,160,.18);color:#cbd0e8;
-  }
-  .mo-tab-badge-q{background:rgba(240,184,116,.22);color:#f0b874}
-  .mo-tab-badge-err{background:rgba(239,93,110,.22);color:#ef5d6e}
-
-  /* ── My Office overview (KPIs + previews) ──────── */
-
-  /* Compact overview question preview — clickable card hint */
-  .or-section-more{
-    margin-left:auto;background:none;border:none;cursor:pointer;
-    font:600 10px 'JetBrains Mono',monospace;color:#7a9aff;padding:2px 4px;
-  }
-  .or-section-more:hover{color:#a0b7ff;text-decoration:underline}
-
-  /* ── Bulk action buttons (tab toolbars) ────────── */
-  .mo-bulk-btn{
-    margin-left:auto;
-    padding:3px 10px;border-radius:6px;cursor:pointer;
-    font:600 10px 'JetBrains Mono',monospace;letter-spacing:.3px;
-    border:1px solid transparent;transition:all .12s;
-  }
-  .mo-bulk-btn:disabled{opacity:.5;cursor:wait}
-  .mo-bulk-dismiss{
-    background:rgba(240,184,116,.08);border-color:rgba(240,184,116,.3);color:#f0b874;
-  }
-  .mo-bulk-dismiss:hover:not(:disabled){background:rgba(240,184,116,.18);border-color:rgba(240,184,116,.5)}
-  .mo-bulk-clear{
-    background:rgba(239,93,110,.08);border-color:rgba(239,93,110,.3);color:#ef5d6e;
-  }
-  .mo-bulk-clear:hover:not(:disabled){background:rgba(239,93,110,.18);border-color:rgba(239,93,110,.5)}
-
-  /* Footer bulk action variants */
-  .office-clear-btn-soft{
-    background:rgba(120,130,160,.08);border-color:rgba(120,130,160,.3);color:#8a8fa8;
-  }
-  .office-clear-btn-soft:hover{background:rgba(120,130,160,.16);border-color:rgba(120,130,160,.5);color:#cbd0e8}  .or-card{
-    display:flex;flex-direction:column;gap:4px;width:100%;
-    padding:10px 12px;border:none;border-radius:8px;
-    background:rgba(120,130,160,.04);color:#c0c5d8;cursor:pointer;
-    text-align:left;transition:background .12s;
-    border-left:3px solid transparent;
-  }
-  .or-card:hover{background:rgba(201,168,76,.08)}  .or-card.or-handoff{border-left-color:rgba(61,214,200,.4);background:rgba(61,214,200,.03)}
-  .or-section{
-    display:flex;align-items:baseline;gap:8px;
-    padding:10px 14px 2px;margin-top:4px;
-  }
-  .or-section:first-child{margin-top:0}
-  .or-section-title{
-    font:700 10px 'Syne',sans-serif;letter-spacing:1px;text-transform:uppercase;
-    color:#8a8fa8;
-  }
-  .or-section-title.or-section-fail{color:#ef5d6e}
-  .or-section-title.or-section-q{color:#f0b874}
-  .or-section-hint{font:500 9px 'JetBrains Mono',monospace;color:#5a5f7a}
-
-  /* ── Questions grouped by age (QuestionAgeGroups) ── */
-  .mo-owed-chip{
-    font:600 9px 'JetBrains Mono',monospace;color:#f0b874;text-transform:uppercase;letter-spacing:.5px;
-    border:1px solid rgba(240,184,116,.35);border-radius:999px;padding:1px 7px;
-  }
-  .mo-age-triage{padding:2px 14px 0}
-  .mo-age-groups{padding:0 14px 12px}
-
-  /* ── Top-agent question cards ─────────────────────── */
-  .bq-list{ display:flex; flex-direction:column; gap:10px; padding:0 14px 12px; }  .bq-from-dot{ width:7px; height:7px; border-radius:50%; }
-  .bq-from{ color:#e7e9f4; }  /* Options that open a URL — make them visually distinct (subtle teal tint
-     + arrow chevron). */
-  .bq-chief-history{ margin:12px 14px; font:500 11px 'Manrope',sans-serif; color:#9aa0bd; }
-  .bq-chief-history summary{ cursor:pointer; padding:4px 0; }
-  .bq-chief-row{ display:flex; align-items:baseline; gap:6px; padding:4px 0; border-top:1px solid #1e2236; }
-  .bq-chief-q{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .bq-chief-a{ color:#8fd6a8; white-space:nowrap; }
-  /* Direct link chip — surfaces the URL from `context` above the options
-     so the user can preview the link without having to commit to an answer. */
-    .or-card-header{
-    display:flex;align-items:center;gap:6px;
-  }
-  .or-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
-  .or-status{
-    font:700 9px 'JetBrains Mono',monospace;
-    width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;
-    border-radius:4px;flex-shrink:0;
-  }
-  .status-ok{background:rgba(120,220,140,.15);color:#78dc8c}
-  .status-fail{background:rgba(239,93,110,.15);color:#ef5d6e}
-  .status-handoff{background:rgba(61,214,200,.15);color:#3dd6c8}
-  .or-name{font:600 11px 'Manrope',sans-serif;flex-shrink:0;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .or-time{margin-left:auto;flex-shrink:0;font:500 9px 'JetBrains Mono',monospace;color:#4a4f6a}
-  .or-card-body{
-    font:400 11px/1.4 'Manrope',sans-serif;color:#8a8fa8;
-    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
-    overflow:hidden;word-break:break-word;padding-left:29px;
-  }  .or-footer{
-    padding:8px 12px;border-top:1px solid rgba(120,130,160,.1);
+  /* ── Footer: the everyday action in sight, the destructive one behind ⋯ ── */
+  .or-footer{
+    padding:8px 16px;border-top:1px solid var(--border);
     display:flex;justify-content:flex-end;gap:6px;flex-wrap:wrap;
-  }
-  .office-clear-btn{
-    padding:5px 12px;border-radius:6px;
-    font:600 10px 'JetBrains Mono',monospace;letter-spacing:.3px;
-    background:rgba(120,130,160,.06);border:1px solid rgba(120,130,160,.18);
-    color:#8a8fa8;cursor:pointer;transition:all .12s;
-  }
-  .office-clear-btn:hover{background:rgba(120,130,160,.16);color:#fff}
-
-  /* ── Report detail modal ── */
-  .report-modal{
-    width:min(700px, 90vw);max-height:85vh;
-    background:#0d1020;border:1px solid rgba(201,168,76,.35);border-radius:14px;
-    display:flex;flex-direction:column;overflow:hidden;
-    box-shadow:0 20px 60px rgba(0,0,0,.7), 0 0 40px rgba(201,168,76,.08);
-  }
-  .rm-head{
-    display:flex;align-items:center;justify-content:space-between;
-    padding:16px 20px;border-bottom:1px solid rgba(120,130,160,.12);
-    gap:12px;flex-wrap:wrap;
-  }
-  .rm-head-left{display:flex;align-items:center;gap:10px}
-  .rm-head-right{display:flex;align-items:center;gap:12px}
-  .rm-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
-  .rm-status{
-    font:700 10px 'Syne',sans-serif;letter-spacing:1px;text-transform:uppercase;
-    padding:3px 10px;border-radius:5px;
-  }
-  .rm-status.status-ok{background:rgba(120,220,140,.15);color:#78dc8c;border:1px solid rgba(120,220,140,.35)}
-  .rm-status.status-fail{background:rgba(239,93,110,.15);color:#ef5d6e;border:1px solid rgba(239,93,110,.35)}
-  .rm-status.status-handoff{background:rgba(61,214,200,.15);color:#3dd6c8;border:1px solid rgba(61,214,200,.35)}
-  .rm-name{font:600 14px 'Manrope',sans-serif}
-  .rm-time{font:500 10px 'JetBrains Mono',monospace;color:#6a6f82}
-  .rm-close{
-    background:transparent;border:none;color:#8a8fa8;font:400 22px/1 'Manrope',sans-serif;
-    cursor:pointer;padding:0 4px;transition:color .12s;
-  }
-  .rm-close:hover{color:#fff}
-  .rm-body{
-    flex:1;min-height:0;overflow-y:auto;padding:20px 24px;
-    scrollbar-width:thin;scrollbar-color:rgba(201,168,76,.2) transparent;
-    word-break:break-word;white-space:pre-wrap;
-    font:400 12px/1.6 'Manrope',sans-serif;color:#c0c5d8;
-  }
-  .rm-actions{
-    display:flex;justify-content:flex-end;gap:8px;align-items:center;flex-wrap:wrap;
-    padding:12px 20px;border-top:1px solid rgba(120,130,160,.12);
-  }
-  .rm-action{
-    padding:7px 14px;border-radius:7px;
-    font:600 10px 'JetBrains Mono',monospace;letter-spacing:.3px;
-    background:rgba(120,130,160,.08);border:1px solid rgba(120,130,160,.22);
-    color:#c0c5d8;cursor:pointer;transition:all .12s;
-  }
-  .rm-action:hover{background:rgba(120,130,160,.16);border-color:rgba(120,130,160,.4);color:#fff}
-  /* Same row, same shape — but it is a link, and it is the one action that
-     fixes the cause rather than routing the symptom somewhere. */
-  .rm-action-fix{
-    display:inline-flex;align-items:center;text-decoration:none;
-    background:rgba(201,168,76,.10);border-color:rgba(201,168,76,.45);color:#d4a84b;
-  }
-  .rm-action-fix:hover{background:rgba(201,168,76,.20);border-color:#d4a84b;color:#f0d9a0}
-  .rm-action:disabled{opacity:.5;cursor:not-allowed}
-
-  /* Send-to-fixer split button + dropdown */
-  .rm-fixer-wrap{position:relative;display:inline-flex;align-items:stretch}
-  .rm-fixer-primary{
-    border-color:#ffb84a55;background:rgba(255,184,74,.08);color:#ffb84a;
-    border-top-right-radius:0;border-bottom-right-radius:0;
-  }
-  .rm-fixer-primary:hover{background:rgba(255,184,74,.18);border-color:#ffb84a;color:#ffd28a}
-  .rm-fixer-primary:disabled{color:#7a6a3a}
-  .rm-fixer-dropdown{
-    padding:7px 9px;border-radius:7px;
-    border-top-left-radius:0;border-bottom-left-radius:0;border-left:none;
-    font:600 11px 'JetBrains Mono',monospace;line-height:1;
-    background:rgba(255,184,74,.08);border:1px solid #ffb84a55;color:#ffb84a;cursor:pointer;
-  }
-  .rm-fixer-dropdown:hover{background:rgba(255,184,74,.18);color:#ffd28a}
-  .rm-fixer-dropdown:disabled{opacity:.5;cursor:not-allowed}
-  .rm-fixer-menu{
-    position:absolute;right:0;bottom:calc(100% + 4px);z-index:var(--z-toast);
-    min-width:240px;max-width:340px;
-    background:rgba(8,6,2,.96);border:1px solid #ffb84a55;border-radius:8px;
-    box-shadow:0 8px 28px rgba(0,0,0,.55),0 0 18px rgba(255,184,74,.15);
-    overflow:hidden;
-  }
-  .rm-fixer-menu-item{
-    display:flex;flex-direction:column;align-items:flex-start;gap:2px;
-    width:100%;padding:8px 12px;border:none;background:transparent;cursor:pointer;
-    border-bottom:1px solid rgba(255,184,74,.08);text-align:left;
-    transition:background .1s;
-  }
-  .rm-fixer-menu-item:last-child{border-bottom:none}
-  .rm-fixer-menu-item:hover{background:rgba(255,184,74,.1)}
-  .rm-fixer-menu-active{background:rgba(255,184,74,.16)}
-  .rm-fixer-menu-name{font:700 11px 'Syne',sans-serif;color:#ffb84a;letter-spacing:.5px}
-  .rm-fixer-menu-hint{font:400 10px 'Manrope',sans-serif;color:#8a7a5a;letter-spacing:.2px}
-  .rm-fixer-status{
-    font:600 10px 'JetBrains Mono',monospace;color:#9aa5b8;
-    margin-right:auto;padding-left:4px;
-  }
-
-  /* ═══ Chief's office — header, "needs you", groups, activity ═══ */
-  .mo-head{align-items:center}
-  .mo-glyph{color:#c9a84c;--flow-color:#c9a84c}
-  .mo-status{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px}
-  .mo-chip{
-    display:inline-flex;align-items:center;gap:6px;height:20px;padding:0 8px;border-radius:999px;
-    font:600 10.5px 'Manrope',sans-serif;color:#a0a5b8;
-    background:rgba(120,130,160,.1);border:1px solid rgba(120,130,160,.22);
-  }
-  .mo-chip-run{color:#7cc4ff;background:rgba(124,196,255,.1);border-color:rgba(124,196,255,.32)}
-  .mo-chip-q{color:#f0b874;background:rgba(240,184,116,.1);border-color:rgba(240,184,116,.3)}
-  .mo-pulse{width:6px;height:6px;border-radius:50%;background:currentColor;animation:mo-pulse 1.4s ease-in-out infinite}
-  @keyframes mo-pulse{50%{opacity:.35;transform:scale(.8)}}
-  .mo-head-actions{display:flex;align-items:center;gap:6px;margin-left:auto;flex:none}
-  .mo-btn{
-    height:32px;padding:0 12px;border-radius:8px;cursor:pointer;
-    font:600 12px 'Manrope',sans-serif;color:#dde0ea;
-    background:rgba(255,255,255,.03);border:1px solid rgba(120,130,160,.22);
-    transition:background .15s, border-color .15s;
-  }
-  .mo-btn:hover{background:rgba(255,255,255,.07);border-color:rgba(120,130,160,.4)}
-  .mo-btn-primary{color:#0a0e14;background:#c9a84c;border-color:#c9a84c}
-  .mo-btn-primary:hover{background:#d8b85a;border-color:#d8b85a}
-  .mo-btn:focus-visible{outline:2px solid rgba(120,170,255,.7);outline-offset:2px}
-  .ip-close{width:32px;height:32px}
-
-  .mo-allgood{
-    display:flex;align-items:center;gap:12px;margin:14px;padding:14px 16px;border-radius:10px;
-    background:rgba(120,220,140,.06);border:1px solid rgba(120,220,140,.22);
-  }
-  .mo-allgood-ico{
-    width:30px;height:30px;border-radius:50%;display:grid;place-items:center;flex:none;
-    color:#0a0e14;background:#78dc8c;font:700 15px 'Manrope',sans-serif;
-  }
-  .mo-allgood-t{font:700 13px 'Manrope',sans-serif;color:#dfe2ec}
-  .mo-allgood-s{font:500 11.5px 'Manrope',sans-serif;color:#8a8fa8}
-  .mo-center{text-align:center;padding:0 16px 16px}  .mo-group-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:2px 12px 9px}
-  .mo-link{
-    background:none;border:none;padding:0;cursor:pointer;
-    font:600 11px 'Manrope',sans-serif;color:#9fb4e8;
-  }
-  .mo-link:hover{color:#c4d3f7;text-decoration:underline;text-underline-offset:2px}
-  .mo-link-dim{color:#8a8fa8}
-  .mo-link-dim:hover{color:#dde0ea}
-
-  .mo-filters{display:flex;flex-wrap:wrap;gap:6px;padding:10px 14px 4px}
-  .mo-filter{
-    display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:999px;cursor:pointer;
-    font:600 11px 'Manrope',sans-serif;color:#c4c8d6;
-    background:rgba(255,255,255,.03);border:1px solid rgba(120,130,160,.22);
-  }
-  .mo-filter span:last-child{font:600 10px 'JetBrains Mono',monospace;color:#7a7f92}
-  .mo-filter-dot{width:7px;height:7px;border-radius:2px;background:var(--c, #8a8fa8)}
-  .mo-filter.on{color:#0a0e14;background:#dde0ea;border-color:#dde0ea}
-  .mo-filter.on span:last-child{color:#3a3f52}
-  .mo-act{padding:0;display:block}
-  .mo-act-head{display:block;width:100%;padding:9px 12px;background:none;border:none;cursor:pointer;text-align:left;color:inherit}
-  .mo-caret{color:#6a6f82;font-size:10px;margin-left:4px}
-  .mo-act-body{margin:0 12px 8px;max-height:420px}
-  .mo-act-open{border-color:rgba(120,130,160,.35)}
-
-  .mo-tab-badge{
-    margin-left:6px;font:700 9px 'JetBrains Mono',monospace;padding:1px 6px;border-radius:999px;
-    color:#a0a5b8;background:rgba(120,130,160,.16);
   }
   .mo-more{position:relative;margin-left:auto}
   .mo-more-menu{
-    position:absolute;right:0;bottom:calc(100% + 6px);min-width:200px;padding:5px;border-radius:8px;z-index:5;
-    background:#11131d;border:1px solid rgba(120,130,160,.28);box-shadow:0 14px 30px -10px rgba(0,0,0,.7);
+    position:absolute;right:0;bottom:calc(100% + 6px);min-width:200px;padding:5px;border-radius:10px;z-index:5;
+    background:var(--surface-1);border:1px solid var(--border-h);box-shadow:0 14px 30px -10px rgba(0,0,0,.7);
   }
   .mo-more-item{
-    display:block;width:100%;padding:7px 10px;border-radius:6px;border:none;background:none;cursor:pointer;text-align:left;
-    font:600 12px 'Manrope',sans-serif;color:#dde0ea;
+    display:block;width:100%;padding:7px 10px;border-radius:7px;border:none;background:none;cursor:pointer;text-align:left;
+    font:600 12px var(--font-body);color:var(--text-1);
   }
   .mo-more-item:hover{background:rgba(255,255,255,.06)}
   .mo-more-danger{color:#ef5d6e}
   .mo-more-danger:hover{background:rgba(239,93,110,.12)}
 
-  .rm-spacer{flex:1}
-  .rm-action-dismiss{color:#c4c8d6}
-  .rm-action-dismiss:hover{color:#ef5d6e;border-color:rgba(239,93,110,.45)}
-  @media (prefers-reduced-motion: reduce){ .mo-pulse{animation:none} }
-
   /* ── Loading skeleton ── */
-  .mo-skel{padding:12px 14px;display:flex;flex-direction:column;gap:8px}
-  .mo-skel-h{display:flex;align-items:center;gap:8px;font:600 11px 'Manrope',sans-serif;color:#8a8fa8;margin-bottom:2px}
+  .mo-skel{padding:12px 16px;display:flex;flex-direction:column;gap:8px}
+  .mo-skel-h{display:flex;align-items:center;gap:8px;font:600 11.5px var(--font-body);color:var(--text-2);margin-bottom:2px}
   .mo-spin{
     width:12px;height:12px;border-radius:50%;flex:none;
-    border:2px solid rgba(201,168,76,.25);border-top-color:#c9a84c;
+    border:2px solid color-mix(in srgb, var(--gold) 25%, transparent);border-top-color:var(--gold);
     animation:mo-spin .8s linear infinite;
   }
   @keyframes mo-spin{to{transform:rotate(360deg)}}
   .mo-skel-card{
-    display:flex;flex-direction:column;gap:7px;padding:12px;border-radius:8px;
-    background:rgba(255,255,255,.02);border:1px solid rgba(120,130,160,.12);
+    display:flex;flex-direction:column;gap:7px;padding:12px;border-radius:14px;
+    background:var(--surface-1);border:1px solid var(--border);
     animation:mo-skel-in .3s ease-out both;
   }
   @keyframes mo-skel-in{from{opacity:0;transform:translateY(4px)}}
@@ -1369,26 +1117,81 @@
   }
   @keyframes mo-shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
   .mo-skel-w30{width:30%}.mo-skel-w60{width:60%}.mo-skel-w90{width:90%}
-  @media (prefers-reduced-motion: reduce){ .mo-spin, .mo-skel-line, .mo-skel-card{animation:none} }
+
+  /* ── Report detail modal ── */
+  .modal-overlay{position:fixed;inset:0;z-index:var(--z-modal);background:rgba(0,0,0,.6);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center}
+  .report-modal{
+    --oc:var(--gold);
+    width:min(700px, 90vw);max-height:85vh;
+    background:radial-gradient(120% 60% at 0% 0%, color-mix(in srgb, var(--oc) 10%, transparent), transparent 55%), var(--surface-1);
+    border:1px solid color-mix(in srgb, var(--oc) 35%, var(--border));border-radius:14px;
+    display:flex;flex-direction:column;overflow:hidden;
+    box-shadow:0 20px 60px rgba(0,0,0,.7), 0 0 40px -20px var(--oc);
+  }
+  .rm-head{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:12px 16px;border-bottom:1px solid var(--border);
+    gap:12px;flex-wrap:wrap;
+  }
+  .rm-head-left{flex:1;gap:10px}
+  .rm-head-right{display:flex;align-items:center;gap:10px}
+  .rm-status.status-ok{--c:#78dc8c}
+  .rm-status.status-fail{--c:#fb7185}
+  .rm-status.status-handoff{--c:#3dd6c8}
+  .rm-name{min-width:0;font:700 15px var(--font-display);color:color-mix(in srgb, var(--oc) 60%, white);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rm-time{font-size:11px;color:var(--text-3);font-variant-numeric:tabular-nums}
+  .rm-loading{color:var(--text-3);font-size:11.5px}
+  .rm-body{
+    flex:1;min-height:0;overflow-y:auto;padding:16px 20px;max-height:none;border:0;border-radius:0;background:none;
+    scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--gold) 20%, transparent) transparent;
+    white-space:pre-wrap;
+  }
+  .rm-actions{
+    display:flex;justify-content:flex-end;gap:6px;align-items:center;flex-wrap:wrap;
+    padding:10px 16px;border-top:1px solid var(--border);
+  }
+  .rm-spacer{flex:1}
+  .rm-action-dismiss:hover:not(:disabled){color:#ef5d6e;border-color:rgba(239,93,110,.45)}
+  /* A link, and the one action that fixes the cause rather than routing the symptom. */
+  .rm-action-fix{text-decoration:none;color:var(--gold);border-color:color-mix(in srgb, var(--gold) 45%, var(--border-h))}
+  /* Send-to-fixer split button + dropdown */
+  .rm-fixer-wrap{position:relative;display:inline-flex;align-items:stretch}
+  .rm-fixer-primary.rm-split{border-top-right-radius:0;border-bottom-right-radius:0}
+  .rm-fixer-dropdown{padding:0 9px;border-top-left-radius:0;border-bottom-left-radius:0;border-left-color:rgba(0,0,0,.25)}
+  .rm-fixer-menu{
+    position:absolute;right:0;bottom:calc(100% + 4px);z-index:var(--z-toast);
+    min-width:240px;max-width:340px;padding:4px;
+    background:var(--surface-1);border:1px solid color-mix(in srgb, var(--gold) 35%, var(--border));border-radius:10px;
+    box-shadow:0 8px 28px rgba(0,0,0,.55),0 0 18px -6px var(--gold);
+    overflow:hidden;
+  }
+  .rm-fixer-menu-item{
+    display:flex;flex-direction:column;align-items:flex-start;gap:2px;
+    width:100%;padding:7px 10px;border:none;border-radius:7px;background:transparent;cursor:pointer;text-align:left;
+    transition:background .1s;
+  }
+  .rm-fixer-menu-item:hover{background:color-mix(in srgb, var(--gold) 10%, transparent)}
+  .rm-fixer-menu-active{background:color-mix(in srgb, var(--gold) 16%, transparent)}
+  .rm-fixer-menu-name{font:700 12px var(--font-display);color:var(--gold)}
+  .rm-fixer-menu-hint{font-size:10.5px;color:var(--text-3)}
+  .rm-fixer-status{font-size:11px;font-weight:600;color:var(--text-2);margin-right:auto;padding-left:4px}
   /* Same look as the chat's choice buttons (ChatTab .chat-choices). */
   .rm-choices{
-    margin-top:10px;padding:10px 12px;border-radius:8px;
-    background:linear-gradient(180deg, rgba(240,184,116,.08) 0%, rgba(240,184,116,.02) 100%);
-    border:1px solid rgba(240,184,116,.25);border-left:3px solid #f0b874;
+    margin-top:10px;padding:10px 12px;border-radius:12px;white-space:normal;
+    background:linear-gradient(160deg, color-mix(in srgb, var(--gold) 10%, transparent), transparent 70%);
+    border:1px solid color-mix(in srgb, var(--gold) 28%, var(--border));
   }
-  .rm-choices-q{font:600 13px/1.45 'Manrope',sans-serif;color:#e7e9f4;margin:0 0 8px}
+  .rm-choices-q{font:600 13px/1.45 var(--font-body);color:var(--text-1);margin:0 0 8px}
   .rm-choices-opts{display:grid;grid-template-columns:1fr 1fr;gap:5px}
-  .rm-choice{
-    display:flex;align-items:center;gap:8px;min-height:36px;
-    padding:8px 10px;background:#161827;color:#cbd0e8;
-    border:1px solid #2a2f4a;border-radius:5px;
-    font:600 11px/1.35 'Manrope',sans-serif;cursor:pointer;transition:all .12s;text-align:left;
-  }
-  .rm-choice:hover,.rm-choice:focus-visible{background:#252840;border-color:#f0b874;color:#f4e1a3}
+  .rm-choice{height:auto;min-height:34px;padding:6px 10px;white-space:normal;text-align:left;font-size:11.5px;line-height:1.35}
   .rm-choice-idx{
-    flex-shrink:0;width:20px;height:20px;border-radius:3px;background:#0a0b14;
+    flex-shrink:0;width:20px;height:20px;border-radius:6px;background:color-mix(in srgb, var(--surface-1) 55%, #000);
     display:inline-flex;align-items:center;justify-content:center;
-    font:700 10px 'JetBrains Mono',monospace;color:#f0b874;
+    font:800 10px var(--font-display);color:var(--gold);
   }
   .rm-choice-lbl{flex:1;word-break:break-word}
+
+  .mo-link:focus-visible, .bq-chief-history summary:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+  @media (max-width: 760px){ .mo-kpis{grid-template-columns:repeat(2, minmax(0, 1fr))} }
+  @media (prefers-reduced-motion: reduce){ .mo-chip-run i, .mo-spin, .mo-skel-line, .mo-skel-card{animation:none} }
 </style>

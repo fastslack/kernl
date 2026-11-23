@@ -129,11 +129,11 @@
 <svelte:window on:click={() => (menuOpen = false)} />
 
 <div class="bench">
-  <header class="top">
-    <div class="ttl">
-      <h1>{$t('bench.title')}</h1>
-      {#if running}<span class="live"><span class="pulse"></span>{$t('bench.status.running')}</span>{/if}
-      <span class="meta">
+  <header class="ol-strip top">
+    <div class="ol-ttl ttl">
+      <p class="ol-eyebrow">{$t('bench.eyebrow')}{#if running} <span class="ol-st live run-st" style="--sc: var(--b-emerald)"><i></i>{$t('bench.status.running')}</span>{/if}</p>
+      <h1 class="ol-title" title={$t('bench.title')}>{$t('bench.question')}</h1>
+      <p class="ol-sub meta">
         {#if report}
           {$t('bench.meta', { v: report.run.suite_version, when: when(report.run.started_at), n: report.run.targets.length })}{#if mins(report.run)} · {mins(report.run)} min{/if}
           {#if report.run.status !== 'done' && report.run.status !== 'running'} · <span class="warn">{$t(`bench.status.${report.run.status}`)}</span>{/if}
@@ -141,7 +141,26 @@
         {:else if ov}
           {$t('bench.metaEmpty', { tasks: ov.tasks.length, n: ov.targets.length })}
         {/if}
-      </span>
+      </p>
+    </div>
+    <div class="ol-kpis answers">
+      {#if report}
+        {#each cards as c (c.id)}
+          {@const m = hl?.[c.id] ? byKey[hl[c.id] ?? ''] : null}
+          <div class="ol-kpi ans" style="--c:{c.hue}">
+            <small class="ck"><svg viewBox="0 0 24 24" aria-hidden="true"><path d={c.icon} /></svg>{$t(`bench.card.${c.id}`)}{#if running}<span class="prov">{$t('bench.provisional')}</span>{/if}</small>
+            {#if m}
+              <b class="cv" title="{m.name} · {m.model}">{shortModel(m.model)}</b>
+              <small class="cs num">
+                {#if c.id === 'winner'}<em>{m.total}</em> / 100{#if m.coverage < 1} · {$t('bench.covers', { pct: pct0(m.coverage) })}{/if}
+                {:else if c.id === 'bestValue'}<em>{m.total}</em> · {usd(m.costPerTask)}{$t('bench.perTask')}
+                {:else if c.id === 'fastest'}p50 <em>{secs(m.p50)}</em>
+                {:else}<em>{pct0(m.invalidRate)}</em> {$t('bench.invalidShort')} · {pct0(m.providerErrorRate)} {$t('bench.errShort')}{/if}
+              </small>
+            {:else}<b class="cv muted">{running ? $t('bench.waiting') : '—'}</b>{/if}
+          </div>
+        {/each}
+      {/if}
     </div>
     <div class="actions">
       {#if active}
@@ -150,12 +169,12 @@
           <span><b>{progress} %</b> · {active.done}/{active.planned}{#if currentLabel} · {currentLabel}{/if}</span>
         </div>
       {:else}
-        <button type="button" class="btn primary" disabled={busy || !ov?.targets.length} on:click={start}>
+        <button type="button" class="ol-btn" disabled={busy || !ov?.targets.length} on:click={start}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d={ICON.play} /></svg>{busy ? '…' : $t('bench.run')}
         </button>
       {/if}
       <div class="menu-wrap">
-        <button type="button" class="btn icon" aria-haspopup="menu" aria-expanded={menuOpen} aria-label={$t('bench.more')} on:click|stopPropagation={() => (menuOpen = !menuOpen)}>⋯</button>
+        <button type="button" class="ol-btn ghost icon" aria-haspopup="menu" aria-expanded={menuOpen} aria-label={$t('bench.more')} on:click|stopPropagation={() => (menuOpen = !menuOpen)}>⋯</button>
         {#if menuOpen}
           <div class="menu" role="menu" on:click|stopPropagation on:keydown|stopPropagation tabindex="-1">
             {#if active}<button type="button" role="menuitem" on:click={cancel}>{$t('bench.cancel')}</button>{/if}
@@ -179,39 +198,18 @@
   {#if oldSuite}<div class="banner">{$t('bench.oldSuite')}</div>{/if}
 
   {#if !ov}
-    <div class="empty">…</div>
+    <div class="ol-empty">…</div>
   {:else if !report}
-    <div class="empty">
-      <p>{$t('bench.emptyTitle')}</p>
+    <div class="ol-card empty" style="--oc: var(--b-gold)">
+      <p class="etitle">{$t('bench.emptyTitle')}</p>
       <p class="muted">{$t('bench.emptyBody', { tasks: ov.tasks.length, attempts: ov.attemptsPerTask })}</p>
       <ul class="tg">{#each ov.targets as tg (tg.slug)}<li>{tg.name} · <b>{tg.model}</b>{#if !tg.supportsTools} <span class="muted">({$t('bench.noTools')})</span>{/if}</li>{/each}</ul>
       {#if !ov.targets.length}<p class="warn">{$t('bench.noTargets')}</p>{/if}
     </div>
   {:else}
-    <section class="cards">
-      {#each cards as c (c.id)}
-        {@const m = hl?.[c.id] ? byKey[hl[c.id] ?? ''] : null}
-        <div class="card" style="--hue:{c.hue}">
-          <span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d={c.icon} /></svg></span>
-          <div class="cbody">
-            <span class="ck">{$t(`bench.card.${c.id}`)}{#if running}<span class="prov">{$t('bench.provisional')}</span>{/if}</span>
-            {#if m}
-              <span class="cv" title="{m.name} · {m.model}">{shortModel(m.model)}</span>
-              <span class="cs num">
-                {#if c.id === 'winner'}<b>{m.total}</b> / 100{#if m.coverage < 1} · {$t('bench.covers', { pct: pct0(m.coverage) })}{/if}
-                {:else if c.id === 'bestValue'}<b>{m.total}</b> · {usd(m.costPerTask)}{$t('bench.perTask')}
-                {:else if c.id === 'fastest'}p50 <b>{secs(m.p50)}</b>
-                {:else}<b>{pct0(m.invalidRate)}</b> {$t('bench.invalidShort')} · {pct0(m.providerErrorRate)} {$t('bench.errShort')}{/if}
-              </span>
-            {:else}<span class="cv muted">{running ? $t('bench.waiting') : '—'}</span>{/if}
-          </div>
-        </div>
-      {/each}
-    </section>
-
     <section class="mid">
-      <div class="panel rank">
-        <h2>{$t('bench.ranking')}</h2>
+      <div class="ol-card panel rank" style="--oc: var(--b-cyan)">
+        <h2 class="ol-h">{$t('bench.ranking')}<em>{models.length}</em></h2>
         <!-- Wider than its panel on most screens: it scrolls sideways, model column pinned.
              Focusable so the keyboard can scroll it too (WCAG 2.1.1). -->
         <!-- svelte-ignore a11y-no-noninteractive-tabindex -->
@@ -242,23 +240,23 @@
         </table>
         </div>
       </div>
-      <div class="panel">
-        <h2>{$t('bench.byCategory')}</h2>
+      <div class="ol-card panel" style="--oc: var(--b-violet)">
+        <h2 class="ol-h">{$t('bench.byCategory')}</h2>
         <Heatmap {models} {colors} />
       </div>
-      <div class="panel">
-        <h2>{$t('bench.qualityCost')}</h2>
+      <div class="ol-card panel" style="--oc: var(--b-emerald)">
+        <h2 class="ol-h">{$t('bench.qualityCost')}</h2>
         <Scatter models={scored} {colors} />
       </div>
     </section>
 
     <section class="low">
-      <div class="panel tasks">
-        <h2>{$t('bench.tasksTitle', { n: ov.tasks.length, a: ov.attemptsPerTask })}</h2>
+      <div class="ol-card panel tasks" style="--oc: var(--b-sky)">
+        <h2 class="ol-h">{$t('bench.tasksTitle', { n: ov.tasks.length, a: ov.attemptsPerTask })}</h2>
         <TaskTable tasks={ov.tasks} {models} runId={report.run.id} {colors} />
       </div>
-      <div class="panel hist">
-        <h2>{$t('bench.history')}</h2>
+      <div class="ol-card panel hist" style="--oc: var(--b-pink)">
+        <h2 class="ol-h">{$t('bench.history')}</h2>
         <History history={ov.history} {colors} {labels} />
         <p class="note">{$t('bench.note')}</p>
       </div>
@@ -275,76 +273,57 @@
     --b-bad: #F43F5E;
     --b-accent: var(--b-cyan);
     display: flex; flex-direction: column; gap: 12px; padding: 14px 20px 16px; flex: 1; min-height: 0; height: 100%; overflow-y: auto; box-sizing: border-box;
-    background:
-      radial-gradient(900px 300px at 0% -10%, color-mix(in srgb, var(--b-violet) 10%, transparent), transparent 70%),
-      radial-gradient(700px 260px at 100% -10%, color-mix(in srgb, var(--b-cyan) 9%, transparent), transparent 70%);
   }
-  .top { display: flex; align-items: center; gap: 12px; }
-  .ttl { display: flex; align-items: baseline; gap: 12px; min-width: 0; flex: 1; flex-wrap: wrap; }
-  h1 {
-    margin: 0; font-size: 21px; font-weight: 800; letter-spacing: -.01em; font-family: var(--font-display);
-    background: linear-gradient(90deg, var(--b-cyan), var(--b-violet) 55%, var(--b-pink)); -webkit-background-clip: text; background-clip: text; color: transparent;
-  }
-  .meta { font-size: 12px; color: var(--text-2); }
-  .live { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
-    color: var(--b-emerald); padding: 2px 9px; border-radius: 999px; background: color-mix(in srgb, var(--b-emerald) 14%, transparent); align-self: center; }
-  .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--b-emerald); box-shadow: 0 0 0 0 color-mix(in srgb, var(--b-emerald) 70%, transparent); animation: pulse 1.6s infinite; }
-  @keyframes pulse { 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+  /* strip: eyebrow + question · the four answers · run */
+  .ttl { max-width: 300px; }
+  .meta { font-size: 11.5px; }
+  .run-st { margin-left: 6px; vertical-align: 1px; letter-spacing: .05em; }
+  .ans { gap: 1px; }
+  .ck { display: flex; align-items: center; gap: 5px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: var(--c); }
+  .ck svg { flex: none; width: 13px; height: 13px; fill: none; stroke: var(--c); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 4px var(--c)); }
+  .prov { font-size: 9px; letter-spacing: .03em; text-transform: none; color: var(--text-2); background: var(--surface-3); padding: 1px 6px; border-radius: 6px; font-weight: 700; }
+  .ans .cv { font-size: 16px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ans .cv.muted { font-size: 13px; color: var(--text-3); text-shadow: none; }
+  .cs { color: var(--text-2); }
+  .cs em { font-style: normal; font-weight: 800; color: var(--text-1); }
+
   .actions { display: flex; align-items: center; gap: 8px; }
-  .btn { display: inline-flex; align-items: center; gap: 7px; min-height: 38px; padding: 6px 16px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-1); font-size: 13.5px; font-weight: 700; cursor: pointer; transition: transform .15s ease-out, box-shadow .2s, filter .2s; }
-  .btn svg { width: 15px; height: 15px; fill: currentColor; }
-  .btn.primary { border: none; color: #07131a; background: linear-gradient(135deg, var(--b-cyan), var(--b-emerald)); box-shadow: 0 6px 20px -6px color-mix(in srgb, var(--b-cyan) 70%, transparent); }
-  .btn.primary:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.08); box-shadow: 0 10px 26px -8px color-mix(in srgb, var(--b-cyan) 80%, transparent); }
-  .btn:disabled { opacity: .45; cursor: default; }
-  .btn.icon { width: 38px; padding: 0; justify-content: center; font-size: 17px; }
-  .btn:focus-visible, .link:focus-visible, .menu button:focus-visible { outline: 2px solid var(--b-cyan); outline-offset: 2px; }
+  .actions .ol-btn { height: 36px; }
+  .ol-btn svg { width: 14px; height: 14px; fill: currentColor; }
+  .ol-btn.icon { width: 36px; padding: 0; justify-content: center; font-size: 17px; }
+  .link:focus-visible, .menu button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
   .link { all: unset; color: var(--b-cyan); cursor: pointer; font-weight: 600; }
-  .prog { position: relative; width: 360px; height: 38px; border-radius: 10px; background: var(--surface-2); border: 1px solid color-mix(in srgb, var(--b-cyan) 35%, var(--border)); overflow: hidden; }
+  .prog { position: relative; width: 320px; height: 36px; border-radius: 10px; background: var(--surface-2); border: 1px solid color-mix(in srgb, var(--gold) 40%, var(--border)); overflow: hidden; }
   .prog .bar { position: absolute; inset: 0 auto 0 0; transition: width .5s ease-out;
-    background: linear-gradient(90deg, color-mix(in srgb, var(--b-violet) 55%, transparent), color-mix(in srgb, var(--b-cyan) 55%, transparent)); }
+    background: linear-gradient(90deg, color-mix(in srgb, var(--b-violet) 50%, transparent), color-mix(in srgb, var(--b-gold) 50%, transparent)); }
   .prog .bar::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.18), transparent); animation: shine 1.8s infinite; }
   @keyframes shine { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
-  .prog span { position: relative; display: block; padding: 0 12px; line-height: 36px; font-size: 12px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .prog span { position: relative; display: block; padding: 0 12px; line-height: 34px; font-size: 12px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .prog b { color: #fff; }
   .menu-wrap { position: relative; }
   .menu { position: absolute; right: 0; top: 42px; z-index: 20; min-width: 240px; max-height: 380px; overflow: auto; background: var(--surface-1); border: 1px solid var(--border-h); border-radius: 10px; padding: 5px; box-shadow: 0 14px 34px rgba(0,0,0,.45); display: flex; flex-direction: column; }
   .menu button { all: unset; padding: 8px 10px; font-size: 12.5px; color: var(--text-1); cursor: pointer; border-radius: 6px; }
-  .menu button:hover:not(:disabled) { background: color-mix(in srgb, var(--b-cyan) 14%, transparent); }
+  .menu button:hover:not(:disabled) { background: color-mix(in srgb, var(--gold) 12%, transparent); }
   .menu button:disabled { opacity: .4; }
   .msep { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); padding: 9px 10px 3px; }
   .mrun { display: flex; align-items: center; }
   .mrun > button:first-child { flex: 1; }
-  .mrun .cur { color: var(--b-cyan); font-weight: 700; }
+  .mrun .cur { color: var(--gold); font-weight: 700; }
   .menu .del { color: var(--text-3); padding: 8px; }
   .menu .del:hover { color: var(--b-bad); }
   .banner { font-size: 12.5px; padding: 8px 12px; border-radius: 8px; background: color-mix(in srgb, var(--b-orange) 14%, transparent); border: 1px solid color-mix(in srgb, var(--b-orange) 45%, transparent); color: var(--text-1); }
   .empty { margin: auto; max-width: 540px; text-align: center; color: var(--text-1); font-size: 15px; }
-  .tg { list-style: none; padding: 0; font-size: 13px; color: var(--text-2); line-height: 1.8; }
-
-  .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-  .card { position: relative; display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 12px; min-width: 0; overflow: hidden;
-    background: linear-gradient(135deg, color-mix(in srgb, var(--hue) 16%, var(--surface-1)), var(--surface-1) 65%);
-    border: 1px solid color-mix(in srgb, var(--hue) 38%, var(--border)); transition: transform .2s ease-out, box-shadow .2s; }
-  .card:hover { transform: translateY(-2px); box-shadow: 0 12px 28px -14px color-mix(in srgb, var(--hue) 70%, transparent); }
-  .ic { flex: none; width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; background: color-mix(in srgb, var(--hue) 22%, transparent); }
-  .ic svg { width: 21px; height: 21px; fill: none; stroke: var(--hue); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .cbody { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-  .ck { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--hue); font-weight: 800; display: flex; align-items: center; gap: 6px; }
-  .prov { font-size: 9px; letter-spacing: .03em; color: var(--text-2); background: var(--surface-3); padding: 1px 6px; border-radius: 6px; font-weight: 700; }
-  .cv { font-size: 16px; font-weight: 800; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .cs { font-size: 12px; color: var(--text-2); }
-  .cs b { color: var(--text-1); }
+  .empty p { margin: 0; }
+  .etitle { font: 700 16px var(--font-display); }
+  .tg { list-style: none; margin: 0; padding: 0; font-size: 13px; color: var(--text-2); line-height: 1.8; }
 
   .mid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.15fr) minmax(0, 0.9fr); gap: 12px; }
   .low { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr); gap: 12px; flex: 1; min-height: 0; }
-  .panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
   .tasks { min-height: 0; }
-  h2 { margin: 0; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--text-2); display: flex; align-items: center; gap: 8px; }
-  h2::before { content: ''; width: 3px; height: 12px; border-radius: 2px; background: linear-gradient(var(--b-cyan), var(--b-violet)); }
   .rank-scroll { overflow-x: auto; overflow-y: hidden; margin: 0 -4px; padding: 0 4px 6px; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--b-cyan) 45%, transparent) transparent; }
   .rank-scroll::-webkit-scrollbar { height: 6px; }
   .rank-scroll::-webkit-scrollbar-thumb { border-radius: 3px; background: color-mix(in srgb, var(--b-cyan) 45%, transparent); }
-  .rank-scroll:focus-visible { outline: 2px solid var(--b-cyan); outline-offset: 2px; border-radius: 6px; }
+  .rank-scroll:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; border-radius: 6px; }
   .rank table { width: 100%; min-width: 640px; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
   /* Rank and model stay put while the metrics scroll under them. */
   .rank th:nth-child(-n+2), .rank td:nth-child(-n+2) { position: sticky; z-index: 1; background: var(--surface-1); }
@@ -368,12 +347,11 @@
   .bad { color: var(--b-bad); font-weight: 700; }
   .note { margin: 0; font-size: 11px; color: var(--text-3); line-height: 1.45; }
   @media (prefers-reduced-motion: reduce) {
-    .pulse, .prog .bar::after { animation: none; }
-    .btn, .card, .prog .bar { transition: none; }
-    .card:hover, .btn.primary:hover:not(:disabled) { transform: none; }
+    .prog .bar::after { animation: none; }
+    .prog .bar { transition: none; }
   }
   @media (max-width: 1100px) {
-    .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .ttl { max-width: none; }
     .mid, .low { grid-template-columns: minmax(0, 1fr); }
     .tasks { min-height: 420px; }
     .prog { width: 230px; }

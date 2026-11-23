@@ -114,13 +114,13 @@
     <!-- Two worlds, never mixed: what the agent keeps for itself, and the
          developer's repo it works on. Each has its own colour throughout. -->
     {#if hasRepo}
-      <div class="ws-sections" role="tablist" aria-label="Archivos">
-        <button role="tab" class="ws-sec ws-sec-agent" class:on={!onRepo} aria-selected={!onRepo} on:click={() => { section = 'agent'; fileContent = null; }}>
+      <div class="ol-seg ws-sections" role="tablist" aria-label="Archivos">
+        <button role="tab" class="ws-sec ws-sec-agent" style="--c:#A78BFA" class:on={!onRepo} aria-selected={!onRepo} on:click={() => { section = 'agent'; fileContent = null; }}>
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0-6 6c0 2.2 1.2 3.6 2 4.5V17h8v-3.5c.8-.9 2-2.3 2-4.5a6 6 0 0 0-6-6Z"/><path d="M9.5 21h5"/></svg>
           <span class="ws-sec-txt"><b>Del agente</b><small>memoria, notas y apuntes</small></span>
           <span class="ws-sec-n">{notes?.loading ? '…' : agentFileCount}</span>
         </button>
-        <button role="tab" class="ws-sec ws-sec-repo" class:on={onRepo} aria-selected={onRepo} on:click={() => { section = 'repo'; fileContent = null; }}>
+        <button role="tab" class="ws-sec ws-sec-repo" style="--c:#2DD4BF" class:on={onRepo} aria-selected={onRepo} on:click={() => { section = 'repo'; fileContent = null; }}>
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 8v8"/><path d="M18 10c0 4-6 3-10 6"/></svg>
           <span class="ws-sec-txt"><b>Repositorio</b><small>{repoName || 'código del proyecto'}</small></span>
         </button>
@@ -128,8 +128,8 @@
     {/if}
 
     {#if onRepo}
-      <div class="ws-cwd-card ws-card-repo">
-        <div class="ws-card-title">Repositorio del desarrollador <span>el código del proyecto · lo que el agente edita acá queda en el repo</span></div>
+      <div class="ol-card ws-cwd-card ws-card-repo" style="--oc:#2DD4BF">
+        <h3 class="ol-h ws-card-title">Repositorio del desarrollador <small>el código del proyecto · lo que el agente edita acá queda en el repo</small></h3>
         <div class="ws-cwd-row">
           <span class="ws-cwd-lbl">cwd</span>
           <code class="ws-cwd-path">{info.cwdLabel}</code>
@@ -159,8 +159,8 @@
         </div>
       </div>
     {:else}
-      <div class="ws-cwd-card ws-card-agent">
-        <div class="ws-card-title">Archivos del agente <span>su memoria, notas y apuntes · {hasRepo ? 'no son parte del repositorio' : 'este agente no trabaja sobre un repositorio'}</span></div>
+      <div class="ol-card ws-cwd-card ws-card-agent" style="--oc:#A78BFA">
+        <h3 class="ol-h ws-card-title">Archivos del agente <small>su memoria, notas y apuntes · {hasRepo ? 'no son parte del repositorio' : 'este agente no trabaja sobre un repositorio'}</small></h3>
         <div class="ws-cwd-row">
           <span class="ws-cwd-lbl">dónde</span>
           <code class="ws-cwd-path">{hasRepo ? notes?.label : info.cwdLabel}</code>
@@ -170,13 +170,13 @@
     {/if}
   {/if}
   {#if loading || (!onRepo && notes?.loading)}
-    <div class="ws-loading">Cargando archivos…</div>
+    <div class="ol-empty ws-loading">Cargando archivos…</div>
   {:else if !info?.wsId && !info?.cwdPath}
-    <div class="ws-empty">This agent uses <code>__cwd_path__</code> (an absolute path). To see it, register it as a workspace or browse via the global Workspace tab.</div>
+    <div class="ol-empty ws-empty">This agent uses <code>__cwd_path__</code> (an absolute path). To see it, register it as a workspace or browse via the global Workspace tab.</div>
   {:else if fileContent}
     <div class="ws-file-view">
       <div class="ws-file-header">
-        <button class="ws-back" on:click={() => fileContent = null}>← Back</button>
+        <button class="ol-btn ghost ws-btn-sm" on:click={() => fileContent = null}>← Back</button>
         {#if hasRepo}
           <span class="ws-origin" class:repo={fileContent.source !== 'agent'}>{fileContent.source === 'agent' ? 'agente' : 'repo'}</span>
         {/if}
@@ -195,12 +195,12 @@
       </div>
     </div>
   {:else if shownFiles.length === 0}
-    <div class="ws-empty">{onRepo ? 'El repositorio no tiene archivos para mostrar.' : 'El agente todavía no guardó archivos propios.'}</div>
+    <div class="ol-empty ws-empty">{onRepo ? 'El repositorio no tiene archivos para mostrar.' : 'El agente todavía no guardó archivos propios.'}</div>
   {:else}
     <div class="ws-toolbar">
       {#if !shownLazy}<span class="ws-count">{wsFileCount} {wsFileCount === 1 ? 'file' : 'files'}</span>{/if}
-      <button class="ws-tb-btn" on:click={() => setCollapsed(new Set(wsAllDirs))} disabled={shownCollapsed.size >= wsAllDirs.length}>⊟ Collapse all</button>
-      {#if !shownLazy}<button class="ws-tb-btn" on:click={() => setCollapsed(new Set())} disabled={shownCollapsed.size === 0}>⊞ Expand all</button>{/if}
+      <button class="ol-btn ghost ws-btn-sm" on:click={() => setCollapsed(new Set(wsAllDirs))} disabled={shownCollapsed.size >= wsAllDirs.length}>⊟ Collapse all</button>
+      {#if !shownLazy}<button class="ol-btn ghost ws-btn-sm" on:click={() => setCollapsed(new Set())} disabled={shownCollapsed.size === 0}>⊞ Expand all</button>{/if}
     </div>
     <div class="ws-tree" class:ws-tree-agent={!onRepo} class:ws-tree-repo={onRepo && hasRepo}>
       {#each wsRows as r (r.path)}
@@ -239,16 +239,11 @@
 
   /* ── Workspace panel ──────────── */
   .ws-panel{padding:8px 0;overflow-y:auto;max-height:calc(100% - 120px);scrollbar-width:thin}
-  .ws-loading,.ws-empty{padding:24px 16px;text-align:center;color:#6a6f82;font:500 12px 'Manrope',sans-serif}
+  .ws-loading,.ws-empty{padding:16px 12px;font-size:12px}
   .ws-empty code{padding:1px 6px;border-radius:3px;background:rgba(120,130,160,.12);color:#c0c5d8;font:500 10px 'JetBrains Mono',monospace}
   /* cwd card — header of the workspace tab showing the agent's working
      directory and the guardrails applied on top of it */
-  .ws-cwd-card{
-    margin:0 8px 10px;padding:10px 12px;border-radius:8px;
-    background:linear-gradient(180deg,rgba(99,102,241,.08),rgba(99,102,241,.03));
-    border:1px solid rgba(99,102,241,.18);
-    display:flex;flex-direction:column;gap:6px;
-  }
+  .ws-cwd-card{margin:0 8px 8px;padding:9px 12px;gap:6px}
   .ws-cwd-row{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap}
   .ws-cwd-lbl{
     flex-shrink:0;padding:2px 8px;border-radius:3px;
@@ -274,17 +269,11 @@
   .ws-toolbar{
     display:flex;align-items:center;gap:6px;margin:0 8px 6px;padding:0 4px;
   }
+  .ws-btn-sm{height:24px;padding:0 9px;font-size:10.5px}
   .ws-count{
-    flex:1;font:600 10px 'JetBrains Mono',monospace;color:#6a6f82;
+    flex:1;font:600 10px var(--font-mono, monospace);color:var(--text-3);
     letter-spacing:.04em;text-transform:uppercase;
   }
-  .ws-tb-btn{
-    padding:3px 9px;border-radius:5px;border:1px solid rgba(120,130,160,.18);
-    background:rgba(120,130,160,.06);color:#8a8fa8;cursor:pointer;
-    font:500 10px 'Manrope',sans-serif;transition:all .12s;
-  }
-  .ws-tb-btn:hover:not(:disabled){background:rgba(120,130,160,.14);color:#e0e2ea}
-  .ws-tb-btn:disabled{opacity:.35;cursor:default}
   .ws-tree{
     display:flex;flex-direction:column;margin:0 8px;padding:4px;
     border-radius:8px;background:rgba(0,0,0,.18);
@@ -326,12 +315,6 @@
     display:flex;align-items:center;gap:8px;padding:8px 12px;
     border-bottom:1px solid rgba(120,130,160,.1);
   }
-  .ws-back{
-    padding:4px 10px;border-radius:5px;border:1px solid rgba(120,130,160,.2);
-    background:rgba(120,130,160,.06);color:#8a8fa8;cursor:pointer;
-    font:500 10px 'Manrope',sans-serif;transition:all .1s;
-  }
-  .ws-back:hover{background:rgba(120,130,160,.15);color:#fff}
   .ws-file-path{font:500 11px 'JetBrains Mono',monospace;color:#c0c5d8;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ws-file-lang{
     padding:2px 8px;border-radius:4px;flex-shrink:0;
@@ -400,27 +383,17 @@
   .ws-file-md :global(hr){ border:none; border-top:1px solid rgba(90,110,160,.2); margin:16px 0; }
 
   /* ── Agent files vs the repo: one colour each, everywhere ── */
-  .ws-sections{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:0 8px 10px}
-  .ws-sec{
-    display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:9px;cursor:pointer;text-align:left;
-    border:1px solid rgba(120,130,160,.18);background:rgba(120,130,160,.05);color:#8a8fa8;
-    transition:background .15s,border-color .15s,color .15s;
-  }
-  .ws-sec:hover{background:rgba(120,130,160,.1);color:#d0d4e4}
+  /* ol-seg, two wide segments with a second line each. */
+  .ws-sections{display:grid;grid-template-columns:1fr 1fr;margin:0 8px 8px}
+  .ws-sections .ws-sec{height:auto;padding:5px 10px;gap:8px;text-align:left}
   .ws-sec-txt{display:flex;flex-direction:column;min-width:0;flex:1}
-  .ws-sec-txt b{font:700 12px 'Manrope',sans-serif;color:inherit}
-  .ws-sec-txt small{font:500 10px 'Manrope',sans-serif;opacity:.8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .ws-sec-n{flex-shrink:0;min-width:20px;padding:1px 7px;border-radius:9px;text-align:center;font:700 10px/16px 'JetBrains Mono',monospace;background:rgba(120,130,160,.14)}
-  .ws-sec-agent.on{background:rgba(167,139,250,.14);border-color:rgba(167,139,250,.55);color:#d8ccff}
-  .ws-sec-agent.on .ws-sec-n{background:rgba(167,139,250,.3);color:#efe9ff}
-  .ws-sec-repo.on{background:rgba(45,212,191,.12);border-color:rgba(45,212,191,.5);color:#a7f3e6}
-  .ws-sec:focus-visible{outline:2px solid #a78bfa;outline-offset:2px}
+  .ws-sec-txt b{font:700 12px var(--font-body);color:inherit}
+  .ws-sec-txt small{font:500 10px var(--font-body);opacity:.8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ws-sec-n{flex-shrink:0;min-width:20px;padding:1px 7px;border-radius:9px;text-align:center;font:700 10px/16px var(--font-mono, monospace);background:color-mix(in srgb, var(--c) 18%, transparent)}
 
-  .ws-card-title{display:flex;flex-direction:column;gap:1px;font:700 12px 'Manrope',sans-serif;color:#e8ecf5}
-  .ws-card-title span{font:500 10.5px 'Manrope',sans-serif;color:#9aa0b8}
-  .ws-card-agent{background:linear-gradient(180deg,rgba(167,139,250,.12),rgba(167,139,250,.03));border-color:rgba(167,139,250,.3)}
+  .ws-card-title{flex-wrap:wrap}
+  .ws-card-title small{overflow:hidden;text-overflow:ellipsis}
   .ws-card-agent .ws-cwd-lbl{background:rgba(167,139,250,.22);color:#d0c2ff}
-  .ws-card-repo{background:linear-gradient(180deg,rgba(45,212,191,.1),rgba(45,212,191,.02));border-color:rgba(45,212,191,.28)}
   .ws-card-repo > .ws-cwd-row:not(.ws-cwd-guard):not(.ws-cwd-extra) .ws-cwd-lbl{background:rgba(45,212,191,.2);color:#99eedd}
 
   .ws-tree-agent{border-color:rgba(167,139,250,.22);box-shadow:inset 3px 0 0 rgba(167,139,250,.55)}
@@ -430,5 +403,4 @@
     font:700 9px 'JetBrains Mono',monospace;background:rgba(167,139,250,.2);color:#d8ccff;border:1px solid rgba(167,139,250,.45);
   }
   .ws-origin.repo{background:rgba(45,212,191,.16);color:#99eedd;border-color:rgba(45,212,191,.42)}
-  @media (prefers-reduced-motion: reduce){ .ws-sec{transition:none} }
 </style>

@@ -491,6 +491,18 @@
 		}
 	}
 
+	// The directory tile's state and colours, so the drawer reads as that tile grown.
+	type OfficeState = 'working' | 'review' | 'paused' | 'idle' | 'off' | 'draining';
+	const STATE_COLOR: Record<OfficeState, string> = { working: '#34D399', draining: '#FBBF24', review: '#FB923C', paused: '#60A5FA', idle: '#94A3B8', off: '#64748B' };
+	const AGENT_COLOR: Record<RailAgent['state'], string> = { working: '#34D399', paused: '#60A5FA', error: '#F43F5E', idle: '#94A3B8' };
+	$: officeState = ((): OfficeState => {
+		if (office?.paused === 1) return working > 0 ? 'draining' : 'off';
+		if (agents.some((a) => a.state === 'error')) return 'review';
+		if (working > 0) return 'working';
+		if (agents.length && agents.every((a) => a.state === 'paused')) return 'paused';
+		return 'idle';
+	})();
+
 	function statusText(field: string): string {
 		const f = fields[field];
 		if (!f) return '';
@@ -506,42 +518,43 @@
 <Drawer open={open && !!office} {top} width="clamp(480px, 64vw, 1080px)" label={office ? $t('office.panel.label', { name: office.name }) : ''} on:close>
 	<svelte:fragment slot="head">
 		{#if office}
-			<div class="op-hero" style="--oc:{office.color}">
-				<div class="op-top">
-					<span class="op-glyph" aria-hidden="true">{initials(office.name)}</span>
-					<div class="op-head-txt">
-						<h2 class="op-title">{office.name}</h2>
-						<div class="op-chips">
-							<span class="op-chip op-kind">{kindLabel(kind)}</span>
-							<span class="op-chip op-agents"><Icon name="users" size={12} />{$t('office.panel.agents', { n: agents.length })}</span>
-							{#if working > 0}
-								<span class="op-chip op-working"><i aria-hidden="true"></i>{$t('office.panel.working', { n: working })}</span>
-							{/if}
-							{#if draining}
-								<span class="op-chip op-off">{$t('office.power.draining', { n: working })}</span>
-								<button class="op-chip op-cut" type="button" disabled={busy === 'power'} title={$t('office.power.cut_now_help')} on:click={cutNow}>{$t('office.power.cut_now')}</button>
-							{:else if office.paused === 1}<span class="op-chip op-off">{$t('office.power.off_help')}</span>{/if}
-						</div>
+			<!-- The tile the drawer opened from, grown: mark, name, state, who is working, the switch. -->
+			<div class="op-hero" style:--oc={office.color}>
+				<div class="ol-mhead">
+					<span class="ol-mark lg" aria-hidden="true">{office.name.slice(0, 2).toUpperCase()}</span>
+					<div class="ol-ttl">
+						<p class="ol-eyebrow">{$t('office.drawer.office')}</p>
+						<h2 class="ol-title">{office.name}</h2>
 					</div>
 					<button class="op-power" class:on={office.paused !== 1} type="button" role="switch" aria-checked={office.paused !== 1}
 						disabled={busy === 'power'}
 						title={$t(office.paused === 1 ? 'office.power.turn_on' : 'office.power.turn_off')}
 						on:click={togglePower}>
-						<span class="op-power-sw" aria-hidden="true"><span></span></span>{$t(office.paused === 1 ? 'office.power.off' : 'office.power.on')}
+						<span class="ol-corner" class:on={office.paused !== 1} aria-hidden="true">⏻</span>{$t(office.paused === 1 ? 'office.power.off' : 'office.power.on')}
 					</button>
 					<!-- Export and the DevOps page sit up here as icons: a footer bar took height from the panels. -->
 					{#if traits.devopsLink && $extPages.some((p) => p.view === 'devops')}
-						<a class="op-close op-icon" href="/devops" title={$t('office.panel.devops')} aria-label={$t('office.panel.devops')}><Icon name="server" /></a>
+						<a class="op-icon" href="/devops" title={$t('office.panel.devops')} aria-label={$t('office.panel.devops')}><Icon name="server" size={15} /></a>
 					{/if}
-					<button class="op-close op-icon" type="button" title={$t('office.panel.export')} aria-label={$t('office.panel.export')} on:click={exportOffice}><Icon name="download" /></button>
-					<button class="op-close" type="button" aria-label={$t('office.common.close')} on:click={() => dispatch('close')}><Icon name="x" /></button>
+					<button class="op-icon" type="button" title={$t('office.panel.export')} aria-label={$t('office.panel.export')} on:click={exportOffice}><Icon name="download" size={15} /></button>
+					<button class="op-icon op-close" type="button" aria-label={$t('office.common.close')} on:click={() => dispatch('close')}><Icon name="x" size={15} /></button>
 				</div>
-				<div class="op-tabs" role="tablist" aria-label={$t('office.panel.tabs_label')}>
+				<div class="op-meta">
+					<span class="ol-st" class:live={officeState === 'working'} style:--sc={STATE_COLOR[officeState]}><i aria-hidden="true"></i>{$t('office.directory.' + officeState)}</span>
+					<span class="ol-chip soft" style:--c={office.color}>{kindLabel(kind)}</span>
+					<span class="ol-cnt">{#if working > 0}<b>{$t('office.panel.working', { n: working })}</b> · {/if}{$t('office.panel.agents', { n: agents.length })}</span>
+					{#if draining}
+						<span class="ol-chip soft" style="--c:#FBBF24"><i aria-hidden="true"></i>{$t('office.power.draining', { n: working })}</span>
+						<button class="ol-chip op-cut" style="--c:#F87171" type="button" disabled={busy === 'power'} title={$t('office.power.cut_now_help')} on:click={cutNow}>{$t('office.power.cut_now')}</button>
+					{:else if office.paused === 1}<span class="ol-chip soft" style="--c:#64748B"><i aria-hidden="true"></i>{$t('office.power.off_help')}</span>{/if}
+				</div>
+				<span class="ol-meter" aria-hidden="true"><i style="width: {working ? Math.max(8, (working / Math.max(1, agents.length)) * 100) : 0}%"></i></span>
+				<div class="ol-seg op-tabs" role="tablist" aria-label={$t('office.panel.tabs_label')}>
 					{#each tabList as it (it.id)}
-						<button class="op-tab" role="tab" type="button" aria-selected={tab === it.id} class:active={tab === it.id} on:click={() => selectTab(it.id)}>
-							<Icon name={it.icon} size={14} />
+						<button role="tab" type="button" style:--c={office.color} aria-selected={tab === it.id} class:on={tab === it.id} on:click={() => selectTab(it.id)}>
+							<Icon name={it.icon} size={13} />
 							<span>{it.label}</span>
-							{#if it.count !== undefined}<span class="op-tab-count">{it.count}</span>{/if}
+							{#if it.count !== undefined}<em>{it.count}</em>{/if}
 							{#if it.live}<span class="op-tab-live" aria-hidden="true"></span>{/if}
 							{#if it.warn}<span class="op-tab-warn" aria-hidden="true">!</span>{/if}
 						</button>
@@ -560,8 +573,8 @@
 		{/if}
 		{#if tab === 'general'}
 		<div class="op-grid2">
-		<section class="op-section" style="--hue:#22D3EE">
-			<h3 class="op-h">{$t('office.panel.identity')}</h3>
+		<section class="ol-card" style="--oc:#22D3EE">
+			<h3 class="ol-h">{$t('office.panel.identity')}</h3>
 			<div class="k-field">
 				<label class="k-label" for={ids.name}>{$t('office.panel.name')}<span class="op-status">{statusText('name')}</span></label>
 				<input id={ids.name} class="k-input" bind:value={name} aria-invalid={nameTaken} maxlength="40"
@@ -573,25 +586,23 @@
 				<textarea id={ids.purpose} class="k-input" rows="4" bind:value={purpose} placeholder={$t('office.panel.purpose_ph')} on:blur={savePurpose}></textarea>
 			</div>
 		</section>
-		<section class="op-section" style="--hue:{office.color}">
-			<h3 class="op-h">{$t('office.panel.look')}</h3>
-			<div class="op-look">
-				<div class="k-field">
-					<span class="k-label" id="k-op-color">{$t('office.panel.color')}<span class="op-status">{statusText('color')}</span></span>
-					<div class="op-swatches" role="radiogroup" aria-labelledby="k-op-color">
-						{#each palette as color, i (color)}
-							<button class="op-swatch" type="button" role="radio" aria-checked={office.color === color} aria-label={$t('office.common.color_n', { n: i + 1, total: palette.length })}
-								style="background:{color};--sw:{color}" on:click={() => { if (office && office.color !== color) void save('color', { color }); }}></button>
-						{/each}
-					</div>
+		<section class="ol-card" style="--oc:{office.color}">
+			<h3 class="ol-h">{$t('office.panel.look')}</h3>
+			<div class="k-field">
+				<span class="k-label" id="k-op-color">{$t('office.panel.color')}<span class="op-status">{statusText('color')}</span></span>
+				<div class="op-swatches" role="radiogroup" aria-labelledby="k-op-color">
+					{#each palette as color, i (color)}
+						<button class="op-swatch" type="button" role="radio" aria-checked={office.color === color} aria-label={$t('office.common.color_n', { n: i + 1, total: palette.length })}
+							style="background:{color};--sw:{color}" on:click={() => { if (office && office.color !== color) void save('color', { color }); }}></button>
+					{/each}
 				</div>
-				<div class="k-field">
-					<label class="k-label" for={ids.kind}>{$t('office.panel.kind')}<span class="op-status">{statusText('kind')}</span></label>
-					<select id={ids.kind} class="k-input" value={kind} title={$t('office.kind.help')}
-						on:change={saveKind}>
-						{#each [...OFFICE_KINDS, ...extKinds] as k (k)}<option value={k}>{kindLabel(k)}</option>{/each}
-					</select>
-				</div>
+			</div>
+			<div class="k-field">
+				<label class="k-label" for={ids.kind}>{$t('office.panel.kind')}<span class="op-status">{statusText('kind')}</span></label>
+				<select id={ids.kind} class="k-input" value={kind} title={$t('office.kind.help')}
+					on:change={saveKind}>
+					{#each [...OFFICE_KINDS, ...extKinds] as k (k)}<option value={k}>{kindLabel(k)}</option>{/each}
+				</select>
 			</div>
 			{#each ['name', 'color', 'kind', 'purpose'] as field (field)}
 				{#if fields[field]?.status === 'error'}<p class="k-error" role="alert">{statusText(field)}</p>{/if}
@@ -599,32 +610,32 @@
 		</section>
 		</div>
 
-		<section class="op-section op-danger" style="--hue:#F43F5E">
+		<section class="ol-card op-card op-danger" style="--oc:#F43F5E">
 			<div class="op-danger-txt">
-				<h3 class="op-h">{$t('office.panel.danger')}</h3>
+				<h3 class="ol-h">{$t('office.panel.danger')}</h3>
 				<p class="k-help">{$t('office.panel.danger_help')}</p>
 			</div>
-			<button class="k-btn k-btn--danger" type="button" on:click={() => (deleteOpen = true)}><Icon name="trash" />{$t('office.panel.delete')}</button>
+			<button class="ol-btn danger" type="button" on:click={() => (deleteOpen = true)}><Icon name="trash" size={14} />{$t('office.panel.delete')}</button>
 		</section>
 		{/if}
 
 		{#if tab === 'team'}
-		<section class="op-section" style="--hue:#A78BFA">
-			<h3 class="op-h">{$t('office.panel.team', { n: agents.length })}</h3>
+		<section class="ol-card op-card" style="--oc:#A78BFA">
+			<h3 class="ol-h">{$t('office.panel.team', { n: agents.length })}{#if working > 0}<small>{$t('office.panel.working', { n: working })}</small>{/if}</h3>
 			{#if agents.length === 0}
 				<p class="k-help">{$t('office.panel.no_agents')}</p>
 			{:else}
-				<ul class="op-members">
+				<ul class="ol-list op-members">
 					{#each agents as agent (agent.id)}
-						<li class="op-member" class:lead={agent.lead} style="--hue:{hueOf(agent.name)}">
+						<li class="ol-row op-member" class:lead={agent.lead} style:--oc={hueOf(agent.name)}>
 							<button class="op-member-main" type="button" on:click={() => openMember(agent.id)} title={$t('office.panel.menu_open')}>
-								<span class="op-avatar" aria-hidden="true">{initials(agent.name)}{#if agent.lead}<span class="op-crown"><Icon name="star" size={10} filled /></span>{/if}</span>
-								<span class="op-member-name">{agent.name}{#if agent.lead}<small>{$t('office.rail.lead')}</small>{/if}</span>
+								<span class="ol-mark op-avatar" aria-hidden="true">{initials(agent.name)}{#if agent.lead}<span class="op-crown"><Icon name="star" size={9} filled /></span>{/if}</span>
+								<span class="ol-row-txt"><b>{agent.name}</b>{#if agent.lead}<small class="op-lead">{$t('office.rail.lead')}</small>{/if}</span>
 							</button>
 							{#if agent.state !== 'idle'}
-								<span class="k-state k-state--{agent.state}"><span class="k-led k-led--{agent.state}" aria-hidden="true"></span>{$t(`office.state.${agent.state}`)}</span>
+								<span class="ol-st" class:live={agent.state === 'working'} style:--sc={AGENT_COLOR[agent.state]}><i aria-hidden="true"></i>{$t(`office.state.${agent.state}`)}</span>
 							{/if}
-							<button class="k-btn k-btn--ghost op-open" type="button" aria-haspopup="menu" aria-expanded={menuFor === agent.id}
+							<button class="ol-btn ghost op-open" type="button" aria-haspopup="menu" aria-expanded={menuFor === agent.id}
 								aria-label={$t('office.panel.member_menu', { name: agent.name })} disabled={busy.endsWith(`:${agent.id}`)}
 								on:click|stopPropagation={(e) => openMenu(e, agent.id)}>
 								<Icon name="more" size={14} />
@@ -663,17 +674,21 @@
 				</div>
 			{/if}
 
-			<div class="op-row2">
-				<button class="k-btn op-cta" type="button" disabled={busy === 'new'} on:click={addAgent}><Icon name="plus" />{$t('office.panel.new_agent')}</button>
-				<button class="k-btn" type="button" aria-expanded={bringOpen} on:click={() => (bringOpen = !bringOpen)}><Icon name="move" />{$t('office.panel.bring')}</button>
+			<div class="op-actions">
+				<button class="ol-btn" type="button" disabled={busy === 'new'} on:click={addAgent}><Icon name="plus" size={14} />{$t('office.panel.new_agent')}</button>
+				<button class="ol-btn ghost" type="button" aria-expanded={bringOpen} on:click={() => (bringOpen = !bringOpen)}><Icon name="move" size={14} />{$t('office.panel.bring')}</button>
 			</div>
 			{#if bringOpen}
 				{#if unassigned.length === 0}
 					<p class="k-help">{$t('office.panel.no_unassigned')}</p>
 				{:else}
-					<ul class="op-bring">
+					<ul class="ol-list op-bring">
 						{#each unassigned as agent (agent.id)}
-							<li><button class="op-bring-item" type="button" disabled={busy === agent.id} on:click={() => bring(agent.id)}><Icon name="plus" size={13} />{agent.name}</button></li>
+							<li><button class="ol-row" type="button" style:--oc={hueOf(agent.name)} disabled={busy === agent.id} on:click={() => bring(agent.id)}>
+								<span class="ol-mark" aria-hidden="true">{initials(agent.name)}</span>
+								<span class="ol-row-txt"><b>{agent.name}</b></span>
+								<Icon name="plus" size={13} />
+							</button></li>
 						{/each}
 					</ul>
 				{/if}
@@ -683,8 +698,8 @@
 			{#if actionError}<p class="k-error" role="alert">{actionError}</p>{/if}
 		</section>
 
-		<section class="op-section" style="--hue:#FBBF24">
-			<h3 class="op-h">{$t('office.panel.coordination')}</h3>
+		<section class="ol-card op-card" style="--oc:#FBBF24">
+			<h3 class="ol-h">{$t('office.panel.coordination')}</h3>
 			<div class="op-toggle-row">
 				<label class="op-switch">
 					<input type="checkbox" role="switch" checked={distribute === 'on'} disabled={!leadId || busy === 'distribute'} on:change={toggleDistribute} />
@@ -723,8 +738,8 @@
 		{/if}
 
 		{#if tab === 'repo'}
-		<section class="op-section" style="--hue:#34D399">
-			<h3 class="op-h">{$t('office.panel.repo')}<span class="op-status">{statusText('repo')}</span></h3>
+		<section class="ol-card op-card" style="--oc:#34D399">
+			<h3 class="ol-h">{$t('office.panel.repo')}<span class="op-status">{statusText('repo')}</span></h3>
 			{#if repoEditing}
 				<RepoPicker bind:value={repoDraft} label={$t('office.panel.repo_path')} required allowRegistered
 					disabled={fields.repo?.status === 'saving'} invalid={fields.repo?.status === 'error'}
@@ -733,37 +748,41 @@
 					<input type="checkbox" bind:checked={repoGitInit} />
 					<span>{$t('office.panel.repo_git_init')}</span>
 				</label>
-				<div class="op-row2">
-					<button class="k-btn" type="button" disabled={!repoDraft.trim() || fields.repo?.status === 'saving'} on:click={() => saveRepo(repoDraft)}>
-						<Icon name="check" />{$t('office.panel.repo_save')}
+				<div class="op-actions">
+					<button class="ol-btn" type="button" disabled={!repoDraft.trim() || fields.repo?.status === 'saving'} on:click={() => saveRepo(repoDraft)}>
+						<Icon name="check" size={14} />{$t('office.panel.repo_save')}
 					</button>
-					<button class="k-btn k-btn--ghost" type="button" on:click={() => (repoEditing = false)}>{$t('office.common.cancel')}</button>
+					<button class="ol-btn ghost" type="button" on:click={() => (repoEditing = false)}>{$t('office.common.cancel')}</button>
 				</div>
 			{:else if repoPath}
-				<div class="op-repo"><Icon name="branch" /><code>{repoPath}</code></div>
+				<div class="ol-row op-repo" style="--oc:#34D399">
+					<span class="ol-mark" aria-hidden="true"><Icon name="branch" size={14} /></span>
+					<code>{repoPath}</code>
+					<span class="ol-chip soft" style="--c:{isolation === 'host' ? '#FB923C' : '#34D399'}">{isolation === 'host' ? $t('office.panel.host') : $t('office.panel.sandbox')}</span>
+				</div>
 				{#if repoConfirmRemove}
-					<div class="op-row2">
-						<button class="k-btn k-btn--danger" type="button" disabled={fields.repo?.status === 'saving'} on:click={() => saveRepo(null)}>
-							<Icon name="x" />{$t('office.panel.repo_remove_confirm')}
+					<div class="op-actions">
+						<button class="ol-btn danger" type="button" disabled={fields.repo?.status === 'saving'} on:click={() => saveRepo(null)}>
+							<Icon name="x" size={14} />{$t('office.panel.repo_remove_confirm')}
 						</button>
-						<button class="k-btn k-btn--ghost" type="button" on:click={() => (repoConfirmRemove = false)}>{$t('office.common.cancel')}</button>
+						<button class="ol-btn ghost" type="button" on:click={() => (repoConfirmRemove = false)}>{$t('office.common.cancel')}</button>
 					</div>
 				{:else}
-					<div class="op-row2">
-						<button class="k-btn" type="button" on:click={startRepoEdit}><Icon name="pencil" />{$t('office.panel.repo_change')}</button>
-						<button class="k-btn k-btn--ghost" type="button" disabled={fields.repo?.status === 'saving'} on:click={() => (repoConfirmRemove = true)}>
-							<Icon name="x" />{$t('office.panel.repo_remove')}
+					<div class="op-actions">
+						<button class="ol-btn ghost" type="button" on:click={startRepoEdit}><Icon name="pencil" size={14} />{$t('office.panel.repo_change')}</button>
+						<button class="ol-btn ghost" type="button" disabled={fields.repo?.status === 'saving'} on:click={() => (repoConfirmRemove = true)}>
+							<Icon name="x" size={14} />{$t('office.panel.repo_remove')}
 						</button>
 					</div>
 				{/if}
 				<p class="k-help">{$t('office.panel.repo_remove_help')}</p>
 				<div class="k-field">
 					<span class="k-label" id="k-op-iso">{$t('office.panel.isolation')}<span class="op-status">{statusText('isolation')}</span></span>
-					<div class="k-segmented" role="radiogroup" aria-labelledby="k-op-iso">
-						<button class="k-seg" type="button" role="radio" aria-checked={isolation === 'sandbox'}
-							on:click={() => { if (isolation !== 'sandbox') void save('isolation', { repo_isolation: 'sandbox' }); }}>{$t('office.panel.sandbox')}</button>
-						<button class="k-seg" type="button" role="radio" aria-checked={isolation === 'host'} disabled={hostAllowed === false && isolation !== 'host'}
-							on:click={() => { if (isolation !== 'host') void save('isolation', { repo_isolation: 'host' }); }}>{$t('office.panel.host')}</button>
+					<div class="ol-seg op-iso" role="radiogroup" aria-labelledby="k-op-iso">
+						<button type="button" role="radio" style="--c:#34D399" class:on={isolation === 'sandbox'} aria-checked={isolation === 'sandbox'}
+							on:click={() => { if (isolation !== 'sandbox') void save('isolation', { repo_isolation: 'sandbox' }); }}><Icon name="grid" size={13} />{$t('office.panel.sandbox')}</button>
+						<button type="button" role="radio" style="--c:#FB923C" class:on={isolation === 'host'} aria-checked={isolation === 'host'} disabled={hostAllowed === false && isolation !== 'host'}
+							on:click={() => { if (isolation !== 'host') void save('isolation', { repo_isolation: 'host' }); }}><Icon name="server" size={13} />{$t('office.panel.host')}</button>
 					</div>
 					<p class="k-help">{$t('office.panel.isolation_help')}{#if hostAllowed === false} {$t('office.panel.host_off')}{/if}</p>
 				</div>
@@ -772,13 +791,13 @@
 						<Icon name="alert" />
 						<div>
 							<p>{$t('office.panel.host_broken')}</p>
-							<button class="k-btn" type="button" on:click={() => void save('isolation', { repo_isolation: 'sandbox' })}>{$t('office.panel.switch_sandbox')}</button>
+							<button class="ol-btn" type="button" on:click={() => void save('isolation', { repo_isolation: 'sandbox' })}>{$t('office.panel.switch_sandbox')}</button>
 						</div>
 					</div>
 				{/if}
 			{:else}
 				<p class="k-help">{$t('office.panel.no_repo')}</p>
-				<button class="k-btn op-self-start" type="button" on:click={startRepoEdit}><Icon name="branch" />{$t('office.panel.repo_set')}</button>
+				<button class="ol-btn op-self-start" type="button" on:click={startRepoEdit}><Icon name="branch" size={14} />{$t('office.panel.repo_set')}</button>
 			{/if}
 			{#if fields.repo?.status === 'error'}<p class="k-error" role="alert">{statusText('repo')}</p>{/if}
 			{#if repoNote}<p class="k-help">{repoNote}</p>{/if}
@@ -786,22 +805,22 @@
 		{/if}
 
 		{#if tab === 'questions'}
-		<section class="op-section" style="--hue:#F0B874">
-			<h3 class="op-h">{$t('office.chief.tab_questions')}</h3>
+		<section class="ol-card op-card" style="--oc:#F0B874">
+			<h3 class="ol-h">{$t('office.chief.tab_questions')}{#if officeQuestions.length > 0}<em>{officeQuestions.length}</em>{/if}</h3>
 			<OfficeQuestions questions={officeQuestions} {agentNames} color={office.color} onChanged={loadOfficeQuestions} />
 		</section>
 		{/if}
 
 		{#if tab === 'projects'}
-		<section class="op-section" style="--hue:#60A5FA">
-			<h3 class="op-h">{$t('office.panel.tab_projects')}</h3>
+		<section class="ol-card op-card" style="--oc:#60A5FA">
+			<h3 class="ol-h">{$t('office.panel.tab_projects')}</h3>
 			<OfficeProjects flowId={office.id} leadId={agents.find((a) => a.lead)?.id ?? null} />
 		</section>
 		{/if}
 
 		{#if tab === 'environment'}
-		<section class="op-section" style="--hue:#FB923C">
-			<h3 class="op-h">{$t('office.panel.environment')}</h3>
+		<section class="ol-card op-card" style="--oc:#FB923C">
+			<h3 class="ol-h">{$t('office.panel.environment')}</h3>
 			{#if envAvailable === true}
 				<OfficeInfraPanel flowId={office.id} officeName={office.name} color={office.color} />
 			{:else if envAvailable === false}
@@ -825,161 +844,95 @@
 {/if}
 
 <style>
-	/* ── Hero: the office's colour washes the whole header, so an office panel is
-	   never mistaken for an agent's. Same bright language as Sistema → Resumen. */
+	/* Hero: the directory tile, grown. The office colour washes the head so it never reads as an agent's drawer;
+	   mark, title, state, meter, chips and tabs come from office-look.css. */
 	.op-hero {
-		margin: -16px -16px -14px -20px; padding: 16px 16px 0 20px;
+		display: grid; gap: 8px; margin: -16px -16px -14px -20px; padding: 14px 16px 10px 20px;
 		background:
-			radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--oc) 30%, transparent), transparent 60%),
-			linear-gradient(180deg, color-mix(in srgb, var(--oc) 12%, var(--surface-1)), var(--surface-1));
-		border-bottom: 1px solid color-mix(in srgb, var(--oc) 35%, var(--border));
+			radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--oc) 22%, transparent), transparent 60%),
+			linear-gradient(180deg, color-mix(in srgb, var(--oc) 8%, var(--surface-1)), var(--surface-1));
+		border-bottom: 1px solid color-mix(in srgb, var(--oc) 30%, var(--border));
 	}
-	.op-top { display: flex; align-items: center; gap: 12px; }
-	.op-glyph {
-		flex: none; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 13px;
-		font: 800 16px var(--font-display); color: #fff; letter-spacing: .02em;
-		background: linear-gradient(140deg, var(--oc), color-mix(in srgb, var(--oc) 55%, #A78BFA));
-		box-shadow: 0 10px 24px -10px var(--oc), inset 0 1px 0 rgba(255, 255, 255, .25);
-	}
-	.op-head-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-	.op-title { margin: 0; font: 800 20px/1.15 var(--font-display); color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.op-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-	.op-chip {
-		--tone: #A78BFA;
-		display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 999px;
-		font: 800 10px var(--font-body); letter-spacing: .04em;
-		color: color-mix(in srgb, var(--tone) 70%, white); background: color-mix(in srgb, var(--tone) 18%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent);
-	}
-	.op-kind { --tone: var(--oc); text-transform: uppercase; }
-	.op-agents { --tone: #22D3EE; }
-	.op-working { --tone: #34D399; box-shadow: 0 0 12px -4px #34D399; }
-	.op-working i { width: 7px; height: 7px; border-radius: 50%; background: #34D399; box-shadow: 0 0 8px #34D399; animation: op-pulse 1.4s ease-in-out infinite; }
-	.op-off { --tone: #FBBF24; }
-	.op-cut { --tone: #F87171; cursor: pointer; }
-	.op-cut:hover:not(:disabled) { background: color-mix(in srgb, var(--tone) 32%, transparent); }
+	.op-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-width: 0; }
+	.op-cut { cursor: pointer; }
+	.op-cut:hover:not(:disabled) { background: color-mix(in srgb, var(--c) 32%, transparent); }
 	.op-cut:disabled { opacity: .55; cursor: wait; }
-	.op-cut:focus-visible { outline: 2px solid var(--tone); outline-offset: 2px; }
+	.op-cut:focus-visible { outline: 2px solid var(--c); outline-offset: 2px; }
+
+	/* Power: the directory's round switch, with its word beside it. */
 	.op-power {
-		flex: none; display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 14px 0 6px; border-radius: 999px; cursor: pointer;
-		font: 700 12px var(--font-body); color: #FBBF24;
-		background: color-mix(in srgb, currentColor 10%, var(--surface-1)); border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
-		transition: color .25s, background .25s, border-color .25s, box-shadow .25s;
+		flex: none; display: inline-flex; align-items: center; gap: 7px; padding: 0 10px 0 0; border: 0; background: none; cursor: pointer;
+		font: 700 12px var(--font-body); color: var(--text-3);
 	}
-	.op-power.on { color: #34D399; box-shadow: 0 8px 20px -12px #34D399; }
-	.op-power:hover:not(:disabled) { background: color-mix(in srgb, currentColor 18%, var(--surface-1)); }
+	.op-power.on { color: var(--green); }
+	.op-power .ol-corner { position: static; }
+	.op-power:hover:not(:disabled) .ol-corner { border-color: var(--text-2); }
 	.op-power:disabled { opacity: .55; cursor: wait; }
-	.op-power:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
-	.op-power-sw { position: relative; width: 30px; height: 18px; border-radius: 999px; background: color-mix(in srgb, currentColor 30%, transparent); }
-	.op-power-sw span { position: absolute; top: 3px; left: 3px; width: 12px; height: 12px; border-radius: 50%; background: currentColor; box-shadow: 0 1px 3px rgba(0, 0, 0, .4); transition: transform .28s cubic-bezier(.34, 1.56, .64, 1); }
-	.op-power.on .op-power-sw span { transform: translateX(12px); }
-	.op-close {
-		flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; cursor: pointer;
-		color: var(--text-2); background: var(--surface-2); border: 1px solid var(--border); transition: all .15s;
+	.op-power:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; border-radius: 999px; }
+	.op-icon {
+		flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; cursor: pointer;
+		color: var(--text-2); background: var(--surface-2); border: 1px solid var(--border); transition: color .15s, border-color .15s, background .15s;
 	}
+	.op-icon:hover { color: var(--text-1); border-color: var(--border-h); }
 	.op-close:hover { color: #F43F5E; border-color: color-mix(in srgb, #F43F5E 45%, transparent); background: color-mix(in srgb, #F43F5E 12%, var(--surface-2)); }
-	.op-close:focus-visible { outline: 2px solid #F43F5E; outline-offset: 2px; }
-	.op-icon:hover { color: var(--text-1); border-color: var(--border-strong, var(--border)); background: var(--surface-3, var(--surface-2)); }
-	.op-icon:focus-visible { outline-color: var(--accent, currentColor); }
+	.op-icon:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 
-	/* ── Tabs: icon + word, the open one a lit pill in the office colour. */
-	.op-tabs { display: flex; gap: 4px; margin-top: 14px; padding-bottom: 10px; overflow-x: auto; scrollbar-width: none; }
+	/* Tabs: ol-seg, scrolling sideways when the drawer is narrow. */
+	.op-tabs { display: flex; max-width: 100%; overflow-x: auto; scrollbar-width: none; justify-self: start; }
 	.op-tabs::-webkit-scrollbar { display: none; }
-	.op-tab {
-		flex: none; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 13px; border-radius: 10px; cursor: pointer;
-		border: 1px solid transparent; background: none; color: var(--text-2); font: 700 12.5px var(--font-body);
-		transition: color .15s, background .2s, border-color .2s, box-shadow .2s, transform .2s ease-out;
-	}
-	.op-tab :global(svg) { color: color-mix(in srgb, var(--oc) 70%, white); opacity: .8; }
-	.op-tab:hover { color: var(--text-1); background: color-mix(in srgb, var(--oc) 12%, transparent); transform: translateY(-1px); }
-	.op-tab.active {
-		color: #fff; border-color: color-mix(in srgb, var(--oc) 70%, transparent);
-		background: linear-gradient(135deg, color-mix(in srgb, var(--oc) 42%, var(--surface-2)), color-mix(in srgb, var(--oc) 18%, var(--surface-2)));
-		box-shadow: 0 10px 22px -12px var(--oc);
-	}
-	.op-tab.active :global(svg) { color: #fff; opacity: 1; }
-	.op-tab:focus-visible { outline: 2px solid var(--oc); outline-offset: 2px; }
-	.op-tab-count {
-		font: 800 10px var(--font-body); padding: 1px 7px; border-radius: 999px;
-		color: color-mix(in srgb, var(--oc) 60%, white); background: color-mix(in srgb, var(--oc) 22%, transparent); border: 1px solid color-mix(in srgb, var(--oc) 45%, transparent);
-	}
-	.op-tab.active .op-tab-count { color: #fff; background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .3); }
-	.op-tab-live { width: 7px; height: 7px; border-radius: 50%; background: #34D399; box-shadow: 0 0 8px #34D399; animation: op-pulse 1.4s ease-in-out infinite; }
-	.op-tab-warn { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: #F43F5E; color: #fff; font: 800 10px var(--font-body); box-shadow: 0 0 8px #F43F5E; }
+	.op-tabs button { flex: none; }
+	.op-tabs button :global(svg) { color: color-mix(in srgb, var(--c) 70%, white); }
+	.op-tab-live { width: 6px; height: 6px; border-radius: 50%; background: #34D399; box-shadow: 0 0 8px #34D399; animation: ol-blink 1.3s ease-in-out infinite; }
+	.op-tab-warn { display: grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; background: #F43F5E; color: #fff; font: 800 9.5px var(--font-body); box-shadow: 0 0 8px #F43F5E; }
 
-	/* ── Body: every block a card tinted by its own hue. */
+	/* Body */
 	.op-panels { padding: 10px 0 6px; }
-	.op-grid2 { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 12px; margin-top: 14px; }
-	.op-section {
-		--hue: #22D3EE;
-		display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-content: start; margin-top: 14px; padding: 14px 16px; border-radius: 14px;
-		background: linear-gradient(160deg, color-mix(in srgb, var(--hue) 9%, var(--surface-1)), var(--surface-1) 55%);
-		border: 1px solid color-mix(in srgb, var(--hue) 26%, var(--border));
-	}
-	.op-grid2 > .op-section { margin-top: 0; }
-	.op-h {
-		margin: 0; display: flex; align-items: center; gap: 8px;
-		font: 800 10.5px var(--font-body); text-transform: uppercase; letter-spacing: .07em; color: color-mix(in srgb, var(--hue) 65%, white);
-	}
-	.op-h::before { content: ''; width: 3px; height: 12px; border-radius: 2px; background: linear-gradient(var(--hue), #A78BFA); box-shadow: 0 0 8px var(--hue); flex: none; }
+	.op-grid2 { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 10px; margin-top: 12px; }
+	.op-card { margin-top: 10px; }
+	.op-grid2 + .op-card, .op-card:first-child { margin-top: 12px; }
 	.op-status { margin-left: auto; font-weight: 600; font-size: 11px; text-transform: none; letter-spacing: 0; color: var(--text-3); }
-	.op-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-	.op-look { display: grid; gap: 12px; }
-	.op-swatches { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+	.op-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+	.op-swatches { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 	.op-swatch {
-		width: 28px; height: 28px; padding: 0; border-radius: 9px; border: 2px solid transparent; cursor: pointer;
+		width: 26px; height: 26px; padding: 0; border-radius: 8px; border: 2px solid transparent; cursor: pointer;
 		transition: transform .2s cubic-bezier(.34, 1.56, .64, 1), box-shadow .2s;
 	}
 	.op-swatch:hover { transform: translateY(-2px) scale(1.08); }
 	.op-swatch[aria-checked='true'] { border-color: #fff; box-shadow: 0 0 0 2px var(--surface-1), 0 6px 16px -4px var(--sw); transform: scale(1.1); }
-	.op-swatch:focus-visible { outline: 2px solid #22D3EE; outline-offset: 2px; }
+	.op-swatch:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 
-	/* Members: tiles with an avatar in the member's own colour. */
-	.op-members, .op-bring { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-	.op-members { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
-	.op-member {
-		display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 8px; border-radius: 12px; min-width: 0;
-		background: linear-gradient(160deg, color-mix(in srgb, var(--hue) 14%, var(--surface-1)), var(--surface-1) 70%);
-		border: 1px solid color-mix(in srgb, var(--hue) 30%, var(--border));
-		transition: transform .2s ease-out, box-shadow .2s, border-color .2s;
-	}
-	.op-member:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--hue) 60%, var(--border)); box-shadow: 0 10px 22px -16px var(--hue); }
-	.op-member.lead { border-color: color-mix(in srgb, #FBBF24 55%, var(--border)); }
-	.op-member-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 0; border: 0; background: none; cursor: pointer; text-align: left; color: inherit; }
-	.op-member-main:focus-visible { outline: 2px solid var(--hue); outline-offset: 2px; border-radius: 8px; }
-	.op-avatar {
-		position: relative; flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%;
-		font: 800 12px var(--font-body); color: #fff;
-		background: linear-gradient(140deg, var(--hue), color-mix(in srgb, var(--hue) 50%, #1e1b4b));
-		box-shadow: 0 6px 14px -6px var(--hue);
-	}
-	.op-crown { position: absolute; right: -4px; top: -4px; display: grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; background: #FBBF24; color: #3b2a00; box-shadow: 0 0 8px #FBBF24; }
-	.op-member-name { display: flex; flex-direction: column; min-width: 0; font: 700 13px/1.25 var(--font-body); color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.op-member-name small { font: 800 9.5px var(--font-body); text-transform: uppercase; letter-spacing: .05em; color: #FBBF24; }
-	.op-open { width: 32px; padding: 0; flex: none; }
-	.op-cta { border-color: color-mix(in srgb, #22D3EE 50%, var(--border)); background: linear-gradient(135deg, color-mix(in srgb, #22D3EE 20%, var(--surface-2)), color-mix(in srgb, #A78BFA 16%, var(--surface-2))); color: var(--text-1); }
-	.op-cta:hover:not(:disabled) { box-shadow: 0 10px 22px -12px #22D3EE; }
+	/* Members: ol-rows laid out as a grid so a big team stays on screen. */
+	.op-members { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px; }
+	.op-member { gap: 6px; padding: 5px 5px 5px 8px; }
+	.op-member.lead { border-color: color-mix(in srgb, #FBBF24 50%, transparent); }
+	.op-member-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; padding: 0; border: 0; background: none; cursor: pointer; text-align: left; color: inherit; font: inherit; }
+	.op-member-main:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; border-radius: 8px; }
+	.op-avatar { position: relative; overflow: visible; }
+	.op-crown { position: absolute; right: -5px; top: -5px; display: grid; place-items: center; width: 14px; height: 14px; border-radius: 50%; background: #FBBF24; color: #3b2a00; box-shadow: 0 0 8px #FBBF24; }
+	.op-lead { color: #FBBF24; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; font-size: 9.5px; }
+	.op-open { flex: none; width: 28px; height: 28px; padding: 0; justify-content: center; }
+	.op-bring { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px; }
+	.op-bring .ol-row { border-style: dashed; }
+	.op-bring .ol-row :global(svg) { flex: none; color: var(--oc); }
+	.op-bring .ol-row:disabled { opacity: .5; cursor: wait; }
+
 	.op-menu {
 		position: fixed; z-index: var(--z-modal); width: 232px; padding: 6px; display: grid; gap: 2px;
-		background: linear-gradient(180deg, #1d1f27, #16171d); border: 1px solid rgba(140, 150, 190, .22); border-radius: 12px;
+		background: linear-gradient(180deg, color-mix(in srgb, var(--gold) 5%, var(--surface-2)), var(--surface-1)); border: 1px solid var(--border-h); border-radius: 12px;
 		box-shadow: 0 18px 48px rgba(0, 0, 0, .55); outline: none;
 	}
 	.op-menu--up { box-shadow: 0 -16px 40px rgba(0, 0, 0, 0.45); }
 	.op-menu-item {
-		display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 0; border-radius: 8px;
-		background: transparent; color: var(--text-1); font: 600 13px/1.2 var(--font-body); text-align: left; cursor: pointer;
+		display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 0; border-radius: 8px;
+		background: transparent; color: var(--text-1); font: 600 12.5px/1.2 var(--font-body); text-align: left; cursor: pointer;
 	}
-	.op-menu-item:hover, .op-menu-item:focus-visible { background: color-mix(in srgb, #22D3EE 14%, transparent); outline: none; }
+	.op-menu-item :global(svg) { color: var(--gold); }
+	.op-menu-item:hover, .op-menu-item:focus-visible { background: color-mix(in srgb, var(--gold) 12%, transparent); outline: none; }
 	.op-menu-move { display: grid; gap: 4px; padding: 6px 8px; }
-	.op-menu-label { display: flex; align-items: center; gap: 8px; font: 500 13px/1.2 var(--font-body); color: var(--text-2); }
-	.op-bring { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
-	.op-bring-item {
-		width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 10px; min-height: 38px;
-		border: 1px dashed color-mix(in srgb, #22D3EE 40%, var(--border)); background: color-mix(in srgb, #22D3EE 5%, transparent);
-		color: var(--text-1); font: 600 12.5px/1.3 var(--font-body); cursor: pointer; text-align: left; transition: all .15s;
-	}
-	.op-bring-item :global(svg) { color: #22D3EE; }
-	.op-bring-item:hover { border-style: solid; border-color: #22D3EE; background: color-mix(in srgb, #22D3EE 12%, transparent); }
+	.op-menu-label { display: flex; align-items: center; gap: 8px; font: 500 12.5px/1.2 var(--font-body); color: var(--text-2); }
+
 	.op-toggle-row { display: grid; gap: 4px; }
+	.op-toggle-row .k-help { margin: 0; }
 	.op-switch { position: relative; display: flex; align-items: center; gap: 10px; cursor: pointer; font: 700 13px/1.3 var(--font-body); color: var(--text-1); }
 	.op-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
 	.op-switch-track {
@@ -994,29 +947,27 @@
 	.op-switch input:checked + .op-switch-track .op-switch-thumb { transform: translateX(16px); background: #1a1300; }
 	.op-switch input:focus-visible + .op-switch-track { outline: 2px solid #FBBF24; outline-offset: 2px; }
 	.op-switch input:disabled + .op-switch-track { opacity: 0.45; }
-	.op-repo {
-		display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; color: #34D399;
-		background: color-mix(in srgb, #34D399 10%, var(--surface-1)); border: 1px solid color-mix(in srgb, #34D399 35%, var(--border));
-	}
-	.op-repo code { font: 500 12.5px/1.4 var(--font-mono); color: var(--text-1); overflow-wrap: anywhere; }
+
+	.op-repo code { flex: 1; min-width: 0; font: 500 12.5px/1.4 var(--font-mono); color: var(--text-1); overflow-wrap: anywhere; }
+	.op-iso { justify-self: start; align-self: start; }
+	.op-iso button:disabled { opacity: .45; cursor: not-allowed; }
 	.op-check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-2); cursor: pointer; }
 	.op-check input { accent-color: #34D399; }
-	.op-self-start { justify-self: start; }
+	.op-self-start { align-self: flex-start; }
 	.op-callout {
 		display: grid; grid-template-columns: 16px 1fr; gap: 8px; padding: 10px 12px; border-radius: 10px; color: var(--text-1); font-size: 12.5px;
 		background: color-mix(in srgb, #F43F5E 10%, transparent); border: 1px solid color-mix(in srgb, #F43F5E 40%, transparent);
 	}
 	.op-callout :global(svg) { color: #F43F5E; }
 	.op-callout p { margin: 0 0 8px; }
-	.op-danger { grid-template-columns: 1fr auto; align-items: center; margin-top: 12px; }
-	.op-danger-txt { display: grid; gap: 4px; }
+	.op-danger { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
+	.op-danger-txt { display: grid; gap: 4px; min-width: 0; }
 	.op-danger .k-help { margin: 0; }
 
-	@keyframes op-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.35); opacity: .7; } }
-	@media (max-width: 760px) { .op-grid2, .op-row2 { grid-template-columns: minmax(0, 1fr); } }
+	@media (max-width: 760px) { .op-grid2 { grid-template-columns: minmax(0, 1fr); } }
 	@media (prefers-reduced-motion: reduce) {
-		.op-switch-track, .op-switch-thumb, .op-tab, .op-member, .op-swatch, .op-power, .op-power-sw span { transition: none; }
-		.op-tab:hover, .op-member:hover, .op-swatch:hover { transform: none; }
-		.op-working i, .op-tab-live { animation: none; }
+		.op-switch-track, .op-switch-thumb, .op-swatch, .op-icon { transition: none; }
+		.op-swatch:hover { transform: none; }
+		.op-tab-live { animation: none; }
 	}
 </style>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import '../app.css';
+  import '$lib/styles/office-look.css';
   import { setExtWorlds } from '$lib/world-plugins.js';
   import { setExtToolRenderers } from '$lib/tool-renderers.js';
   import { onMount, onDestroy, tick } from 'svelte';

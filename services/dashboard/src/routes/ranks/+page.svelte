@@ -22,6 +22,7 @@
 
   const L = {
     es: {
+      eyebrow: 'La jerarquía, de un vistazo', question: '¿Quién responde a quién?',
       title: 'Rangos', sub: '{r} rangos · {a} agentes con rango · {u} sin rango', create: 'Nuevo rango',
       kRanks: 'rangos', kAssigned: 'con rango', kNone: 'sin rango', kTop: 'nivel más alto', ofAll: 'del total',
       ladder: 'Escalafón', ladderHint: 'De arriba hacia abajo: quién responde a quién. Tocá un rango para ver sus agentes.',
@@ -35,6 +36,7 @@
       noRanks: 'Todavía no hay rangos. Creá el primero con «Nuevo rango».', err: 'Error',
     },
     en: {
+      eyebrow: 'The hierarchy at a glance', question: 'Who answers to whom?',
       title: 'Ranks', sub: '{r} ranks · {a} agents ranked · {u} unranked', create: 'New rank',
       kRanks: 'ranks', kAssigned: 'ranked', kNone: 'no rank', kTop: 'highest level', ofAll: 'of all',
       ladder: 'Chain of command', ladderHint: 'Top to bottom: who answers to whom. Pick a rank to see its agents.',
@@ -175,22 +177,22 @@
 <svelte:window on:keydown={onKey} />
 
 <div class="rk">
-  <header class="top">
-    <div class="ttl">
-      <h1>{tx.title}</h1>
-      <p>{fill(tx.sub, { r: ranks.length, a: assigned, u: unranked.length })}</p>
+  <header class="ol-strip">
+    <div class="ol-ttl">
+      <p class="ol-eyebrow">{tx.eyebrow}</p>
+      <h1 class="ol-title">{tx.question}</h1>
     </div>
-    <div class="kpis">
-      <div class="kpi" style="--c: {PALETTE.gold}"><span class="kic">◆</span><div><b class="num">{ranks.length}</b><small>{tx.kRanks}</small></div></div>
-      <div class="kpi" style="--c: {PALETTE.emerald}"><span class="kic">✓</span><div><b class="num">{assigned}</b><small>{tx.kAssigned} · {pct(assigned, agents.length)}% {tx.ofAll}</small></div></div>
-      <button class="kpi" class:alert={unranked.length > 0} style="--c: {unranked.length ? PALETTE.pink : PALETTE.sky}" on:click={() => pick('')}>
-        <span class="kic">!</span><div><b class="num">{unranked.length}</b><small>{tx.kNone}</small></div>
+    <div class="ol-kpis">
+      <div class="ol-kpi" style="--c: {PALETTE.gold}"><b>{ranks.length}</b><small>{tx.kRanks}</small></div>
+      <div class="ol-kpi" style="--c: {PALETTE.emerald}"><b>{assigned}</b><small>{tx.kAssigned} · {pct(assigned, agents.length)}% {tx.ofAll}</small></div>
+      <button class="ol-kpi" class:alert={unranked.length > 0} class:on={selected === ''} style="--c: {unranked.length ? PALETTE.pink : PALETTE.sky}" on:click={() => pick('')} aria-pressed={selected === ''}>
+        <b>{unranked.length}</b><small>{tx.kNone}</small>
       </button>
-      <div class="kpi" style="--c: {top?.color ?? PALETTE.violet}">
-        <span class="kic glyph">{top?.insignia || '·'}</span><div><b>{top?.name ?? '—'}</b><small>{tx.kTop}{top ? ` · L${top.level}` : ''}</small></div>
+      <div class="ol-kpi" style="--c: {top?.color ?? PALETTE.violet}">
+        <b class="top-name">{top?.insignia ? `${top.insignia} ` : ''}{top?.name ?? '—'}</b><small>{tx.kTop}{top ? ` · L${top.level}` : ''}</small>
       </div>
     </div>
-    <button class="btn primary" on:click={openNew}>+ {tx.create}</button>
+    <button class="ol-btn" on:click={openNew}>+ {tx.create}</button>
   </header>
 
   {#if error}
@@ -202,8 +204,8 @@
   {:else}
     <div class="body">
       <!-- ── The ladder ─────────────────────────────────────── -->
-      <section class="card ladder">
-        <div class="ch"><h2>{tx.ladder}</h2><small>{tx.ladderHint}</small></div>
+      <section class="ol-card card ladder" style="--oc: {PALETTE.gold}">
+        <h2 class="ol-h">{tx.ladder}<small>{tx.ladderHint}</small><em>{sorted.length}</em></h2>
         {#if !sorted.length}
           <p class="muted">{tx.noRanks}</p>
         {:else}
@@ -242,18 +244,18 @@
       </section>
 
       <!-- ── Agents of the picked rank ──────────────────────── -->
-      <section class="card people" style="--rc: {selColor}">
+      <section class="ol-card card people" style="--rc: {selColor}; --oc: {selColor}">
         <div class="ph">
           <span class="disc big" class:warn={!selRank} aria-hidden="true"><span>{selRank ? selRank.insignia || '·' : '!'}</span></span>
           <div class="phx">
             <h2>{selRank?.name ?? tx.none}</h2>
             <small>{pool.length} {pool.length === 1 ? tx.agent : tx.agents}{selRank ? ` · L${selRank.level}` : ''}{selRank?.description ? ` · ${selRank.description}` : ''}</small>
           </div>
-          {#if selRank}<button class="btn ghost sm" on:click={() => selRank && openEdit(selRank)}>{tx.edit}</button>{/if}
+          {#if selRank}<button class="ol-btn ghost sm" on:click={() => selRank && openEdit(selRank)}>{tx.edit}</button>{/if}
         </div>
         {#if pool.length}
           <div class="filters">
-            <input class="search" bind:value={query} placeholder={tx.search} aria-label={tx.search} />
+            <label class="ol-search"><span aria-hidden="true">⌕</span><input type="search" bind:value={query} placeholder={tx.search} aria-label={tx.search} /></label>
             <div class="chips">
               <button class="chip" class:on={!flowFilter} on:click={() => (flowFilter = '')}>{tx.all} <i>{pool.length}</i></button>
               {#each flowCounts as [fid, n] (fid)}
@@ -267,9 +269,9 @@
           <ul class="list">
             {#each shown as a (a.id)}
               {@const f = flowOf(a.flow_id)}
-              <li class="ag" style="--fc: {f?.color ?? '#94a3b8'}">
-                <span class="av" aria-hidden="true">{initials(a.name)}</span>
-                <span class="an"><b title={a.name}>{a.name}</b><small>{f?.name ?? '—'}{a.role ? ` · ${a.role}` : ''}</small></span>
+              <li class="ol-row ag" style="--fc: {f?.color ?? '#94a3b8'}; --oc: {f?.color ?? '#94a3b8'}">
+                <span class="ol-mark" aria-hidden="true">{initials(a.name)}</span>
+                <span class="ol-row-txt"><b title={a.name}>{a.name}</b><small>{f?.name ?? '—'}{a.role ? ` · ${a.role}` : ''}</small></span>
                 <label class="mv">
                   <span class="sr">{tx.move}</span>
                   <select value={a.rank_id || ''} disabled={moving === a.id} on:change={(ev) => moveAgent(a, ev)}>
@@ -321,8 +323,8 @@
         </div>
       </div>
       <div class="mact">
-        <button class="btn ghost" on:click={() => (modal = null)}>{tx.cancel}</button>
-        <button class="btn primary" disabled={saving || !modal.name.trim()} on:click={saveModal}>{saving ? tx.saving : tx.save}</button>
+        <button class="ol-btn ghost" on:click={() => (modal = null)}>{tx.cancel}</button>
+        <button class="ol-btn" disabled={saving || !modal.name.trim()} on:click={saveModal}>{saving ? tx.saving : tx.save}</button>
       </div>
     </div>
   </div>
@@ -333,33 +335,8 @@
   .rk { height: 100%; min-height: 0; box-sizing: border-box; padding: 12px 18px 14px; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
   .num { font-variant-numeric: tabular-nums; }
 
-  /* ── header: title · KPI tiles · primary action ── */
-  .top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 16px; align-items: center; }
-  .ttl h1 { margin: 0; font-size: 22px; font-weight: 800; line-height: 1.1;
-    background: linear-gradient(90deg, #FBBF24, #F472B6 55%, #A78BFA); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .ttl p { margin: 2px 0 0; font-size: 11.5px; color: var(--text-3); }
-  .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-  .kpi { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 12px; border-radius: 12px; text-align: left; font: inherit; color: inherit;
-    background: linear-gradient(160deg, color-mix(in srgb, var(--c) 18%, var(--surface-1)), var(--surface-1) 72%);
-    border: 1px solid color-mix(in srgb, var(--c) 34%, var(--border)); transition: transform 0.15s, box-shadow 0.15s; }
-  button.kpi { cursor: pointer; }
-  button.kpi:hover { transform: translateY(-1px); box-shadow: 0 10px 22px -16px var(--c); }
-  .kpi.alert { animation: pulse 2.4s ease-in-out infinite; }
-  @keyframes pulse { 50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 18%, transparent); } }
-  .kic { flex: none; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; font-weight: 900; font-size: 14px;
-    color: var(--c); background: color-mix(in srgb, var(--c) 18%, transparent); text-shadow: 0 0 10px var(--c); }
-  .kic.glyph { font-size: 11px; letter-spacing: 1px; }
-  .kpi div { display: flex; flex-direction: column; min-width: 0; }
-  .kpi b { font-size: 20px; font-weight: 800; line-height: 1.1; color: color-mix(in srgb, var(--c) 75%, white); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .kpi small { font-size: 10.5px; color: color-mix(in srgb, var(--c) 45%, var(--text-2)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-  .btn { font: 700 12.5px var(--font-body, inherit); border-radius: 9px; padding: 8px 14px; cursor: pointer; border: 1px solid transparent; white-space: nowrap; transition: transform 0.15s, filter 0.15s; }
-  .btn.primary { color: #1a1206; background: linear-gradient(135deg, #FDE68A, #FBBF24); box-shadow: 0 8px 20px -12px #FBBF24; }
-  .btn.primary:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.05); }
-  .btn.ghost { background: none; color: var(--text-2); border-color: var(--border); }
-  .btn.ghost:hover { color: var(--text-1); border-color: var(--text-3); }
-  .btn.sm { padding: 4px 10px; font-size: 11.5px; }
-  .btn:disabled { opacity: 0.45; cursor: default; }
+  .top-name { font-size: 16px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .ol-btn.sm { height: 28px; padding: 0 10px; font-size: 11.5px; }
 
   .err { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 9px; font-size: 12.5px;
     color: #fda4af; background: color-mix(in srgb, #F43F5E 12%, transparent); border: 1px solid color-mix(in srgb, #F43F5E 40%, transparent); }
@@ -367,12 +344,8 @@
 
   /* ── body: ladder | agents ── */
   .body { flex: 1; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 12px; min-height: 0; }
-  .card { min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 14px;
-    background: linear-gradient(160deg, color-mix(in srgb, var(--rc, #A78BFA) 7%, var(--surface-1)), var(--surface-1) 60%); border: 1px solid var(--border); }
-  .ch { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-  h2 { margin: 0; font-size: 13.5px; font-weight: 800; color: var(--text-1); display: flex; align-items: center; gap: 8px; }
-  .ch h2::before { content: ''; width: 3px; height: 14px; border-radius: 2px; background: linear-gradient(#22D3EE, #A78BFA); }
-  .ch small { font-size: 11px; color: var(--text-3); }
+  .card { min-height: 0; gap: 8px; }
+  .ol-h small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .muted { color: var(--text-3); font-size: 12px; margin: 0; }
   .pad { padding: 10px 2px; }
 
@@ -386,7 +359,7 @@
     border-color: color-mix(in srgb, var(--rc) 50%, transparent); box-shadow: 0 8px 22px -18px var(--rc); }
   .rbtn, .norank { flex: 1; min-width: 0; display: grid; grid-template-columns: 38px minmax(0, 1fr) 40px minmax(60px, 0.6fr) 28px; gap: 10px; align-items: center;
     padding: 4px 6px 4px 1px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 11px; }
-  .rbtn:focus-visible, .norank:focus-visible, .dots:focus-visible, .chip:focus-visible, button.kpi:focus-visible { outline: 2px solid #22D3EE; outline-offset: 1px; }
+  .rbtn:focus-visible, .norank:focus-visible, .dots:focus-visible, .chip:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
   .disc { position: relative; z-index: 1; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; flex: none;
     background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--rc) 50%, white), color-mix(in srgb, var(--rc) 30%, var(--surface-1)) 60%, var(--surface-1));
     border: 1.5px solid color-mix(in srgb, var(--rc) 70%, transparent); box-shadow: 0 0 14px -2px color-mix(in srgb, var(--rc) 65%, transparent), inset 0 0 10px color-mix(in srgb, var(--rc) 25%, transparent); }
@@ -419,11 +392,10 @@
   .people { --rc-soft: color-mix(in srgb, var(--rc) 22%, transparent); }
   .ph { display: flex; align-items: center; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
   .phx { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  .phx h2 { font-size: 16px; color: color-mix(in srgb, var(--rc) 55%, white); }
+  .phx h2 { margin: 0; font: 700 17px/1.2 var(--font-display); color: color-mix(in srgb, var(--rc) 55%, white); }
   .phx small { font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .filters { display: flex; flex-direction: column; gap: 6px; }
-  .search { background: var(--bg, #0d0f16); border: 1px solid var(--border); color: var(--text-1); border-radius: 9px; padding: 6px 10px; font-size: 12.5px; }
-  .search:focus { outline: none; border-color: var(--rc); }
+  .filters .ol-search { width: 100%; height: 32px; }
   .chips { display: flex; gap: 5px; flex-wrap: wrap; max-height: 52px; overflow: hidden; }
   .chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font: 700 11px var(--font-body, inherit); cursor: pointer;
     color: var(--text-2); background: none; border: 1px solid var(--border); }
@@ -431,13 +403,8 @@
   .chip.on { color: color-mix(in srgb, var(--fc, var(--rc)) 70%, white); background: color-mix(in srgb, var(--fc, var(--rc)) 18%, transparent); border-color: color-mix(in srgb, var(--fc, var(--rc)) 45%, transparent); }
   .fdot { width: 7px; height: 7px; border-radius: 50%; background: var(--fc); box-shadow: 0 0 6px var(--fc); }
   .list { list-style: none; margin: 0; padding: 0; overflow: auto; min-height: 0; flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(232px, 1fr)); align-content: start; gap: 4px; }
-  .ag { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 4px 6px; border-radius: 9px;
-    background: color-mix(in srgb, var(--fc) 5%, transparent); border: 1px solid color-mix(in srgb, var(--fc) 14%, transparent); }
-  .av { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; font: 800 10.5px var(--font-body, inherit);
-    color: color-mix(in srgb, var(--fc) 75%, white); background: color-mix(in srgb, var(--fc) 22%, transparent); }
-  .an { display: flex; flex-direction: column; min-width: 0; }
-  .an b { font-size: 12px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .an small { font-size: 10.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ag { padding: 5px 7px; gap: 8px; }
+  .ag .ol-row-txt b { font-size: 12.5px; }
   .mv { position: relative; }
   .mv select { max-width: 112px; background: var(--surface-2, #1f2230); border: 1px solid var(--border); color: var(--text-2); border-radius: 7px; padding: 2px 4px; font-size: 11px; cursor: pointer; }
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
@@ -448,7 +415,7 @@
     background: linear-gradient(160deg, color-mix(in srgb, var(--rc) 14%, var(--surface-1)), var(--surface-1) 65%); border: 1px solid color-mix(in srgb, var(--rc) 40%, var(--border));
     box-shadow: 0 30px 60px -30px rgba(0, 0, 0, 0.8), 0 0 40px -24px var(--rc); animation: pop 0.18s ease-out; }
   @keyframes pop { from { transform: scale(0.97); opacity: 0; } }
-  .modal h2 { font-size: 16px; }
+  .modal h2 { margin: 0; font: 700 18px/1.2 var(--font-display); background: linear-gradient(90deg, #FBBF24, #F472B6 50%, #A78BFA); -webkit-background-clip: text; background-clip: text; color: transparent; }
   .mgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
   .f { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--text-2); font-weight: 600; }
   .f em { font-style: normal; font-weight: 400; color: var(--text-3); }
@@ -474,11 +441,9 @@
     .rail::before { left: 15px; }
     .dots { height: 24px; }
   }
-  @media (prefers-reduced-motion: reduce) { .kpi.alert, .modal { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .modal { animation: none; } }
   @media (max-width: 1100px), (max-height: 640px) {
     .rk { height: auto; overflow: visible; }
-    .top { grid-template-columns: 1fr auto; }
-    .kpis { grid-column: 1 / -1; grid-row: 2; grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .body { grid-template-columns: 1fr; }
     .list { max-height: 60vh; }
   }

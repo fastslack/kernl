@@ -76,7 +76,7 @@
      `.ip-body`, and Svelte scopes CSS per component. */
   .ip-body{
     flex:1;overflow-y:auto;overflow-x:hidden;
-    padding:16px 18px 16px;
+    padding:12px 14px 14px;gap:10px;
     /* A column, so an open Mandate can take the height left below it. */
     display:flex;flex-direction:column;
     scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;

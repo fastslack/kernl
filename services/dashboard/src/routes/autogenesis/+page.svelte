@@ -65,6 +65,7 @@
 
   const L = {
     es: {
+      eyebrow: 'La evolución, de un vistazo', question: '¿Qué instrucciones están mejorando?',
       title: 'Evoluciones', sub: 'Cómo mejoran las instrucciones de cada agente: versiones, comparaciones y ciclos de mejora',
       kAgents: 'agentes que pueden evolucionar', kFailing: 'con corridas fallidas', kVersions: 'versiones de {a}', kPending: 'propuestas por revisar', kAccepted: 'mejoras aceptadas',
       agents: 'Agentes', filter: 'Buscar agente u oficina…', sortFail: 'Más fallas', sortName: 'Nombre', sortOffice: 'Oficina', noMatch: 'Ningún agente coincide.',
@@ -88,6 +89,7 @@
       errReflect: 'Falló el ciclo de reflexión', errAccept: 'No se pudo aceptar', errReject: 'No se pudo rechazar', noOffice: 'sin oficina',
     },
     en: {
+      eyebrow: 'Evolution at a glance', question: 'Whose instructions are improving?',
       title: 'Evolutions', sub: "How each agent's instructions improve: versions, comparisons and improvement cycles",
       kAgents: 'agents that can evolve', kFailing: 'with failed runs', kVersions: 'versions of {a}', kPending: 'proposals to review', kAccepted: 'accepted improvements',
       agents: 'Agents', filter: 'Search agent or office…', sortFail: 'Most failures', sortName: 'Name', sortOffice: 'Office', noMatch: 'No agent matches.',
@@ -312,19 +314,20 @@
 </script>
 
 <div class="ev">
-  <header class="top">
-    <div class="ttl">
-      <h1>{tx.title}</h1>
-      <p>{tx.sub}</p>
+  <header class="ol-strip no-cta">
+    <div class="ol-ttl">
+      <p class="ol-eyebrow">{tx.eyebrow}</p>
+      <h1 class="ol-title" title={tx.title}>{tx.question}</h1>
+      <p class="ol-sub sub">{tx.sub}</p>
     </div>
-    <div class="kpis">
-      <div class="kpi" style="--c: {PALETTE.violet}"><b class="num">{agents.length}</b><small>{tx.kAgents}</small></div>
-      <button class="kpi" class:on={sortBy === 'fail'} style="--c: {failingAgents ? '#F43F5E' : PALETTE.emerald}" on:click={() => (sortBy = 'fail')}>
-        <b class="num">{failingAgents}</b><small>{tx.kFailing}</small>
+    <div class="ol-kpis">
+      <div class="ol-kpi" style="--c: {PALETTE.violet}"><b>{agents.length}</b><small>{tx.kAgents}</small></div>
+      <button class="ol-kpi" class:on={sortBy === 'fail'} aria-pressed={sortBy === 'fail'} style="--c: {failingAgents ? '#F43F5E' : PALETTE.emerald}" on:click={() => (sortBy = 'fail')}>
+        <b>{failingAgents}</b><small>{tx.kFailing}</small>
       </button>
-      <div class="kpi" style="--c: {PALETTE.cyan}"><b class="num">{totalVersions}</b><small>{fill(tx.kVersions, { a: selectedAgent?.name ?? '—' })}</small></div>
-      <div class="kpi" class:alert={totalProposed > 0} style="--c: {totalProposed ? PALETTE.gold : '#94A3B8'}"><b class="num">{totalProposed}</b><small>{tx.kPending}</small></div>
-      <div class="kpi" style="--c: {PALETTE.emerald}"><b class="num">{totalAccepted}</b><small>{tx.kAccepted}</small></div>
+      <div class="ol-kpi" style="--c: {PALETTE.cyan}"><b>{totalVersions}</b><small>{fill(tx.kVersions, { a: selectedAgent?.name ?? '—' })}</small></div>
+      <div class="ol-kpi" class:alert={totalProposed > 0} style="--c: {totalProposed ? PALETTE.gold : '#94A3B8'}"><b>{totalProposed}</b><small>{tx.kPending}</small></div>
+      <div class="ol-kpi" style="--c: {PALETTE.emerald}"><b>{totalAccepted}</b><small>{tx.kAccepted}</small></div>
     </div>
   </header>
 
@@ -333,26 +336,26 @@
   {/if}
 
   {#if loading}
-    <p class="muted pad">{tx.loadingAgents}</p>
+    <p class="ol-empty">{tx.loadingAgents}</p>
   {:else}
     <div class="body">
       <!-- ── agents ── -->
-      <section class="card list-card">
-        <h2>{tx.agents}<em>{sorted.length}</em></h2>
-        <input class="search" type="search" placeholder={tx.filter} aria-label={tx.filter} bind:value={filterText} />
-        <div class="sorts" role="group">
-          <button class="chip" class:on={sortBy === 'fail'} on:click={() => (sortBy = 'fail')}>{tx.sortFail}</button>
-          <button class="chip" class:on={sortBy === 'name'} on:click={() => (sortBy = 'name')}>{tx.sortName}</button>
-          <button class="chip" class:on={sortBy === 'office'} on:click={() => (sortBy = 'office')}>{tx.sortOffice}</button>
+      <section class="ol-card card list-card" style="--oc: {PALETTE.violet}">
+        <h2 class="ol-h">{tx.agents}<em>{sorted.length}</em></h2>
+        <label class="ol-search"><span aria-hidden="true">⌕</span><input type="search" placeholder={tx.filter} aria-label={tx.filter} bind:value={filterText} /></label>
+        <div class="ol-seg sorts" role="group">
+          <button class:on={sortBy === 'fail'} aria-pressed={sortBy === 'fail'} style="--c: #F43F5E" on:click={() => (sortBy = 'fail')}>{tx.sortFail}</button>
+          <button class:on={sortBy === 'name'} aria-pressed={sortBy === 'name'} on:click={() => (sortBy = 'name')}>{tx.sortName}</button>
+          <button class:on={sortBy === 'office'} aria-pressed={sortBy === 'office'} style="--c: {PALETTE.cyan}" on:click={() => (sortBy = 'office')}>{tx.sortOffice}</button>
         </div>
-        <ul class="agents">
+        <ul class="ol-list agents">
           {#each sorted as a (a.id)}
             {@const s = stats[a.id]}
             <li>
-              <button class="ag" class:sel={a.id === selectedAgentId} style="--oc: {flowColor(a.flow_id)}" on:click={() => selectAgent(a.id)}
+              <button class="ol-row ag" class:on={a.id === selectedAgentId} aria-current={a.id === selectedAgentId ? 'true' : undefined} style="--oc: {flowColor(a.flow_id)}" on:click={() => selectAgent(a.id)}
                 title={s ? fill(tx.okFail, { ok: s.completed, f: s.failed }) : tx.noRuns}>
-                <span class="odot"></span>
-                <span class="who"><b>{a.name}</b><small>{flowName(a.flow_id)}</small></span>
+                <span class="ol-mark" aria-hidden="true">{a.name.slice(0, 2).toUpperCase()}</span>
+                <span class="ol-row-txt"><b>{a.name}</b><small>{flowName(a.flow_id)}</small></span>
                 {#if s && s.total_runs}
                   <span class="rate">
                     <span class="rbar" style="width: {Math.max(18, (100 * s.total_runs) / maxRuns)}%">
@@ -366,52 +369,58 @@
               </button>
             </li>
           {:else}
-            <li class="muted pad">{tx.noMatch}</li>
+            <li class="ol-empty">{tx.noMatch}</li>
           {/each}
         </ul>
       </section>
 
       <!-- ── picked agent ── -->
       {#if !selectedAgent}
-        <section class="card"><p class="muted pad">{tx.pick}</p></section>
+        <section class="ol-card card"><p class="ol-empty">{tx.pick}</p></section>
       {:else}
         <div class="detail" style="--oc: {selColor}">
-          <section class="head">
-            <span class="mark" aria-hidden="true">{selectedAgent.name.slice(0, 2).toUpperCase()}</span>
-            <div class="hx">
-              <h2 class="aname">{selectedAgent.name}</h2>
-              <div class="chips">
-                <span class="tag"><em>{tx.provider}</em>{selectedAgent.provider || '—'}</span>
-                <span class="tag"><em>{tx.model}</em>{selectedAgent.model || '—'}</span>
-                <span class="tag office"><em>{tx.office}</em>{flowName(selectedAgent.flow_id)}</span>
-                <span class="tag ver"><em>{tx.version}</em>v{activeVersion ?? '—'}</span>
-                {#if stats[selectedAgent.id]?.total_runs}
-                  <span class="tag"><em>%</em>{stats[selectedAgent.id].success_rate}% · {fill(tx.okFail, { ok: stats[selectedAgent.id].completed, f: stats[selectedAgent.id].failed })}</span>
-                {/if}
+          <section class="ol-card head">
+            <div class="ol-mhead">
+              <span class="ol-mark lg" aria-hidden="true">{selectedAgent.name.slice(0, 2).toUpperCase()}</span>
+              <div class="ol-ttl">
+                <p class="ol-eyebrow office" style="color: {selColor}">{tx.office} · {flowName(selectedAgent.flow_id)}</p>
+                <h2 class="ol-title">{selectedAgent.name}</h2>
               </div>
+              <a class="ol-btn ghost" href="/agents-flow?agent={selectedAgent.id}">{tx.see3d} ↗</a>
+              <button class="ol-btn" disabled={busyAction === 'reflect'} on:click={triggerReflection} title={tx.reflectHint}>
+                {busyAction === 'reflect' ? tx.reflecting : `↻ ${tx.reflect}`}
+              </button>
             </div>
-            <a class="btn ghost" href="/agents-flow?agent={selectedAgent.id}">{tx.see3d} ↗</a>
-            <button class="btn primary" disabled={busyAction === 'reflect'} on:click={triggerReflection} title={tx.reflectHint}>
-              {busyAction === 'reflect' ? tx.reflecting : `↻ ${tx.reflect}`}
-            </button>
+            <div class="chips">
+              <span class="ol-chip soft tag" style="--c: {PALETTE.sky}"><em>{tx.provider}</em>{selectedAgent.provider || '—'}</span>
+              <span class="ol-chip soft tag" style="--c: {PALETTE.violet}"><em>{tx.model}</em>{selectedAgent.model || '—'}</span>
+              <span class="ol-chip soft tag" style="--c: {PALETTE.cyan}"><em>{tx.version}</em>v{activeVersion ?? '—'}</span>
+              {#if stats[selectedAgent.id]?.total_runs}
+                {@const st = stats[selectedAgent.id]}
+                <span class="ol-chip soft tag" style="--c: {st.failed ? '#F43F5E' : PALETTE.emerald}"><i></i><em>%</em>{st.success_rate}% · {fill(tx.okFail, { ok: st.completed, f: st.failed })}</span>
+              {/if}
+            </div>
           </section>
 
           <div class="panes">
             <div class="pcol">
               <!-- RSPL -->
-              <section class="card grow">
-                <h2>{tx.lineage}<small>{tx.lineageSub}</small><em>{versions.length}</em></h2>
+              <section class="ol-card card grow" style="--oc: {PALETTE.cyan}">
+                <h2 class="ol-h">{tx.lineage}<small>{tx.lineageSub}</small><em>{versions.length}</em></h2>
                 {#if loadingDetail}
                   <p class="muted pad">{tx.loading}</p>
                 {:else if versions.length === 0}
                   <div class="explain">{tx.noVersions}</div>
                 {:else}
-                  <ul class="versions">
+                  <ul class="ol-list versions">
                     {#each versions as v (v.id)}
-                      <li class="vr" class:on={v.active === 1} class:from={diffFrom === v.version} class:to={diffTo === v.version} style="--sc: {SRC_HUE[v.source] ?? '#94A3B8'}">
-                        <span class="vnum num">v{v.version}{#if v.parent_version > 0}<small> ← v{v.parent_version}</small>{/if}</span>
-                        <span class="src">{tx.src[v.source] ?? v.source}</span>
-                        <span class="vnote" title={v.note}>{v.note || '—'}<small>{timeAgo(v.created_at)}</small></span>
+                      {@const hue = SRC_HUE[v.source] ?? '#94A3B8'}
+                      <li class="ol-row vr" class:on={v.active === 1} class:from={diffFrom === v.version} class:to={diffTo === v.version} style="--oc: {hue}; --sc: {hue}">
+                        <span class="ol-mark vnum num">v{v.version}</span>
+                        <span class="ol-row-txt" title={v.note}>
+                          <b class="vnote"><span class="ol-st src"><i></i>{tx.src[v.source] ?? v.source}</span><span class="vtxt">{v.note || '—'}</span></b>
+                          <small>{#if v.parent_version > 0}← v{v.parent_version} · {/if}{timeAgo(v.created_at)}</small>
+                        </span>
                         <span class="vact">
                           <button class="xs" class:pick={diffFrom === v.version} title={tx.asLeft} aria-label={tx.asLeft}
                             on:click={() => { diffFrom = v.version; refreshDiff(); }}>◀</button>
@@ -422,7 +431,7 @@
                             <button class="xs danger" disabled={busyAction === `restore:${v.version}`} on:click={() => doRestore(v.version)}
                               title={fill(tx.restoreHint, { v: v.version })}>{tx.restore}</button>
                           {:else}
-                            <span class="act-on">● {tx.active}</span>
+                            <span class="ol-st live act-on" style="--sc: {PALETTE.emerald}"><i></i>{tx.active}</span>
                           {/if}
                         </span>
                       </li>
@@ -432,9 +441,9 @@
               </section>
 
               <!-- Diff -->
-              <section class="card grow">
+              <section class="ol-card card grow" style="--oc: {PALETTE.emerald}">
                 {#if diffFrom !== null && diffTo !== null}
-                  <h2>{fill(tx.diff, { a: diffFrom, b: diffTo })}</h2>
+                  <h2 class="ol-h">{fill(tx.diff, { a: diffFrom, b: diffTo })}</h2>
                   {#if diffLoading}
                     <p class="muted pad">{tx.comparing}</p>
                   {:else if diffLines.length === 0}
@@ -443,24 +452,24 @@
                     <pre class="diff"><code>{#each diffLines as line}<span class="d-{line.kind}">{line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : ' '} {line.text}</span>{/each}</code></pre>
                   {/if}
                 {:else}
-                  <h2>{fill(tx.diff, { a: '·', b: '·' })}</h2>
+                  <h2 class="ol-h">{fill(tx.diff, { a: '·', b: '·' })}</h2>
                   <p class="muted pad">{tx.diffHint}</p>
                 {/if}
               </section>
             </div>
 
             <!-- SEPL -->
-            <section class="card">
-              <h2>{tx.cycles}<small>{tx.cyclesSub}</small><em>{evolution.length}</em></h2>
+            <section class="ol-card card" style="--oc: {PALETTE.gold}">
+              <h2 class="ol-h">{tx.cycles}<small>{tx.cyclesSub}</small><em>{evolution.length}</em></h2>
               {#if evolution.length === 0}
                 <div class="explain">{tx.noCycles}</div>
               {:else}
-                <ul class="evos">
+                <ul class="ol-list evos">
                   {#each evolution as evo (evo.id)}
                     {@const delta = evo.candidate_score - evo.baseline_score}
                     <li class="evo" style="--sc: {ST_HUE[evo.status] ?? PALETTE.violet}">
                       <div class="ehead">
-                        <span class="pill">{tx.st[evo.status] ?? evo.status}</span>
+                        <span class="ol-chip pill" style="--c: {ST_HUE[evo.status] ?? PALETTE.violet}"><i></i>{tx.st[evo.status] ?? evo.status}</span>
                         <span class="ever num">v{evo.base_version} → v{evo.candidate_version || '·'}</span>
                         <span class="etime">{timeAgo(evo.created_at)}</span>
                         <span class="scores num">
@@ -476,9 +485,9 @@
                       {/if}
                       {#if (evo.status === 'proposed' || evo.status === 'rejected') && evo.candidate_version > 0}
                         <div class="eact">
-                          <button class="btn primary sm" disabled={busyAction === `accept:${evo.id}`} on:click={() => doAccept(evo.id)}>{fill(tx.accept, { v: evo.candidate_version })}</button>
+                          <button class="ol-btn sm" disabled={busyAction === `accept:${evo.id}`} on:click={() => doAccept(evo.id)}>{fill(tx.accept, { v: evo.candidate_version })}</button>
                           {#if evo.status === 'proposed'}
-                            <button class="btn ghost sm" disabled={busyAction === `reject:${evo.id}`} on:click={() => doReject(evo.id)}>{tx.reject}</button>
+                            <button class="ol-btn ghost sm" disabled={busyAction === `reject:${evo.id}`} on:click={() => doReject(evo.id)}>{tx.reject}</button>
                           {/if}
                         </div>
                       {/if}
@@ -499,22 +508,7 @@
   .ev { height: 100%; min-height: 0; box-sizing: border-box; padding: 12px 18px 14px; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
   .num { font-variant-numeric: tabular-nums; }
   a { text-decoration: none; }
-
-  .top { display: grid; grid-template-columns: minmax(220px, auto) minmax(0, 1fr); gap: 16px; align-items: center; }
-  .ttl h1 { margin: 0; font-size: 22px; font-weight: 800; line-height: 1.1;
-    background: linear-gradient(90deg, #22D3EE, #A78BFA 50%, #F472B6); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .ttl p { margin: 2px 0 0; font-size: 11.5px; color: var(--text-3); max-width: 340px; }
-  .kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
-  .kpi { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; padding: 7px 12px; border-radius: 12px; font: inherit; color: inherit; text-align: left;
-    background: linear-gradient(160deg, color-mix(in srgb, var(--c) 18%, var(--surface-1)), var(--surface-1) 72%); border: 1px solid color-mix(in srgb, var(--c) 32%, var(--border));
-    transition: transform .15s, box-shadow .15s; }
-  button.kpi { cursor: pointer; }
-  button.kpi:hover { transform: translateY(-1px); box-shadow: 0 10px 22px -16px var(--c); }
-  .kpi.on { border-color: var(--c); }
-  .kpi.alert { animation: ring 2.4s ease-in-out infinite; }
-  @keyframes ring { 50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 20%, transparent); } }
-  .kpi b { font-size: 21px; font-weight: 800; line-height: 1.1; color: color-mix(in srgb, var(--c) 75%, white); text-shadow: 0 0 14px color-mix(in srgb, var(--c) 45%, transparent); }
-  .kpi small { font-size: 10.5px; color: color-mix(in srgb, var(--c) 45%, var(--text-2)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .sub { max-width: 340px; font-size: 11.5px; }
 
   .err { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 9px; font-size: 12.5px; flex: none;
     color: #fda4af; background: color-mix(in srgb, #F43F5E 12%, transparent); border: 1px solid color-mix(in srgb, #F43F5E 40%, transparent); }
@@ -523,34 +517,20 @@
   .pad { padding: 10px 2px; }
 
   .body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(250px, 300px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 12px; }
-  .card { min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: 7px; padding: 12px 14px; border-radius: 14px; overflow: hidden;
-    background: linear-gradient(160deg, color-mix(in srgb, var(--oc, #A78BFA) 6%, var(--surface-1)), var(--surface-1) 60%); border: 1px solid var(--border); }
+  .card { min-height: 0; gap: 7px; overflow: hidden; }
   .card.grow { flex: 1; }
-  h2 { margin: 0; font-size: 13px; font-weight: 800; color: var(--text-1); display: flex; align-items: baseline; gap: 8px; flex: none; }
-  h2::before { content: ''; align-self: center; width: 3px; height: 14px; border-radius: 2px; background: linear-gradient(#22D3EE, #A78BFA); flex: none; }
-  h2 small { font-size: 10.5px; font-weight: 500; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  h2 em { margin-left: auto; font-style: normal; font-size: 11px; font-weight: 700; color: var(--text-3); }
+  .ol-h { flex: none; }
+  .ol-h small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* agents list */
-  .search { flex: none; background: var(--bg, #0d0f16); border: 1px solid var(--border); color: var(--text-1); border-radius: 9px; padding: 6px 10px; font-size: 12.5px; }
-  .search:focus { outline: none; border-color: #A78BFA; }
-  .sorts { display: flex; gap: 5px; flex: none; }
-  .chip { padding: 2px 9px; border-radius: 999px; font: 700 11px var(--font-body, inherit); cursor: pointer; color: var(--text-2); background: none; border: 1px solid var(--border); }
-  .chip.on { color: #ddd6fe; background: color-mix(in srgb, #A78BFA 18%, transparent); border-color: color-mix(in srgb, #A78BFA 45%, transparent); }
-  ul { list-style: none; margin: 0; padding: 0; }
-  .agents { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 3px; }
-  .ag { width: 100%; display: grid; grid-template-columns: 8px minmax(0, 1fr) 86px; gap: 9px; align-items: center; padding: 5px 8px; border-radius: 10px; cursor: pointer;
-    text-align: left; color: inherit; font: inherit; background: none; border: 1px solid transparent; transition: background .15s, border-color .15s; }
-  .ag:hover { background: color-mix(in srgb, var(--oc) 8%, transparent); }
-  .ag.sel { background: linear-gradient(90deg, color-mix(in srgb, var(--oc) 20%, transparent), color-mix(in srgb, var(--oc) 4%, transparent)); border-color: color-mix(in srgb, var(--oc) 50%, transparent); box-shadow: 0 8px 20px -16px var(--oc); }
-  .ag:focus-visible, .chip:focus-visible, .xs:focus-visible, .btn:focus-visible, .kpi:focus-visible { outline: 2px solid #22D3EE; outline-offset: 1px; }
-  .odot { width: 8px; height: 8px; border-radius: 50%; background: var(--oc); box-shadow: 0 0 8px var(--oc); }
-  .who { display: flex; flex-direction: column; min-width: 0; }
-  .who b { font-size: 12.5px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .who small { font-size: 10.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .rate { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+  .list-card .ol-search { flex: none; width: 100%; height: 32px; }
+  .sorts { flex: none; align-self: flex-start; }
+  .agents { flex: 1; min-height: 0; overflow: auto; gap: 3px; }
+  .ag { padding: 5px 8px; gap: 9px; }
+  .ag .ol-row-txt b { font-size: 12.5px; }
+  .rate { flex: none; width: 86px; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
   .rate.none { font-size: 10.5px; color: var(--text-3); }
-  .rbar { display: flex; height: 5px; border-radius: 3px; overflow: hidden; background: var(--surface-2, #1f2230); align-self: stretch; margin-left: auto; }
+  .rbar { display: flex; height: 5px; border-radius: 3px; overflow: hidden; background: var(--surface-1); align-self: stretch; margin-left: auto; }
   .rbar i { display: block; min-width: 0; }
   .rbar .ok { background: #34D399; box-shadow: 0 0 6px #34D399; }
   .rbar .ko { background: #F43F5E; }
@@ -559,51 +539,34 @@
 
   /* picked agent */
   .detail { min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
-  .head { flex: none; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 10px 14px; border-radius: 14px;
-    background: radial-gradient(120% 160% at 0% 0%, color-mix(in srgb, var(--oc) 20%, transparent), transparent 60%), linear-gradient(160deg, color-mix(in srgb, var(--oc) 8%, var(--surface-1)), var(--surface-1) 70%);
-    border: 1px solid color-mix(in srgb, var(--oc) 32%, var(--border)); }
-  .mark { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; font: 800 13px var(--font-display, inherit);
-    color: color-mix(in srgb, var(--oc) 60%, white); background: color-mix(in srgb, var(--oc) 22%, var(--surface-2, #1f2230)); box-shadow: 0 0 16px -4px var(--oc), inset 0 0 0 1px color-mix(in srgb, var(--oc) 40%, transparent); }
-  .hx { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
-  .aname { font-size: 16px; color: color-mix(in srgb, var(--oc) 45%, white); }
-  .aname::before { display: none; }
+  .head { flex: none; gap: 8px; padding: 10px 14px; }
   .chips { display: flex; gap: 5px; flex-wrap: wrap; }
-  .tag { display: inline-flex; align-items: baseline; gap: 5px; padding: 1px 8px; border-radius: 999px; font: 600 11px var(--font-mono, monospace); color: var(--text-1);
-    background: color-mix(in srgb, var(--surface-2, #1f2230) 70%, transparent); border: 1px solid var(--border); white-space: nowrap; }
-  .tag em { font-style: normal; font: 600 9.5px var(--font-body, inherit); text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
-  .tag.office { border-color: color-mix(in srgb, var(--oc) 45%, transparent); color: color-mix(in srgb, var(--oc) 65%, white); }
-  .tag.ver { border-color: color-mix(in srgb, #22D3EE 45%, transparent); color: #67e8f9; }
-  .btn { display: inline-flex; align-items: center; gap: 5px; font: 700 12px var(--font-body, inherit); border-radius: 9px; padding: 7px 12px; cursor: pointer; border: 1px solid transparent; white-space: nowrap; transition: transform .15s, filter .15s; }
-  .btn.primary { color: #1a1206; background: linear-gradient(135deg, #FDE68A, #FBBF24); box-shadow: 0 8px 20px -12px #FBBF24; }
-  .btn.primary:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.05); }
-  .btn.ghost { background: none; color: var(--text-2); border-color: var(--border); }
-  .btn.ghost:hover { color: var(--text-1); border-color: var(--text-3); }
-  .btn.sm { padding: 4px 10px; font-size: 11.5px; }
-  .btn:disabled { opacity: .5; cursor: default; }
+  .tag { font-family: var(--font-mono, monospace); }
+  .tag em { font-style: normal; font: 700 9.5px var(--font-body, inherit); text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
+  .ol-btn.sm { height: 28px; padding: 0 10px; font-size: 11.5px; }
+  a.ol-btn { text-decoration: none; }
 
   .panes { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 10px; }
   .pcol { min-height: 0; display: flex; flex-direction: column; gap: 10px; }
   .explain { font-size: 12px; line-height: 1.55; color: var(--text-2); padding: 10px 12px; border-radius: 10px;
     background: color-mix(in srgb, #A78BFA 7%, transparent); border: 1px dashed color-mix(in srgb, #A78BFA 40%, transparent); }
 
-  .versions { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 3px; }
-  .vr { display: grid; grid-template-columns: 74px 74px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 5px 8px; border-radius: 9px;
-    background: rgba(255, 255, 255, .03); border: 1px solid transparent; }
-  .vr.on { background: linear-gradient(90deg, color-mix(in srgb, #34D399 14%, transparent), transparent); border-color: color-mix(in srgb, #34D399 35%, transparent); }
+  .versions { flex: 1; min-height: 0; overflow: auto; gap: 3px; }
+  .vr { padding: 5px 8px; gap: 9px; }
+  .vr.on { border-color: color-mix(in srgb, #34D399 45%, transparent); background: linear-gradient(90deg, color-mix(in srgb, #34D399 14%, var(--surface-2)), var(--surface-2)); }
   .vr.from { box-shadow: inset 3px 0 0 #F43F5E; } .vr.to { box-shadow: inset 3px 0 0 #34D399; }
-  .vnum { font: 800 12px var(--font-mono, monospace); color: var(--text-1); }
-  .vnum small { font-weight: 500; color: var(--text-3); }
-  .src { justify-self: start; font: 700 10.5px var(--font-body, inherit); padding: 1px 7px; border-radius: 999px;
-    color: color-mix(in srgb, var(--sc) 70%, white); background: color-mix(in srgb, var(--sc) 16%, transparent); border: 1px solid color-mix(in srgb, var(--sc) 42%, transparent); }
-  .vnote { display: flex; flex-direction: column; min-width: 0; font-size: 11.5px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .vnote small { font-size: 10px; color: var(--text-3); }
-  .vact { display: flex; gap: 3px; align-items: center; }
-  .xs { padding: 2px 7px; border-radius: 7px; font: 700 10.5px var(--font-body, inherit); cursor: pointer; color: var(--text-1); background: var(--surface-2, #1f2230); border: 1px solid var(--border); }
-  .xs:hover:not(:disabled) { border-color: var(--text-3); }
+  .vr .vnum { width: 34px; font: 800 10.5px var(--font-mono, monospace); }
+  .vr .vnote { display: flex; align-items: center; gap: 8px; min-width: 0; font: 600 12px var(--font-body); color: var(--text-2); }
+  .src { flex: none; font-size: 10.5px; }
+  .vtxt { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .vact { flex: none; display: flex; gap: 3px; align-items: center; }
+  .xs { padding: 2px 7px; border-radius: 7px; font: 700 10.5px var(--font-body, inherit); cursor: pointer; color: var(--text-1); background: var(--surface-1); border: 1px solid var(--border); }
+  .xs:hover:not(:disabled) { border-color: color-mix(in srgb, var(--gold) 50%, var(--border-h)); }
   .xs.pick { border-color: #A78BFA; color: #ddd6fe; }
   .xs.danger { color: #fda4af; border-color: color-mix(in srgb, #F43F5E 35%, transparent); }
   .xs:disabled { opacity: .5; cursor: default; }
-  .act-on { font-size: 10.5px; font-weight: 700; color: #6ee7b7; padding: 0 4px; }
+  .xs:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
+  .act-on { padding: 0 4px; }
 
   .diff { flex: 1; min-height: 0; margin: 0; padding: 10px; overflow: auto; border-radius: 10px; background: var(--bg, #0d0f16); border: 1px solid var(--border); font: 500 11px var(--font-mono, monospace); line-height: 1.55; }
   .diff code { display: block; }
@@ -611,12 +574,11 @@
   .diff .d-removed { color: #fda4af; background: rgba(244, 63, 94, .09); display: block; text-decoration: line-through; opacity: .85; }
   .diff .d-same { color: var(--text-2); display: block; }
 
-  .evos { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+  .evos { flex: 1; min-height: 0; overflow: auto; gap: 6px; }
   .evo { display: flex; flex-direction: column; gap: 5px; padding: 8px 10px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--sc) 25%, var(--border));
-    background: linear-gradient(160deg, color-mix(in srgb, var(--sc) 8%, transparent), transparent 70%); }
+    background: linear-gradient(160deg, color-mix(in srgb, var(--sc) 8%, var(--surface-2)), var(--surface-2) 70%); }
   .ehead { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .pill { font: 800 10px var(--font-body, inherit); text-transform: uppercase; letter-spacing: .06em; padding: 1px 8px; border-radius: 999px;
-    color: color-mix(in srgb, var(--sc) 70%, white); background: color-mix(in srgb, var(--sc) 18%, transparent); border: 1px solid color-mix(in srgb, var(--sc) 45%, transparent); }
+  .pill { height: 20px; }
   .ever { font: 800 11.5px var(--font-mono, monospace); color: var(--text-1); }
   .etime { font-size: 10.5px; color: var(--text-3); }
   .scores { margin-left: auto; font-size: 11px; color: var(--text-2); } .scores b { color: var(--text-1); }
@@ -628,11 +590,9 @@
   .prop pre { margin: 4px 0 0; padding: 8px; max-height: 220px; overflow: auto; border-radius: 8px; background: var(--bg, #0d0f16); font: 500 11px var(--font-mono, monospace); color: var(--text-1); white-space: pre-wrap; }
   .eact { display: flex; gap: 6px; }
 
-  @media (prefers-reduced-motion: reduce) { .kpi.alert { animation: none; } }
-  @media (max-height: 760px) { .kpi b { font-size: 18px; } .head { padding: 7px 12px; } .mark { width: 32px; height: 32px; } }
+  @media (max-height: 760px) { .ol-kpi b { font-size: 18px; } .head { padding: 7px 12px; } }
   @media (max-width: 1100px) {
     .ev { height: auto; overflow: visible; }
-    .top { grid-template-columns: 1fr; } .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .body, .panes { grid-template-columns: 1fr; } .agents { max-height: 40vh; } .card { max-height: 70vh; }
   }
 </style>

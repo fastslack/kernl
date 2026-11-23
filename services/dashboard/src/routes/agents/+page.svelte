@@ -19,6 +19,7 @@
 
   const L = {
     es: {
+      eyebrow: 'Tus agentes, de un vistazo', question: '¿Quién está trabajando ahora?',
       title: 'Agentes', sub: '{n} agentes · {a} activos · {w} trabajando ahora', flow: 'Ver en 3D', create: 'Nuevo agente',
       kTotal: 'agentes', kActive: 'activos', kToday: 'corridas hoy', kDone: 'completadas', kFailed: 'con error', kTokens: 'tokens',
       list: 'Agentes', search: 'Buscar agente o descripción…', all: 'Todos', working: 'Trabajando', failing: 'Con fallas', paused: 'Pausados',
@@ -26,9 +27,11 @@
       last: 'última', never: 'nunca corrió', ok: 'éxito', run: 'Correr', stop: 'Detener', open3d: 'Abrir en el 3D', open: 'Abrir', del: 'Eliminar', keep: 'Mantener (quitar revisión)', reject: 'Apagar (rechazar)',
       inARow: '{n} fallas seguidas', autoPaused: 'pausado solo', revision: 'en revisión',
       recent: 'Corridas recientes', top: 'Los que más corren', byStatus: 'Por estado', byTrigger: 'Por disparador', runs: 'corridas', noRuns: 'Todavía no hay corridas.', noData: 'Sin datos.',
+      as: { working: 'trabajando', review: 'en revisión', paused: 'pausado', idle: 'en espera', off: 'apagado', error: 'con error', warn: 'falló la última' } as Record<string, string>,
       st: { completed: 'terminó', failed: 'falló', running: 'trabajando', pending: 'en cola', cancelled: 'cancelada' } as Record<string, string>,
     },
     en: {
+      eyebrow: 'Your agents at a glance', question: 'Who is working right now?',
       title: 'Agents', sub: '{n} agents · {a} active · {w} working now', flow: 'See in 3D', create: 'New agent',
       kTotal: 'agents', kActive: 'active', kToday: 'runs today', kDone: 'completed', kFailed: 'failed', kTokens: 'tokens',
       list: 'Agents', search: 'Search agent or description…', all: 'All', working: 'Working', failing: 'Failing', paused: 'Paused',
@@ -36,6 +39,7 @@
       last: 'last', never: 'never ran', ok: 'success', run: 'Run', stop: 'Stop', open3d: 'Open in 3D', open: 'Open', del: 'Delete', keep: 'Keep (clear review)', reject: 'Switch off (reject)',
       inARow: '{n} failures in a row', autoPaused: 'auto-paused', revision: 'under review',
       recent: 'Recent runs', top: 'Busiest agents', byStatus: 'By status', byTrigger: 'By trigger', runs: 'runs', noRuns: 'No runs yet.', noData: 'No data.',
+      as: { working: 'working', review: 'under review', paused: 'paused', idle: 'idle', off: 'off', error: 'failing', warn: 'last run failed' } as Record<string, string>,
       st: { completed: 'done', failed: 'failed', running: 'working', pending: 'queued', cancelled: 'cancelled' } as Record<string, string>,
     },
   };
@@ -546,6 +550,30 @@
     } finally { creating = false; }
   }
 
+  const initials = (n: string) => String(n || '?').split(/[\s_-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+
+  /** The office look's states: one colour and one label per agent, shown as a dot plus a word. */
+  const AGENT_TONE: Record<string, string> = { working: '#34D399', review: '#FB923C', warn: '#FB923C', paused: '#60A5FA', idle: '#94A3B8', off: '#64748B', error: '#F43F5E' };
+  function agentState(a: any, running: boolean, lr: any): string {
+    if (running) return 'working';
+    if (!a.enabled) return 'off';
+    if (a.auto_paused_at) return 'paused';
+    if ((a.consecutive_failures ?? 0) >= 2) return 'error';
+    if (a.under_revision) return 'review';
+    if (lr?.status === 'failed' || (a.consecutive_failures ?? 0) > 0) return 'warn';
+    return 'idle';
+  }
+  /** A run's state colour, on the same scale as an agent's. */
+  function runTone(s: string): string {
+    if (s === 'running' || s === 'completed') return '#34D399';
+    if (s === 'failed') return '#F43F5E';
+    if (s === 'pending') return '#60A5FA';
+    if (s === 'cancelled') return '#64748B';
+    return '#94A3B8';
+  }
+  $: officeOfAgent = new Map<string, string>(allAgents.map((a: any) => [a.id, a.flow_name ? (flowColor.get(a.flow_name) ?? '#94A3B8') : '#94A3B8']));
+  $: officeOfName = new Map<string, string>(allAgents.map((a: any) => [a.name, a.flow_name ? (flowColor.get(a.flow_name) ?? '#94A3B8') : '#94A3B8']));
+
   function fmtTokens(n: number): string {
     if (!n) return '0';
     if (n < 1000) return String(n);
@@ -581,55 +609,56 @@
   <div class="compose-overlay" on:click|self={() => showComposer = false} role="presentation">
     <div class="compose-modal">
       <h3>New Agent</h3>
-      <div class="compose-row"><label>Name</label><input class="search-input" bind:value={name} placeholder="My Agent" /></div>
-      <div class="compose-row"><label>Description</label><input class="search-input" bind:value={description} placeholder="What does this agent do?" /></div>
+      <div class="compose-row"><label for="agc-name">Name</label><input id="agc-name" class="search-input" bind:value={name} placeholder="My Agent" /></div>
+      <div class="compose-row"><label for="agc-desc">Description</label><input id="agc-desc" class="search-input" bind:value={description} placeholder="What does this agent do?" /></div>
       <div class="compose-row">
-        <label>Provider</label>
-        <select class="search-input" bind:value={providerType}>
+        <label for="agc-provider">Provider</label>
+        <select id="agc-provider" class="search-input" bind:value={providerType}>
           {#each ['anthropic','openai','lmstudio'] as p}<option value={p}>{p}</option>{/each}
         </select>
       </div>
-      <div class="compose-row"><label>Model (optional)</label><input class="search-input" bind:value={model} placeholder="Leave blank for default" /></div>
+      <div class="compose-row"><label for="agc-model">Model (optional)</label><input id="agc-model" class="search-input" bind:value={model} placeholder="Leave blank for default" /></div>
       <div class="compose-row">
-        <label>Trigger</label>
-        <select class="search-input" bind:value={trigger}>
+        <label for="agc-trigger">Trigger</label>
+        <select id="agc-trigger" class="search-input" bind:value={trigger}>
           {#each ['manual','schedule','event'] as t}<option value={t}>{t}</option>{/each}
         </select>
       </div>
       {#if trigger === 'schedule'}
-        <div class="compose-row"><label>Schedule (cron)</label><input class="search-input" bind:value={schedule} placeholder="0 9 * * *" /></div>
+        <div class="compose-row"><label for="agc-cron">Schedule (cron)</label><input id="agc-cron" class="search-input" bind:value={schedule} placeholder="0 9 * * *" /></div>
       {/if}
       <div class="compose-row">
-        <label>System Prompt</label>
-        <textarea class="editor-textarea" bind:value={prompt} style="min-height:120px" placeholder="You are..."></textarea>
+        <label for="agc-prompt">System Prompt</label>
+        <textarea id="agc-prompt" class="editor-textarea" bind:value={prompt} style="min-height:120px" placeholder="You are..."></textarea>
       </div>
       {#if composerError}<div style="color:var(--red);font-size:12px;margin-bottom:10px">{composerError}</div>{/if}
       <div class="compose-actions">
-        <button class="compose-btn-cancel" on:click={() => showComposer = false}>Cancel</button>
-        <button class="compose-btn-send" on:click={doCreateAgent} disabled={creating}>{creating ? 'Creating...' : 'Create Agent'}</button>
+        <button class="ol-btn ghost" on:click={() => showComposer = false}>Cancel</button>
+        <button class="ol-btn" on:click={doCreateAgent} disabled={creating}>{creating ? 'Creating...' : 'Create Agent'}</button>
       </div>
     </div>
   </div>
 {/if}
 
 <div class="agp">
-  <header class="top">
-    <div class="ttl">
-      <h1>{tx.title}</h1>
-      <p>{fill(tx.sub, { n: allAgents.length, a: kpis.activeAgents ?? active.length, w: workingN })}</p>
+  <header class="ol-strip">
+    <div class="ol-ttl">
+      <p class="ol-eyebrow">{tx.eyebrow}</p>
+      <h1 class="ol-title">{tx.question}</h1>
+      <p class="ol-sub">{fill(tx.sub, { n: allAgents.length, a: kpis.activeAgents ?? active.length, w: workingN })}</p>
     </div>
-    <div class="tiles">
-      <button class="tile" class:on={statusFilter === ''} style="--c: {PALETTE.sky}" on:click={() => (statusFilter = '')}><b>{kpis.totalAgents ?? allAgents.length}</b><span>{tx.kTotal}</span></button>
-      <div class="tile" style="--c: {PALETTE.emerald}"><b>{kpis.activeAgents ?? active.length}</b><span>{tx.kActive}</span></div>
-      <div class="tile" style="--c: {PALETTE.gold}"><b>{kpis.runsToday ?? 0}</b><span>{tx.kToday}</span></div>
-      <div class="tile" style="--c: {PALETTE.lime}"><b>{fmtTokens(kpis.completedRuns ?? 0)}</b><span>{tx.kDone}</span></div>
-      <button class="tile" class:on={statusFilter === 'failing'} style="--c: {PALETTE.pink}" on:click={() => (statusFilter = statusFilter === 'failing' ? '' : 'failing')}><b>{kpis.failedRuns ?? 0}</b><span>{tx.kFailed}</span></button>
-      <div class="tile" style="--c: {PALETTE.violet}"><b>{fmtTokens(kpis.totalTokens ?? 0)}</b><span>{tx.kTokens}</span></div>
+    <div class="ol-kpis tiles">
+      <button class="ol-kpi" class:on={statusFilter === ''} aria-pressed={statusFilter === ''} style="--c: {PALETTE.sky}" on:click={() => (statusFilter = '')}><b>{kpis.totalAgents ?? allAgents.length}</b><small>{tx.kTotal}</small></button>
+      <div class="ol-kpi" class:live={workingN > 0} style="--c: {PALETTE.emerald}"><b>{kpis.activeAgents ?? active.length}</b><small>{tx.kActive}</small></div>
+      <div class="ol-kpi" style="--c: {PALETTE.gold}"><b>{kpis.runsToday ?? 0}</b><small>{tx.kToday}</small></div>
+      <div class="ol-kpi" style="--c: {PALETTE.lime}"><b>{fmtTokens(kpis.completedRuns ?? 0)}</b><small>{tx.kDone}</small></div>
+      <button class="ol-kpi" class:on={statusFilter === 'failing'} class:alert={failingN > 0} aria-pressed={statusFilter === 'failing'} style="--c: {PALETTE.pink}" on:click={() => (statusFilter = statusFilter === 'failing' ? '' : 'failing')}><b>{kpis.failedRuns ?? 0}</b><small>{tx.kFailed}</small></button>
+      <div class="ol-kpi" style="--c: {PALETTE.violet}"><b>{fmtTokens(kpis.totalTokens ?? 0)}</b><small>{tx.kTokens}</small></div>
     </div>
     <div class="hact">
-      <a href="/agents-flow" class="btn ghost">◈ {tx.flow}</a>
+      <a href="/agents-flow" class="ol-btn ghost">◈ {tx.flow}</a>
       {#if canCreateInAgents($session)}
-        <button type="button" class="btn primary" on:click={() => showComposer = true}>+ {tx.create}</button>
+        <button type="button" class="ol-btn" on:click={() => showComposer = true}>+ {tx.create}</button>
       {/if}
     </div>
   </header>
@@ -639,27 +668,27 @@
   {:else}
     <div class="body">
       <!-- ── Left: the agents ── -->
-      <section class="card list-card">
-        <div class="ch"><h2>{tx.list}</h2><em>{filteredAgents.length}/{allAgents.length}</em></div>
+      <section class="ol-card card list-card" style="--oc: {PALETTE.sky}">
+        <h2 class="ol-h">{tx.list}<em>{filteredAgents.length}/{allAgents.length}</em></h2>
         <div class="filters">
-          <input class="search" type="text" placeholder={tx.search} aria-label={tx.search} bind:value={searchQuery} />
-          <div class="states" role="group">
-            <button class="sc" class:on={statusFilter === ''} on:click={() => (statusFilter = '')}>{tx.all}<i>{allAgents.length}</i></button>
-            <button class="sc" class:on={statusFilter === 'working'} style="--c: #22D3EE" on:click={() => (statusFilter = statusFilter === 'working' ? '' : 'working')}><span class="d live"></span>{tx.working}<i>{workingN}</i></button>
-            <button class="sc" class:on={statusFilter === 'failing'} style="--c: #F43F5E" on:click={() => (statusFilter = statusFilter === 'failing' ? '' : 'failing')}><span class="d"></span>{tx.failing}<i>{failingN}</i></button>
-            <button class="sc" class:on={statusFilter === 'paused'} style="--c: #94A3B8" on:click={() => (statusFilter = statusFilter === 'paused' ? '' : 'paused')}><span class="d"></span>{tx.paused}<i>{pausedN}</i></button>
+          <label class="ol-search"><span aria-hidden="true">⌕</span><input type="text" placeholder={tx.search} aria-label={tx.search} bind:value={searchQuery} /></label>
+          <div class="ol-seg states" role="group">
+            <button class:on={statusFilter === ''} aria-pressed={statusFilter === ''} on:click={() => (statusFilter = '')}>{tx.all}<em>{allAgents.length}</em></button>
+            <button class:on={statusFilter === 'working'} aria-pressed={statusFilter === 'working'} style="--c: #34D399" on:click={() => (statusFilter = statusFilter === 'working' ? '' : 'working')}><span class="d live"></span>{tx.working}<em>{workingN}</em></button>
+            <button class:on={statusFilter === 'failing'} aria-pressed={statusFilter === 'failing'} style="--c: #F43F5E" on:click={() => (statusFilter = statusFilter === 'failing' ? '' : 'failing')}><span class="d"></span>{tx.failing}<em>{failingN}</em></button>
+            <button class:on={statusFilter === 'paused'} aria-pressed={statusFilter === 'paused'} style="--c: #64748B" on:click={() => (statusFilter = statusFilter === 'paused' ? '' : 'paused')}><span class="d"></span>{tx.paused}<em>{pausedN}</em></button>
           </div>
         </div>
         <div class="cats" aria-label={tx.offices}>
           {#each categories as cat (cat.id)}
-            <button class="cat" class:on={filterCategory === cat.id} style="--fc: {cat.color ?? '#94A3B8'}" on:click={() => filterCategory = cat.id}>
-              {#if cat.color}<span class="fd"></span>{/if}{cat.id === 'all' ? tx.allOffices : cat.id === 'uncategorized' ? tx.custom : cat.label}<i>{cat.count}</i>
+            <button class="ol-chip soft cat" class:on={filterCategory === cat.id} aria-pressed={filterCategory === cat.id} style="--c: {cat.color ?? '#94A3B8'}" on:click={() => filterCategory = cat.id}>
+              {#if cat.color}<i></i>{/if}{cat.id === 'all' ? tx.allOffices : cat.id === 'uncategorized' ? tx.custom : cat.label}<em>{cat.count}</em>
             </button>
           {/each}
         </div>
         <div class="rows">
           {#if !filteredAgents.length}
-            <div class="ag-empty">
+            <div class="ol-empty ag-empty">
               <div class="ag-empty-text">{allAgents.length ? tx.none : tx.empty}</div>
               <div class="ag-empty-sub">{allAgents.length ? tx.noneSub : tx.emptySub}</div>
             </div>
@@ -669,20 +698,20 @@
               {@const lr = lastRunOf.get(agent.id)}
               {@const st = stats[agent.id]}
               {@const fails = agent.consecutive_failures ?? 0}
-              {@const tone = running ? '#22D3EE' : !agent.enabled ? '#64748B' : agent.auto_paused_at || fails >= 2 ? '#F43F5E' : lr?.status === 'failed' || fails ? '#FB923C' : '#34D399'}
-              <div class="row" class:sel={selectedAgent?.id === agent.id && detailView !== 'overview'} class:off={!agent.enabled}
-                style="--oc: {flowColor.get(agent.flow_name) ?? '#94A3B8'}; --tc: {tone}">
+              {@const state = agentState(agent, running, lr)}
+              <div class="ol-row row" class:on={selectedAgent?.id === agent.id && detailView !== 'overview'} class:off={!agent.enabled}
+                style="--oc: {flowColor.get(agent.flow_name) ?? '#94A3B8'}">
                 <button class="rmain" on:click={() => selectAgent(agent)} title={agent.description || agent.name}>
-                  <span class="sd" class:live={running} aria-hidden="true"></span>
+                  <span class="ol-mark" aria-hidden="true">{initials(agent.name)}</span>
                   <span class="rtxt">
                     <span class="rl1">
                       <b>{agent.name}</b>
-                      {#if agent.builtin_handler?.startsWith('script:')}<span class="k" style="--c: #34D399">script</span>
-                      {:else if agent.builtin_handler?.startsWith('check:')}<span class="k" style="--c: #FBBF24">check</span>
-                      {:else if agent.builtin_handler?.startsWith('proactive:')}<span class="k" style="--c: #60A5FA">proactive</span>
-                      {:else if !agent.builtin_handler}<span class="k" style="--c: #22D3EE">llm</span>{/if}
-                      {#if agent.under_revision}<span class="k" style="--c: #FB923C">{tx.revision}</span>{/if}
-                      {#if agent.auto_paused_at}<span class="k" style="--c: #F43F5E">{tx.autoPaused}</span>{:else if fails >= 2}<span class="k" style="--c: #F43F5E">{fill(tx.inARow, { n: fails })}</span>{/if}
+                      {#if agent.builtin_handler?.startsWith('script:')}<span class="ol-chip k" style="--c: #34D399">script</span>
+                      {:else if agent.builtin_handler?.startsWith('check:')}<span class="ol-chip k" style="--c: #FBBF24">check</span>
+                      {:else if agent.builtin_handler?.startsWith('proactive:')}<span class="ol-chip k" style="--c: #60A5FA">proactive</span>
+                      {:else if !agent.builtin_handler}<span class="ol-chip k" style="--c: #22D3EE">llm</span>{/if}
+                      {#if agent.under_revision}<span class="ol-chip k" style="--c: #FB923C">{tx.revision}</span>{/if}
+                      {#if agent.auto_paused_at}<span class="ol-chip k" style="--c: #F43F5E">{tx.autoPaused}</span>{:else if fails >= 2}<span class="ol-chip k" style="--c: #F43F5E">{fill(tx.inARow, { n: fails })}</span>{/if}
                       {#if agent.cron}<span class="cron">{agent.cron}</span>{/if}
                     </span>
                     {#if agent.description}<span class="rdesc">{agent.description}</span>{/if}
@@ -692,12 +721,15 @@
                       <span>{agent.last_run_at ? `${tx.last} ${timeAgo(agent.last_run_at)}` : tx.never}</span>
                     </span>
                   </span>
-                  {#if st && st.total_runs > 0}
-                    <span class="rate" title="{st.success_rate}% {tx.ok} · {st.total_runs} {tx.runs}">
-                      <span class="rbar"><i style="width: {st.success_rate}%; --rc: {st.success_rate >= 85 ? '#34D399' : st.success_rate >= 60 ? '#FBBF24' : '#F43F5E'}"></i></span>
-                      <small class="mono">{st.success_rate}%</small>
-                    </span>
-                  {:else}<span class="rate"></span>{/if}
+                  <span class="rate">
+                    <span class="ol-st" class:live={running} style="--sc: {AGENT_TONE[state]}"><i aria-hidden="true"></i>{tx.as[state]}</span>
+                    {#if st && st.total_runs > 0}
+                      <span class="rrate" title="{st.success_rate}% {tx.ok} · {st.total_runs} {tx.runs}">
+                        <span class="rbar"><i style="width: {st.success_rate}%; --rc: {st.success_rate >= 85 ? '#34D399' : st.success_rate >= 60 ? '#FBBF24' : '#F43F5E'}"></i></span>
+                        <small class="mono">{st.success_rate}%</small>
+                      </span>
+                    {/if}
+                  </span>
                 </button>
                 {#if !can($session, 'agents', 'write')}
                   <!-- A role that only reads: no run, stop or delete. -->
@@ -775,7 +807,7 @@
                      as a prop. -->
                 <svelte:fragment slot="footer">
                   <div class="ip-extra">
-                    <button class="ag-btn ag-btn-ghost" on:click={openPreview} title="Compare what memory/learnings the executor would inject under lexical vs semantic ranking — without running the LLM.">
+                    <button class="ol-btn ghost sm" on:click={openPreview} title="Compare what memory/learnings the executor would inject under lexical vs semantic ranking — without running the LLM.">
                       🔍 Preview prompt (A/B lexical vs semantic)
                     </button>
                   </div>
@@ -918,17 +950,17 @@
 
         {:else}
           <!-- ═══ Overview (default) ═══ -->
-          <section class="card runs-card">
-            <div class="ch"><h2>{tx.recent}</h2><em>{recentRuns.length}</em></div>
+          <section class="ol-card card runs-card" style="--oc: {PALETTE.emerald}">
+            <h2 class="ol-h">{tx.recent}<em>{recentRuns.length}</em></h2>
             <div class="rows">
               {#if !recentRuns.length}
-                <div class="ag-empty"><div class="ag-empty-sub">{tx.noRuns}</div></div>
+                <div class="ol-empty ag-empty"><div class="ag-empty-sub">{tx.noRuns}</div></div>
               {:else}
                 {#each recentRuns as run (run.id)}
-                  <button class="run-row" style="--sc: {statusColor(run.status)}" on:click={() => selectRun(run)}>
-                    <span class="sd" class:live={run.status === 'running'}></span>
+                  <button class="ol-row run-row" style="--oc: {officeOfAgent.get(run.agent_id) ?? '#94A3B8'}" on:click={() => selectRun(run)}>
+                    <span class="ol-mark" aria-hidden="true">{initials(run.agent_name)}</span>
                     <span class="run-name">{run.agent_name}</span>
-                    <span class="run-status">{tx.st[run.status] ?? run.status}</span>
+                    <span class="ol-st run-status" class:live={run.status === 'running'} style="--sc: {runTone(run.status)}"><i aria-hidden="true"></i>{tx.st[run.status] ?? run.status}</span>
                     <span class="run-tokens mono">{fmtTokens(run.tokens_used)}</span>
                     <span class="run-time">{timeAgo(run.created_at)}</span>
                   </button>
@@ -937,14 +969,15 @@
             </div>
           </section>
           <div class="pair">
-            <section class="card">
-              <div class="ch"><h2>{tx.top}</h2></div>
+            <section class="ol-card card" style="--oc: {PALETTE.gold}">
+              <h2 class="ol-h">{tx.top}</h2>
               <div class="rows">
                 {#if !topAgents.length}
-                  <div class="ag-empty"><div class="ag-empty-sub">{tx.noData}</div></div>
+                  <div class="ol-empty ag-empty"><div class="ag-empty-sub">{tx.noData}</div></div>
                 {:else}
                   {#each topAgents.slice(0, 8) as ta (ta.id ?? ta.name)}
-                    <div class="top-row">
+                    <div class="ol-row top-row" style="--oc: {(ta.id && officeOfAgent.get(ta.id)) || officeOfName.get(ta.name) || '#94A3B8'}">
+                      <span class="ol-mark" aria-hidden="true">{initials(ta.name)}</span>
                       <span class="top-name">{ta.name}</span>
                       <span class="tbar"><i style="width: {(100 * ta.run_count) / maxTopRuns}%"></i></span>
                       <span class="top-runs mono">{ta.run_count}</span>
@@ -953,12 +986,12 @@
                 {/if}
               </div>
             </section>
-            <section class="card">
-              <div class="ch"><h2>{tx.byStatus}</h2></div>
+            <section class="ol-card card" style="--oc: {PALETTE.violet}">
+              <h2 class="ol-h">{tx.byStatus}</h2>
               <div class="stat-grid">
                 <div>
                   {#each Object.entries(runsByStatus) as [k, v]}
-                    <div class="stat-row"><span class="stat-label"><span class="sd" style="--sc: {statusColor(k)}"></span>{tx.st[k] ?? k}</span><span class="stat-val mono">{v}</span></div>
+                    <div class="stat-row"><span class="ol-st stat-label" class:live={k === 'running'} style="--sc: {runTone(k)}"><i aria-hidden="true"></i>{tx.st[k] ?? k}</span><span class="stat-val mono">{v}</span></div>
                   {/each}
                 </div>
                 <div>
@@ -992,7 +1025,7 @@
           placeholder="Goal to evaluate (e.g. 'Produce the weekly brief'). Default: the agent's goal_template."
           rows="3"
         ></textarea>
-        <button class="ag-btn ag-btn-primary" on:click={runPreview} disabled={previewLoading}>
+        <button class="ol-btn" on:click={runPreview} disabled={previewLoading}>
           {previewLoading ? 'Embedding…' : 'Run A/B'}
         </button>
       </div>
@@ -1130,76 +1163,57 @@
 <style>
   /* ── page: one screen, only the lists scroll inside their cards ── */
   .agp { height: 100%; min-height: 0; box-sizing: border-box; padding: 12px 18px 14px; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
-  .top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 16px; align-items: center; }
-  .ttl h1 { margin: 0; font-size: 22px; font-weight: 800; line-height: 1.1; background: linear-gradient(90deg, #22D3EE, #A78BFA 55%, #F472B6); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .ttl p { margin: 2px 0 0; font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
-  .tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
-  .tile { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; padding: 6px 11px; border-radius: 12px; font: inherit; color: inherit; text-align: left;
-    background: linear-gradient(160deg, color-mix(in srgb, var(--c) 18%, var(--surface-1)), var(--surface-1) 72%); border: 1px solid color-mix(in srgb, var(--c) 32%, var(--border)); transition: transform .15s, box-shadow .15s; }
-  button.tile { cursor: pointer; }
-  button.tile:hover { transform: translateY(-1px); box-shadow: 0 10px 22px -16px var(--c); }
-  .tile.on { border-color: var(--c); box-shadow: 0 0 0 1px var(--c) inset; }
-  .tile b { font-size: 19px; font-weight: 800; line-height: 1.15; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--c) 75%, white); text-shadow: 0 0 14px color-mix(in srgb, var(--c) 45%, transparent); }
-  .tile span { font-size: 10.5px; color: color-mix(in srgb, var(--c) 45%, var(--text-2)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .ol-sub { white-space: nowrap; font-size: 11.5px; color: var(--text-3); }
+  .tiles { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+  .tiles .ol-kpi { padding: 6px 11px; }
+  .tiles .ol-kpi b { font-size: 19px; }
   .hact { display: flex; gap: 6px; }
-  .btn { display: inline-flex; align-items: center; gap: 5px; padding: 7px 12px; border-radius: 9px; font: 700 12px var(--font-body); cursor: pointer; white-space: nowrap; border: 1px solid transparent; text-decoration: none; transition: transform .15s; }
-  .btn.ghost { color: var(--text-2); background: none; border-color: var(--border); }
-  .btn.ghost:hover { color: var(--text-1); border-color: #A78BFA; }
-  .btn.primary { color: #06202a; background: linear-gradient(135deg, #67E8F9, #22D3EE); box-shadow: 0 8px 20px -12px #22D3EE; }
-  .btn.primary:hover { transform: translateY(-1px); }
+  .ol-btn { text-decoration: none; }
+  .ol-btn.sm { height: 28px; padding: 0 10px; font-size: 11.5px; }
 
   .body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 12px; }
-  .card { min-height: 0; display: flex; flex-direction: column; gap: 7px; padding: 11px 13px; border-radius: 14px; overflow: hidden;
-    background: linear-gradient(160deg, rgba(34, 211, 238, .05), var(--surface-1) 55%); border: 1px solid var(--border); }
-  .ch { display: flex; align-items: center; gap: 8px; flex: none; }
-  .ch h2 { margin: 0; font-size: 13px; font-weight: 800; color: var(--text-1); display: flex; align-items: center; gap: 8px; }
-  .ch h2::before { content: ''; width: 3px; height: 14px; border-radius: 2px; background: linear-gradient(#22D3EE, #A78BFA); }
-  .ch em { margin-left: auto; font-style: normal; font-size: 11px; font-weight: 700; color: var(--text-3); }
+  .card { min-height: 0; gap: 7px; padding: 11px 13px; overflow: hidden; }
+  .ol-h { flex: none; }
   .rows { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 3px; }
 
   .filters { display: flex; gap: 8px; align-items: center; flex: none; }
-  .search { flex: 1; min-width: 0; background: var(--bg, #0d0f16); border: 1px solid var(--border); color: var(--text-1); border-radius: 9px; padding: 6px 10px; font-size: 12.5px; }
-  .search:focus { outline: none; border-color: #22D3EE; }
-  .states { display: flex; gap: 4px; flex: none; }
-  .sc, .cat { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; font: 700 11px var(--font-body); cursor: pointer; color: var(--text-2); background: none; border: 1px solid var(--border); white-space: nowrap; }
-  .sc i, .cat i { font-style: normal; font-weight: 600; color: var(--text-3); }
-  .sc.on { --c2: var(--c, #22D3EE); color: color-mix(in srgb, var(--c2) 70%, white); background: color-mix(in srgb, var(--c2) 18%, transparent); border-color: color-mix(in srgb, var(--c2) 45%, transparent); }
-  .sc .d { width: 7px; height: 7px; border-radius: 50%; background: var(--c); box-shadow: 0 0 6px var(--c); }
-  .sc .d.live { animation: pulse 1.3s ease-in-out infinite; }
+  .filters .ol-search { flex: 1; width: auto; height: 32px; }
+  .states { flex: none; }
+  .ol-seg button { height: 26px; padding: 0 9px; font-size: 11.5px; }
+  .ol-seg .d { width: 7px; height: 7px; border-radius: 50%; background: var(--c); box-shadow: 0 0 6px var(--c); }
+  .ol-seg .d.live { animation: pulse 1.3s ease-in-out infinite; }
   .cats { display: flex; flex-wrap: nowrap; gap: 4px; overflow-x: auto; overflow-y: hidden; flex: none; padding-bottom: 3px; scrollbar-width: thin;
     -webkit-mask-image: linear-gradient(90deg, #000 90%, transparent); mask-image: linear-gradient(90deg, #000 90%, transparent); }
   .cats > :global(*) { flex: none; }
-  .cat { padding: 2px 8px; font-size: 10.5px; }
-  .cat.on { color: color-mix(in srgb, var(--fc) 70%, white); background: color-mix(in srgb, var(--fc) 18%, transparent); border-color: color-mix(in srgb, var(--fc) 45%, transparent); }
+  .cat { height: 22px; padding: 0 8px; font-size: 10.5px; cursor: pointer; opacity: .62; filter: saturate(.55); transition: opacity .15s, filter .15s; }
+  .cat:hover { opacity: .9; }
+  .cat.on { opacity: 1; filter: none; box-shadow: 0 0 0 1px var(--c) inset; }
+  .cat em, .ol-seg em { font-style: normal; font-weight: 600; color: var(--text-3); }
   .fd { width: 6px; height: 6px; border-radius: 50%; background: var(--fc, var(--oc)); box-shadow: 0 0 5px var(--fc, var(--oc)); flex: none; }
 
-  .row { display: flex; align-items: center; gap: 4px; border-radius: 10px; border: 1px solid transparent; transition: background .15s, border-color .15s; }
-  .row:hover { background: color-mix(in srgb, var(--oc) 7%, transparent); }
-  .row.sel { background: linear-gradient(90deg, color-mix(in srgb, var(--oc) 18%, transparent), transparent); border-color: color-mix(in srgb, var(--oc) 45%, transparent); }
+  .row { gap: 4px; padding: 2px 4px 2px 2px; }
   .row.off { opacity: .55; }
-  .rmain { flex: 1; min-width: 0; display: grid; grid-template-columns: 10px minmax(0, 1fr) 74px; gap: 9px; align-items: center; padding: 5px 7px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 10px; }
-  .rmain:focus-visible, .act:focus-visible, .dots:focus-visible, .sc:focus-visible, .cat:focus-visible, .tile:focus-visible { outline: 2px solid #22D3EE; outline-offset: 1px; }
-  .sd { width: 8px; height: 8px; border-radius: 50%; background: var(--tc, var(--sc, #94A3B8)); box-shadow: 0 0 8px var(--tc, var(--sc, #94A3B8)); flex: none; display: inline-block; }
-  .sd.live { animation: pulse 1.3s ease-in-out infinite; }
+  .rmain { flex: 1; min-width: 0; display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 9px; align-items: center; padding: 3px 5px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 9px; }
+  .rmain:focus-visible, .act:focus-visible, .dots:focus-visible, .cat:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
   .rtxt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .rl1 { display: flex; align-items: center; gap: 5px; min-width: 0; }
-  .rl1 b { font-size: 12.5px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .k { flex: none; font: 800 9.5px var(--font-mono); text-transform: uppercase; letter-spacing: .04em; padding: 0 6px; border-radius: 999px;
-    color: color-mix(in srgb, var(--c) 70%, white); background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 42%, transparent); }
+  .rl1 b { font: 700 12.5px/1.25 var(--font-display); color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .k { flex: none; height: 16px; padding: 0 6px; font-family: var(--font-mono); }
   .cron { flex: none; font: 600 10px var(--font-mono); color: var(--text-3); }
   .rdesc { font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .rmeta { display: flex; gap: 10px; font-size: 10.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; }
   .of { display: inline-flex; align-items: center; gap: 5px; color: color-mix(in srgb, var(--oc) 65%, white); font-weight: 700; }
-  .rate { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
-  .rbar { width: 64px; height: 5px; border-radius: 3px; background: rgba(148, 163, 184, .15); overflow: hidden; }
+  .rate { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: 74px; }
+  .rrate { display: flex; align-items: center; gap: 5px; }
+  .rbar { width: 44px; height: 4px; border-radius: 3px; background: rgba(148, 163, 184, .15); overflow: hidden; }
   .rbar i { display: block; height: 100%; border-radius: 3px; background: var(--rc); box-shadow: 0 0 6px var(--rc); }
   .rate small { font-size: 10px; color: var(--text-3); }
   .act { flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; cursor: pointer; font-size: 11px; background: none; border: 1px solid var(--border); color: var(--text-3); transition: color .15s, border-color .15s, background .15s; }
   .act.run:hover { color: #34D399; border-color: #34D399; background: rgba(52, 211, 153, .1); }
-  .act.stop { color: #22D3EE; border-color: color-mix(in srgb, #22D3EE 50%, transparent); }
+  .act.stop { color: #34D399; border-color: color-mix(in srgb, #34D399 50%, transparent); }
   .act.stop:hover { color: #F43F5E; border-color: #F43F5E; }
   .act:disabled { opacity: .5; cursor: wait; }
-  .more { position: relative; flex: none; margin-right: 4px; }
+  .more { position: relative; flex: none; }
   .dots { width: 28px; height: 28px; border-radius: 8px; border: 1px solid transparent; background: none; color: var(--text-3); font-size: 16px; line-height: 1; cursor: pointer; }
   .row:hover .dots, .dots[aria-expanded='true'] { color: var(--text-1); border-color: var(--border); background: var(--surface-2, #1f2230); }
   .menu { position: absolute; right: 0; top: 32px; z-index: 30; min-width: 190px; padding: 4px; border-radius: 10px; display: flex; flex-direction: column;
@@ -1212,13 +1226,12 @@
   .ag-right { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow: hidden; }
   .runs-card { flex: 1.25; }
   .pair { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .run-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) 78px 46px 70px; gap: 8px; align-items: center; padding: 5px 7px; border-radius: 9px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
-  .run-row:hover { background: rgba(255, 255, 255, .05); }
+  .run-row { flex: none; display: grid; grid-template-columns: 22px minmax(0, 1fr) 86px 46px 70px; gap: 8px; padding: 3px 7px; }
+  .run-row .ol-mark, .top-row .ol-mark { width: 22px; height: 22px; border-radius: 7px; font-size: 9px; }
   .run-name { font-size: 12px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .run-status { font-size: 11px; font-weight: 700; color: color-mix(in srgb, var(--sc) 80%, white); }
   .run-tokens { font-size: 10.5px; color: var(--text-3); text-align: right; }
   .run-time { font-size: 10.5px; color: var(--text-3); text-align: right; }
-  .top-row { display: grid; grid-template-columns: minmax(0, 1fr) 54px 44px; gap: 8px; align-items: center; padding: 3px 4px; }
+  .top-row { flex: none; display: grid; grid-template-columns: 22px minmax(0, 1fr) 54px 36px; gap: 8px; padding: 3px 6px; }
   .top-name { font-size: 11.5px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tbar { height: 5px; border-radius: 3px; background: rgba(251, 191, 36, .12); overflow: hidden; }
   .tbar i { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #FBBF24, #F472B6); box-shadow: 0 0 6px rgba(251, 191, 36, .55); }
@@ -1226,29 +1239,17 @@
   .stat-grid { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .stat-group-title { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); margin-bottom: 2px; }
   .stat-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 3px 2px; font-size: 11.5px; }
-  .stat-label { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); }
+  .stat-label { color: var(--text-2); }
   .stat-val { color: var(--text-1); font-weight: 700; }
 
-  @media (prefers-reduced-motion: reduce) { .sd.live, .sc .d.live { animation: none; } }
-  @media (max-height: 760px) { .rdesc { display: none; } .tile b { font-size: 16px; } }
+  @media (prefers-reduced-motion: reduce) { .ol-seg .d.live { animation: none; } }
+  @media (max-height: 760px) { .rdesc { display: none; } .tiles .ol-kpi b { font-size: 16px; } }
   @media (max-width: 1100px) {
     .agp { height: auto; overflow: visible; }
-    .top { grid-template-columns: 1fr auto; } .tiles { grid-column: 1 / -1; grid-row: 2; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .body { grid-template-columns: 1fr; } .card { max-height: 75vh; } .filters { flex-wrap: wrap; }
     .detail-grid { grid-template-columns: 1fr 1fr; }
   }
-
-
-  .ag-btn {
-    padding: 5px 12px; border-radius: 8px; font-size: 11px; font-weight: 600;
-    font-family: var(--font-body); cursor: pointer; transition: all 0.15s;
-    border: 1px solid var(--border); text-decoration: none;
-    display: flex; align-items: center; gap: 4px;
-  }
-  .ag-btn-ghost { background: none; color: var(--text-2); }
-  .ag-btn-ghost:hover { background: var(--surface-2); color: var(--text-1); }
-  .ag-btn-primary { background: var(--teal); border-color: var(--teal); color: var(--bg); }
-  .ag-btn-primary:hover { opacity: 0.85; }
 
   /* ── Panels ──────────────────────────────────── */
   .ag-panel {

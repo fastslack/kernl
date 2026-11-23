@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { locale } from '$lib/i18n/index.js';
   import { onMount, onDestroy } from 'svelte';
   import { renderMarkdown } from '$lib/workspace-md.js';
   import { highlightCode, detectLang } from '$lib/workspace-highlight.js';
@@ -6,6 +7,7 @@
   import Skeleton from '$shared/components/Skeleton.svelte';
   import ErrorState from '$shared/components/ErrorState.svelte';
   import { HttpFailure, describeError, toast } from '$shared/feedback';
+  import { PALETTE } from '$lib/components/bench/model.js';
 
   type WorkspaceRow = { id: string; name: string; description: string; shared: boolean; files: number; bytes: number; mtime: number };
   type Office = { flow_id: string; name: string; color: string; workspaces: WorkspaceRow[] };
@@ -168,6 +170,11 @@
 
   $: selectedOffice = offices.find(o => o.workspaces.some(w => w.id === selectedWs));
   $: selectedWsRow = selectedOffice?.workspaces.find(w => w.id === selectedWs);
+  $: allWs = offices.flatMap(o => o.workspaces);
+  $: sharedN = allWs.filter(w => w.shared).length;
+  $: filesN = allWs.reduce((n, w) => n + (w.files || 0), 0);
+  $: bytesN = allWs.reduce((n, w) => n + (w.bytes || 0), 0);
+  const mark = (name: string) => name.slice(0, 2).toUpperCase();
 
   // Lockfiles / build artifacts / OS junk that clutter the workspace tree.
   // Keep this narrow — matching "startsWith('.')" would hide legit files
@@ -382,137 +389,152 @@
   onDestroy(() => {
     if (typeof window !== 'undefined') window.removeEventListener('keydown', onKeydown);
   });
+  // The strip speaks the dashboard's language; the rest of the page is still English-only.
+  $: es = $locale.startsWith('es');
 </script>
 
 <div class="workspace-page">
-  <aside class="offices">
-    <div class="panel-header">
-      <h2>Offices / Workspaces</h2>
-      <button class="refresh" on:click={loadWorkspaces} title="Refresh">↻</button>
+  <header class="ol-strip">
+    <div class="ol-ttl">
+      <p class="ol-eyebrow">{es ? 'El taller de las oficinas' : "The offices' workshop"}</p>
+      <h1 class="ol-title">{es ? '¿En qué está trabajando cada oficina?' : 'What is each office working on?'}</h1>
     </div>
-    {#if listError}
-      <ErrorState error={listError} on:retry={loadWorkspaces} />
-    {:else if loadingList && offices.length === 0}
-      <Skeleton variant="rows" rows={5} />
-    {:else if offices.length === 0}
-      <div class="muted">No workspaces yet. Offices create them via <code>kernel_workspace_create</code>.</div>
-    {:else}
-      <div class="office-tree">
-        {#each offices as o}
-          <div class="office-group">
-            <div class="office-header" style:border-left-color={o.color}>
-              <span class="office-dot" style:background={o.color}></span>
-              <span class="office-name">{o.name}</span>
-            </div>
-            <ul class="workspace-list">
-              {#each o.workspaces as w}
-                <li>
-                  <button
-                    class:active={selectedWs === w.id}
-                    on:click={() => selectWorkspace(w.id)}
-                    title={w.description}
-                  >
-                    <div class="ws-row-top">
-                      <span class="ws-name">{w.name}</span>
-                      {#if w.shared}<span class="shared-badge" title="Shared — other offices can read">shared</span>{/if}
-                    </div>
-                    <div class="ws-meta">
-                      <span>{w.files} files</span>
-                      <span>{fmtBytes(w.bytes)}</span>
-                      {#if w.mtime}<span>{timeAgo(new Date(w.mtime).toISOString())}</span>{/if}
-                    </div>
-                  </button>
-                </li>
-              {/each}
-            </ul>
-          </div>
-        {/each}
-      </div>
-    {/if}
-  </aside>
+    <div class="ol-kpis">
+      <div class="ol-kpi" style="--c: {PALETTE.cyan}"><b>{offices.length}</b><small>{es ? 'oficinas' : 'offices'}</small></div>
+      <div class="ol-kpi" style="--c: {PALETTE.violet}"><b>{allWs.length}</b><small>{es ? 'espacios de trabajo' : 'workspaces'}</small></div>
+      <div class="ol-kpi" style="--c: {PALETTE.emerald}"><b>{sharedN}</b><small>{es ? 'compartidos' : 'shared'}</small></div>
+      <div class="ol-kpi" style="--c: {PALETTE.gold}"><b>{filesN}</b><small>{es ? 'archivos' : 'files'} · {fmtBytes(bytesN)}</small></div>
+    </div>
+    <button class="ol-btn" on:click={loadWorkspaces} title={es ? 'Actualizar' : 'Refresh'}><span aria-hidden="true">↻</span> {es ? 'Actualizar' : 'Refresh'}</button>
+  </header>
 
-  <section class="tree">
-    <div class="panel-header">
-      <h2>
-        {#if selectedWsRow}
-          {selectedOffice?.name} / <span class="accent">{selectedWsRow.name}</span>
-          {#if selectedWsRow.shared}<span class="shared-badge">shared</span>{/if}
-        {:else}
-          Files
-        {/if}
-      </h2>
-      <input type="text" placeholder="Filter…" bind:value={query} />
-    </div>
-    {#if !selectedWs}
-      <div class="muted">Pick a workspace on the left.</div>
-    {:else if treeError}
-      <ErrorState error={treeError} on:retry={() => selectedWs && selectWorkspace(selectedWs)} />
-    {:else if loadingTree && entries.length === 0}
-      <Skeleton variant="rows" rows={8} />
-    {:else if entries.length === 0}
-      <div class="muted">This workspace is empty.</div>
-    {:else}
-      <div class="tree-toolbar">
-        <button class="tb-btn" on:click={expandAll} title="Expandir todo">⊞ Expandir</button>
-        <button class="tb-btn" on:click={collapseAll} title="Colapsar todo">⊟ Colapsar</button>
-        <span class="tb-count">{displayList.length} visibles de {entries.filter(e => !isHidden(e.path)).length}</span>
+  <div class="panes">
+    <aside class="ol-card offices">
+      <h2 class="ol-h">Offices / Workspaces<em>{allWs.length}</em></h2>
+      {#if listError}
+        <ErrorState error={listError} on:retry={loadWorkspaces} />
+      {:else if loadingList && offices.length === 0}
+        <Skeleton variant="rows" rows={5} />
+      {:else if offices.length === 0}
+        <div class="ol-empty">No workspaces yet. Offices create them via <code>kernel_workspace_create</code>.</div>
+      {:else}
+        <div class="office-tree">
+          {#each offices as o}
+            <div class="office-group" style:--oc={o.color}>
+              <div class="office-header">
+                <span class="ol-mark" aria-hidden="true">{mark(o.name)}</span>
+                <span class="ol-name">{o.name}</span>
+                <span class="ol-cnt">{o.workspaces.length}</span>
+              </div>
+              <ul class="ol-list">
+                {#each o.workspaces as w}
+                  <li>
+                    <button
+                      class="ol-row"
+                      class:on={selectedWs === w.id}
+                      on:click={() => selectWorkspace(w.id)}
+                      title={w.description}
+                    >
+                      <span class="ol-row-txt">
+                        <b class="ws-name">{w.name}</b>
+                        <small>{w.files} files · {fmtBytes(w.bytes)}{#if w.mtime} · {timeAgo(new Date(w.mtime).toISOString())}{/if}</small>
+                      </span>
+                      {#if w.shared}<span class="ol-chip" style="--c: {PALETTE.emerald}" title="Shared — other offices can read"><i aria-hidden="true"></i>shared</span>{/if}
+                    </button>
+                  </li>
+                {/each}
+              </ul>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </aside>
+
+    <section class="ol-card tree" style:--oc={selectedOffice?.color ?? PALETTE.cyan}>
+      <div class="tree-head">
+        <h2 class="ol-h">
+          {#if selectedWsRow}
+            <span class="crumb">{selectedOffice?.name} / <span class="accent">{selectedWsRow.name}</span></span>
+            {#if selectedWsRow.shared}<span class="ol-chip" style="--c: {PALETTE.emerald}"><i aria-hidden="true"></i>shared</span>{/if}
+          {:else}
+            Files
+          {/if}
+        </h2>
+        <label class="ol-search"><span aria-hidden="true">⌕</span><input type="search" placeholder="Filter…" aria-label="Filter files" bind:value={query} /></label>
       </div>
-      <ul class="tree-list">
-        {#each displayList as n (n.path)}
-          <li>
-            {#if n.type === 'dir'}
-              {@const isOpen = effectiveExpanded.has(n.path)}
-              <button
-                class="tree-row dir"
-                style:padding-left={`${6 + n.depth * 14}px`}
-                on:click={() => toggleDir(n.path)}
-              >
-                <span class="chevron" class:open={isOpen}>▸</span>
-                <span class="icon">{isOpen ? '📂' : '📁'}</span>
-                <span class="name">{n.name}</span>
-                <span class="count">{n.fileCount ?? 0}</span>
-              </button>
-            {:else}
-              <button
-                class="tree-row file"
-                class:active={selectedPath === n.path && modalOpen}
-                style:padding-left={`${6 + n.depth * 14 + 14}px`}
-                on:click={() => openFile(n.path)}
-              >
-                <span class="icon">{fileIcon(n.name)}</span>
-                <span class="name">{n.name}</span>
-                <span class="size">{fmtBytes(n.size)}</span>
-              </button>
-            {/if}
-          </li>
-        {/each}
-      </ul>
-    {/if}
-  </section>
+      {#if !selectedWs}
+        <div class="ol-empty">Pick a workspace on the left.</div>
+      {:else if treeError}
+        <ErrorState error={treeError} on:retry={() => selectedWs && selectWorkspace(selectedWs)} />
+      {:else if loadingTree && entries.length === 0}
+        <Skeleton variant="rows" rows={8} />
+      {:else if entries.length === 0}
+        <div class="ol-empty">This workspace is empty.</div>
+      {:else}
+        <div class="ol-tools tree-toolbar">
+          <button class="ol-btn ghost sm" on:click={expandAll} title="Expandir todo">⊞ Expandir</button>
+          <button class="ol-btn ghost sm" on:click={collapseAll} title="Colapsar todo">⊟ Colapsar</button>
+          <span class="ol-count">{displayList.length} visibles de {entries.filter(e => !isHidden(e.path)).length}</span>
+        </div>
+        <ul class="tree-list">
+          {#each displayList as n (n.path)}
+            <li>
+              {#if n.type === 'dir'}
+                {@const isOpen = effectiveExpanded.has(n.path)}
+                <button
+                  class="tree-row dir"
+                  style:padding-left={`${6 + n.depth * 14}px`}
+                  on:click={() => toggleDir(n.path)}
+                >
+                  <span class="chevron" class:open={isOpen}>▸</span>
+                  <span class="icon">{isOpen ? '📂' : '📁'}</span>
+                  <span class="name">{n.name}</span>
+                  <span class="count">{n.fileCount ?? 0}</span>
+                </button>
+              {:else}
+                <button
+                  class="tree-row file"
+                  class:active={selectedPath === n.path && modalOpen}
+                  style:padding-left={`${6 + n.depth * 14 + 14}px`}
+                  on:click={() => openFile(n.path)}
+                >
+                  <span class="icon">{fileIcon(n.name)}</span>
+                  <span class="name">{n.name}</span>
+                  <span class="size">{fmtBytes(n.size)}</span>
+                </button>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </section>
+  </div>
 </div>
 
 {#if modalOpen}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
   <div class="modal-backdrop" on:click={closeModal} role="presentation">
-    <div class="modal" on:click|stopPropagation role="dialog" aria-modal="true">
+    <!-- svelte-ignore a11y-no-noninteractive-element-interactions a11y-click-events-have-key-events -->
+    <div class="modal" style:--oc={selectedOffice?.color ?? PALETTE.cyan} on:click|stopPropagation role="dialog" aria-modal="true" aria-labelledby="ws-modal-title">
       <header class="modal-head">
-        <div class="modal-head-left">
-          <h1 class="modal-title">{modalTitle}</h1>
-          <div class="modal-meta">
+        <div class="ol-mhead">
+          <span class="ol-mark lg" aria-hidden="true">{fileIcon(selectedPath ?? '')}</span>
+          <div class="ol-ttl">
             {#if selectedOffice && selectedWsRow}
-              <span class="ws-pill" style:border-left-color={selectedOffice.color}>
-                {selectedOffice.name} / {selectedWsRow.name}
-              </span>
+              <p class="ol-eyebrow">{selectedOffice.name} / {selectedWsRow.name}</p>
             {/if}
-            <span class="path-pill">{selectedPath}</span>
-            {#if isMd && parsed.meta.author}<span><strong>Author:</strong> {parsed.meta.author}</span>{/if}
-            {#if isMd && parsed.meta.date}<span><strong>Date:</strong> {new Date(parsed.meta.date).toLocaleString()}</span>{/if}
-            {#if isMd && parsed.meta.tags && parsed.meta.tags !== '[]'}<span><strong>Tags:</strong> <code>{parsed.meta.tags}</code></span>{/if}
+            <h1 class="ol-title" id="ws-modal-title">{modalTitle}</h1>
+          </div>
+          <div class="modal-head-actions">
+            <button class="ol-btn" on:click={copyContent} title="Copy file contents">Copy</button>
+            <button class="ol-btn ghost" on:click={closeModal} title="Close (Esc)" aria-label="Close">✕</button>
           </div>
         </div>
-        <div class="modal-head-actions">
-          <button class="modal-action" on:click={copyContent} title="Copy file contents">Copy</button>
-          <button class="modal-close" on:click={closeModal} title="Close (Esc)">✕</button>
+        <div class="modal-meta">
+          <span class="path-pill">{selectedPath}</span>
+          {#if isMd && parsed.meta.author}<span><strong>Author:</strong> {parsed.meta.author}</span>{/if}
+          {#if isMd && parsed.meta.date}<span><strong>Date:</strong> {new Date(parsed.meta.date).toLocaleString()}</span>{/if}
+          {#if isMd && parsed.meta.tags && parsed.meta.tags !== '[]'}<span><strong>Tags:</strong> <code>{parsed.meta.tags}</code></span>{/if}
         </div>
       </header>
       <div class="modal-body" class:md={isMd}>
@@ -530,128 +552,47 @@
 
 <style>
   .workspace-page {
-    display: grid;
-    grid-template-columns: 280px 1fr;
+    display: flex;
+    flex-direction: column;
     gap: 12px;
     height: calc(100vh - 120px);
     padding: 12px;
+    box-sizing: border-box;
   }
-  aside, section {
-    background: var(--panel-bg, rgba(18, 22, 38, 0.7));
-    border: 1px solid var(--panel-border, rgba(90, 110, 160, 0.25));
-    border-radius: 8px;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
+  .panes {
+    flex: 1;
     min-height: 0;
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 12px;
   }
-  .panel-header {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 8px;
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--panel-border, rgba(90, 110, 160, 0.2));
-    background: rgba(0, 0, 0, 0.2);
-  }
-  .panel-header h2 {
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--muted, #8fa0c3);
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-  }
-  .panel-header h2 .accent { color: var(--fg, #e8ecf5); text-transform: none; letter-spacing: 0; font-family: 'Fira Code', monospace; font-size: 11px; }
-  .panel-header input {
-    width: 160px;
-    background: transparent;
-    border: 1px solid var(--panel-border, rgba(90, 110, 160, 0.3));
-    border-radius: 4px;
-    padding: 3px 8px;
-    font-size: 11px;
-    color: inherit;
-  }
-  .refresh {
-    background: transparent; border: none; color: var(--muted, #8fa0c3);
-    cursor: pointer; font-size: 14px;
-  }
-  .refresh:hover { color: var(--fg, #e8ecf5); }
+  .ol-card { padding: 10px; gap: 8px; overflow: hidden; min-height: 0; }
+  .ol-btn.sm { height: 26px; padding: 0 10px; font-size: 11px; }
 
   .offices { overflow-y: auto; }
-  .office-tree { padding: 6px 4px; }
   .office-group { margin-bottom: 8px; }
-  .office-header {
-    display: flex; align-items: center; gap: 7px;
-    padding: 7px 10px 5px;
-    border-left: 3px solid transparent;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--fg, #e8ecf5);
-  }
-  .office-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-  .workspace-list { list-style: none; margin: 0; padding: 0 0 0 18px; }
-  .workspace-list li { margin: 0; }
-  .workspace-list button {
-    width: 100%;
-    text-align: left;
-    background: transparent;
-    border: none;
-    padding: 6px 8px;
-    cursor: pointer;
-    color: inherit;
-    border-radius: 4px;
-    transition: background 0.12s;
-  }
-  .workspace-list button:hover { background: rgba(90, 110, 160, 0.08); }
-  .workspace-list button.active { background: rgba(99, 102, 241, 0.14); }
-  .ws-row-top { display: flex; align-items: center; gap: 6px; }
-  .ws-name { font-size: 12px; font-family: 'Fira Code', monospace; }
-  .ws-meta { display: flex; gap: 10px; font-size: 10px; color: var(--muted, #8fa0c3); margin-top: 2px; }
-  .shared-badge {
-    display: inline-block;
-    font-size: 9px;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    padding: 1px 6px;
-    background: rgba(16, 185, 129, 0.18);
-    color: #34d399;
-    border-radius: 3px;
-  }
+  .office-header { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 2px 2px 5px; }
+  .office-header .ol-mark { width: 24px; height: 24px; border-radius: 7px; font-size: 9.5px; }
+  .office-header .ol-name { flex: 1; font-size: 12.5px; }
+  .ws-name { font-family: 'Fira Code', monospace; font-size: 12px; }
 
-  .tree { overflow-y: auto; display: flex; flex-direction: column; min-height: 0; }
+  .tree { display: flex; flex-direction: column; min-height: 0; }
+  .tree-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .tree-head .ol-h { flex: 1; flex-wrap: wrap; }
+  .tree-head .ol-search { width: 220px; height: 30px; }
+  .crumb { text-transform: none; letter-spacing: 0; }
+  .crumb .accent { color: color-mix(in srgb, var(--oc) 60%, white); font-family: 'Fira Code', monospace; font-size: 11px; }
 
-  .tree-toolbar {
-    display: flex; align-items: center; gap: 8px;
-    padding: 6px 10px;
-    background: rgba(0, 0, 0, 0.12);
-    border-bottom: 1px solid var(--panel-border, rgba(90, 110, 160, 0.15));
-    font-size: 10px;
-    flex-shrink: 0;
-  }
-  .tb-btn {
-    background: transparent;
-    border: 1px solid var(--panel-border, rgba(90, 110, 160, 0.25));
-    color: var(--muted, #8fa0c3);
-    padding: 3px 8px;
-    border-radius: 3px;
-    cursor: pointer;
-    font-size: 10px;
-    font-family: inherit;
-  }
-  .tb-btn:hover { color: var(--fg, #e8ecf5); border-color: rgba(120, 140, 200, 0.5); }
-  .tb-count { margin-left: auto; color: var(--muted, #8fa0c3); font-size: 10px; font-family: 'Fira Code', monospace; }
+  .tree-toolbar { gap: 8px; flex-shrink: 0; }
+  .tree-toolbar .ol-count { margin-left: auto; font-family: 'Fira Code', monospace; font-size: 10.5px; }
 
-  .tree-list { list-style: none; padding: 4px 0; margin: 0; overflow-y: auto; flex: 1; }
+  .tree-list { list-style: none; padding: 0; margin: 0; overflow-y: auto; flex: 1; }
   .tree-list li { margin: 0; }
 
   .tree-row {
     display: flex; gap: 5px; align-items: center;
     width: 100%; text-align: left;
-    background: transparent; border: none;
+    background: transparent; border: 1px solid transparent; border-radius: 7px;
     padding: 3px 10px;
     color: inherit;
     cursor: pointer;
@@ -659,25 +600,26 @@
     line-height: 1.3;
     transition: background 0.08s;
   }
-  .tree-row:hover { background: rgba(90, 110, 160, 0.10); }
-  .tree-row.active { background: rgba(99, 102, 241, 0.22); color: var(--fg, #e8ecf5); }
+  .tree-row:hover { background: color-mix(in srgb, var(--oc) 8%, transparent); }
+  .tree-row.active { background: color-mix(in srgb, var(--oc) 18%, transparent); border-color: color-mix(in srgb, var(--oc) 45%, transparent); color: var(--text-1); }
+  .tree-row:focus-visible { outline: 2px solid var(--gold); outline-offset: -2px; }
   .tree-row .name {
     flex: 1;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-family: 'Fira Code', monospace;
   }
-  .tree-row .size { color: var(--muted, #8fa0c3); font-size: 10px; flex-shrink: 0; }
+  .tree-row .size { color: var(--text-3); font-size: 10px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
   .tree-row .icon { flex-shrink: 0; font-size: 11px; width: 14px; text-align: center; }
 
   .tree-row.dir {
     font-weight: 500;
-    color: var(--fg, #e8ecf5);
+    color: var(--text-1);
   }
   .tree-row.dir .count {
-    color: var(--muted, #8fa0c3);
+    color: color-mix(in srgb, var(--oc) 55%, var(--text-2));
     font-size: 10px;
     font-family: 'Fira Code', monospace;
-    background: rgba(90, 110, 160, 0.10);
+    background: color-mix(in srgb, var(--oc) 12%, transparent);
     padding: 0 6px;
     border-radius: 8px;
     flex-shrink: 0;
@@ -687,7 +629,7 @@
     display: inline-block;
     width: 10px;
     font-size: 9px;
-    color: var(--muted, #8fa0c3);
+    color: var(--text-3);
     transition: transform 0.14s ease;
     flex-shrink: 0;
   }
@@ -708,10 +650,10 @@
   .modal {
     width: min(1100px, 100%);
     max-height: 100%;
-    background: var(--panel-bg, #0f1326);
-    border: 1px solid var(--panel-border, rgba(120, 140, 200, 0.3));
-    border-radius: 10px;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+    background: linear-gradient(160deg, color-mix(in srgb, var(--oc) 10%, var(--surface-1)), var(--surface-1) 55%);
+    border: 1px solid color-mix(in srgb, var(--oc) 35%, var(--border));
+    border-radius: 14px;
+    box-shadow: 0 30px 60px -30px rgba(0, 0, 0, 0.8), 0 0 40px -24px var(--oc);
     display: flex; flex-direction: column;
     overflow: hidden;
     animation: popIn 0.18s ease;
@@ -719,57 +661,33 @@
   @keyframes popIn { from { transform: translateY(8px) scale(0.985); opacity: 0; } to { transform: translateY(0) scale(1); opacity: 1; } }
 
   .modal-head {
-    display: flex; justify-content: space-between; align-items: flex-start;
-    gap: 16px;
-    padding: 16px 20px 14px;
-    border-bottom: 1px solid var(--panel-border, rgba(90, 110, 160, 0.2));
-    background: rgba(0, 0, 0, 0.25);
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 14px 18px 12px;
+    border-bottom: 1px solid var(--border);
   }
-  .modal-head-left { min-width: 0; flex: 1; }
-  .modal-title {
-    font-size: 17px; margin: 0 0 6px 0;
-    color: var(--fg, #e8ecf5);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
+  .modal-head .ol-mark { font-size: 18px; }
   .modal-meta {
-    display: flex; flex-wrap: wrap; gap: 10px;
-    font-size: 11px; color: var(--muted, #8fa0c3);
+    display: flex; flex-wrap: wrap; gap: 6px 10px;
+    font-size: 11px; color: var(--text-2);
     align-items: center;
   }
   .modal-meta code {
-    background: rgba(90, 110, 160, 0.15);
+    background: var(--surface-2);
     padding: 1px 5px; border-radius: 3px;
     font-family: 'Fira Code', monospace;
   }
   .modal-meta .path-pill {
     font-family: 'Fira Code', monospace;
-    background: rgba(99, 102, 241, 0.12);
-    padding: 3px 8px; border-radius: 4px;
-    color: #a3b3ff;
-  }
-  .modal-meta .ws-pill {
-    font-family: 'Fira Code', monospace;
-    background: rgba(90, 110, 160, 0.12);
-    padding: 3px 8px; border-radius: 4px;
-    border-left: 3px solid transparent;
-    color: var(--fg, #e8ecf5);
+    background: color-mix(in srgb, var(--oc) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--oc) 30%, transparent);
+    padding: 2px 8px; border-radius: 999px;
+    color: color-mix(in srgb, var(--oc) 60%, white);
   }
   .modal-head-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
-  .modal-action, .modal-close {
-    background: transparent;
-    border: 1px solid var(--panel-border, rgba(120, 140, 200, 0.3));
-    color: var(--muted, #8fa0c3);
-    padding: 6px 12px; border-radius: 5px;
-    cursor: pointer; font-size: 11px; font-weight: 500;
-    transition: all 0.12s;
-  }
-  .modal-action:hover { color: var(--fg, #e8ecf5); border-color: rgba(120, 140, 200, 0.5); }
-  .modal-close { padding: 6px 10px; font-size: 14px; }
-  .modal-close:hover { color: #ff8080; border-color: rgba(255, 128, 128, 0.5); }
 
   .modal-body { overflow: auto; min-height: 0; flex: 1; }
   .modal-body.md { padding: 0; }
-  .modal-body .md-body { padding: 22px 28px 40px; line-height: 1.65; font-size: 13px; color: var(--fg, #e8ecf5); }
+  .modal-body .md-body { padding: 22px 28px 40px; line-height: 1.65; font-size: 13px; color: var(--text-1); }
   .modal-body .code {
     margin: 0; padding: 18px 22px;
     font-family: 'Fira Code', 'JetBrains Mono', monospace;
@@ -833,5 +751,6 @@
   :global(.modal-body .md-body table.md-table th) { background: rgba(90, 110, 160, 0.1); font-weight: 600; }
   :global(.modal-body .md-body hr) { border: none; border-top: 1px solid rgba(90, 110, 160, 0.2); margin: 18px 0; }
 
-  .muted { padding: 16px; color: var(--muted, #8fa0c3); font-size: 12px; }
+  .ol-empty code { font-family: 'Fira Code', monospace; font-size: 11.5px; }
+  @media (prefers-reduced-motion: reduce) { .modal, .modal-backdrop { animation: none; } }
 </style>

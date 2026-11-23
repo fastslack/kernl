@@ -598,11 +598,11 @@
 {#if agent}
   <div class="sk" class:sk-compact={compact}>
     <!-- ═══ ATTACHED ═══ -->
-    <section class="sk-zone">
+    <section class="ol-card sk-zone">
       <header class="sk-zh">
-        <h3 class="sk-h">
+        <h3 class="ol-h sk-h">
           Attached
-          {#if attached.length}<span class="sk-c">{attached.length}</span>{/if}
+          {#if attached.length}<em class="sk-c">{attached.length}</em>{/if}
         </h3>
         <span
           class="sk-toll"
@@ -629,7 +629,7 @@
             {@const isSkipped = skippedSlugs.includes(slug)}
             {@const isInactive = inactiveSlugs.includes(slug)}
             <li
-              class="sk-row"
+              class="ol-row sk-row"
               class:sk-row-orphan={isOrphan || isSkipped}
               class:sk-row-warn={isInactive}
             >
@@ -659,7 +659,7 @@
                 </span>
               {/if}
               <button
-                class="sk-x"
+                class="ol-btn ghost sk-x"
                 title={$t('agent.skills.detach_title')}
                 on:click={() => detach(slug)}
                 disabled={!!busy[slug]}>{busy[slug] === 'detaching' ? '…' : '×'}</button
@@ -699,9 +699,9 @@
     </section>
 
     <!-- ═══ RECOMMENDED ═══ -->
-    <section class="sk-zone">
+    <section class="ol-card sk-zone">
       <header class="sk-zh">
-        <h3 class="sk-h">{$t('agent.skills.recommended')}</h3>
+        <h3 class="ol-h sk-h">{$t('agent.skills.recommended')}</h3>
         <span
           class="sk-hint"
           title={$t(`agent.skills.mode_${sugMode}_title`)}
@@ -729,7 +729,7 @@
       {:else}
         <ul class="sk-list">
           {#each visibleRecs as s (s.slug)}
-            <li class="sk-row">
+            <li class="ol-row sk-row">
               <span class="sk-score" title={$t('agent.skills.score_title')}
                 >{s.score.toFixed(1)}</span
               >
@@ -750,14 +750,14 @@
               {#if s.installed}
                 <span class="sk-cost">~{fmtTok(bodyCost(s.slug))} if loaded</span>
                 <button
-                  class="sk-add"
+                  class="ol-btn ghost sk-add"
                   title={$t('agent.skills.attach_title')}
                   on:click={() => attach(s.slug)}
                   disabled={!!busy[s.slug]}>{busy[s.slug] ? '…' : '+'}</button
                 >
               {:else}
                 <button
-                  class="sk-add sk-add-dl"
+                  class="ol-btn ghost sk-add sk-add-dl"
                   title={$t('agent.skills.install_attach_title')}
                   on:click={() => installAndAttach(s.slug, s.slug)}
                   disabled={!!busy[s.slug]}
@@ -789,9 +789,9 @@
     </section>
 
     <!-- ═══ SEARCH ═══ -->
-    <section class="sk-zone">
+    <section class="ol-card sk-zone">
       <header class="sk-zh">
-        <h3 class="sk-h">{$t('agent.skills.search_heading')}</h3>
+        <h3 class="ol-h sk-h">{$t('agent.skills.search_heading')}</h3>
         {#if searching}<span class="sk-hint">{$t('agent.skills.searching')}</span>{/if}
       </header>
 
@@ -833,7 +833,7 @@
               placeholder={$t('agent.skills.repo_ref_placeholder')}
             />
             <button
-              class="sk-add sk-add-dl sk-repo-go"
+              class="ol-btn ghost sk-add sk-add-dl sk-repo-go"
               type="submit"
               disabled={repoBusy || !repoUrl.trim()}
             >
@@ -853,23 +853,23 @@
 
       {#if repoSkills.length}
         <header class="sk-zh sk-repo-head">
-          <h3 class="sk-h">
+          <h3 class="ol-h sk-h">
             {$t('agent.skills.repo_from')}
             {repoLabel}
-            <span class="sk-c">{repoSkills.length}</span>
+            <em class="sk-c">{repoSkills.length}</em>
           </h3>
         </header>
         {#if repoCats.length > 1}
-          <div class="sk-cats" role="group" aria-label={$t('agent.skills.repo_cats_label')}>
+          <div class="ol-seg sk-cats" role="group" aria-label={$t('agent.skills.repo_cats_label')}>
             <button type="button" class="sk-cat" class:on={!repoCategory} aria-pressed={!repoCategory}
                     on:click={() => (repoCategory = '')}>{$t('agent.skills.repo_cats_all')}</button>
             {#each repoCats as [cat, n] (cat)}
               <button type="button" class="sk-cat" class:on={repoCategory === cat} aria-pressed={repoCategory === cat}
-                      on:click={() => (repoCategory = cat)}>{cat} <span class="sk-cat-n">{n}</span></button>
+                      on:click={() => (repoCategory = cat)}>{cat} <em class="sk-cat-n">{n}</em></button>
             {/each}
           </div>
           {#if repoCategory && repoShown.length > 1}
-            <button type="button" class="sk-add sk-add-dl sk-bulk" on:click={attachShown} disabled={bulkBusy}>
+            <button type="button" class="ol-btn ghost sk-add sk-add-dl sk-bulk" on:click={attachShown} disabled={bulkBusy}>
               {bulkBusy ? '…' : $t('agent.skills.repo_attach_all', { n: String(repoShown.length), cat: repoCategory })}
             </button>
           {/if}
@@ -880,7 +880,7 @@
           <ul class="sk-list">
             {#each repoShown as e (e.id)}
               {@const isInstalled = bySlug.has(e.slug)}
-              <li class="sk-row">
+              <li class="ol-row sk-row">
                 <span class="sk-glyph" aria-hidden="true">{isInstalled ? '▸' : '⬇'}</span>
                 <span class="sk-main">
                   <span class="sk-slug">
@@ -894,14 +894,14 @@
                 {#if isInstalled}
                   <span class="sk-cost">~{fmtTok(bodyCost(e.slug))} if loaded</span>
                   <button
-                    class="sk-add"
+                    class="ol-btn ghost sk-add"
                     title={$t('agent.skills.attach_title')}
                     on:click={() => attach(e.slug)}
                     disabled={!!busy[e.slug]}>{busy[e.slug] ? '…' : '+'}</button
                   >
                 {:else}
                   <button
-                    class="sk-add sk-add-dl"
+                    class="ol-btn ghost sk-add sk-add-dl"
                     title={$t('agent.skills.install_attach_title')}
                     on:click={() => installAndAttach(e.slug, e.id)}
                     disabled={!!busy[e.slug]}
@@ -930,7 +930,7 @@
           {#each searchRows as e (e.id)}
             {@const isInstalled = bySlug.has(e.slug)}
             {@const paid = e.status === 'for_sale'}
-            <li class="sk-row">
+            <li class="ol-row sk-row">
               <span class="sk-glyph" aria-hidden="true">{isInstalled ? '▸' : '⬇'}</span>
               <span class="sk-main">
                 <span class="sk-slug">
@@ -947,14 +947,14 @@
               {:else if isInstalled}
                 <span class="sk-cost">~{fmtTok(bodyCost(e.slug))} if loaded</span>
                 <button
-                  class="sk-add"
+                  class="ol-btn ghost sk-add"
                   title={$t('agent.skills.attach_title')}
                   on:click={() => attach(e.slug)}
                   disabled={!!busy[e.slug]}>{busy[e.slug] ? '…' : '+'}</button
                 >
               {:else}
                 <button
-                  class="sk-add sk-add-dl"
+                  class="ol-btn ghost sk-add sk-add-dl"
                   title={$t('agent.skills.install_attach_title')}
                   on:click={() => installAndAttach(e.slug, e.id)}
                   disabled={!!busy[e.slug]}
@@ -976,15 +976,13 @@
   .sk {
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 10px;
   }
   .sk-compact {
-    gap: 14px;
+    gap: 8px;
   }
 
   .sk-zone {
-    display: flex;
-    flex-direction: column;
     gap: 8px;
   }
   .sk-zh {
@@ -994,21 +992,7 @@
     gap: 10px;
   }
   .sk-h {
-    margin: 0;
-    font: 700 10px/1 'JetBrains Mono', monospace;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: #8b93aa;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .sk-c {
-    font: 700 9px/1 'JetBrains Mono', monospace;
-    color: #0a0e14;
-    background: #9fb4e8;
-    border-radius: 99px;
-    padding: 2px 5px;
+    flex: 1;
   }
   .sk-hint {
     font: 500 9.5px 'JetBrains Mono', monospace;
@@ -1040,20 +1024,16 @@
     gap: 3px;
   }
   .sk-row {
-    display: flex;
-    align-items: center;
     gap: 9px;
-    min-width: 0;
-    padding: 6px 8px;
-    border-radius: 6px;
-    border: 1px solid rgba(120, 130, 160, 0.16);
-    background: rgba(20, 24, 38, 0.5);
+    padding: 5px 8px;
   }
   .sk-row-warn {
+    --oc: #FB923C;
     border-color: rgba(251, 191, 36, 0.3);
     background: rgba(251, 191, 36, 0.05);
   }
   .sk-row-orphan {
+    --oc: #F43F5E;
     border-color: rgba(239, 93, 110, 0.35);
     background: rgba(239, 93, 110, 0.06);
   }
@@ -1152,44 +1132,20 @@
     white-space: nowrap;
   }
 
+  /* Compact ol-btn ghost; the accent says what it does. */
   .sk-add,
   .sk-x {
     flex: none;
-    cursor: pointer;
-    border-radius: 5px;
-    border: 1px solid rgba(120, 130, 160, 0.3);
-    background: rgba(26, 31, 48, 0.8);
-    color: #a9bcf0;
-    font: 700 11px 'JetBrains Mono', monospace;
-    padding: 3px 8px;
-  }
-  .sk-add:hover:not(:disabled) {
-    color: #0a0e14;
-    background: #9fb4e8;
-    border-color: #9fb4e8;
+    height: 24px;
+    padding: 0 9px;
+    font: 700 11px var(--font-mono, monospace);
   }
   .sk-add-dl {
-    color: #7fd1a8;
-    border-color: rgba(127, 209, 168, 0.32);
-  }
-  .sk-add-dl:hover:not(:disabled) {
-    color: #0a0e14;
-    background: #7fd1a8;
-    border-color: #7fd1a8;
-  }
-  .sk-add:disabled,
-  .sk-x:disabled {
-    opacity: 0.45;
-    cursor: default;
-  }
-  .sk-x {
-    color: #8b93aa;
-    padding: 3px 7px;
+    color: #6ee7b7;
   }
   .sk-x:hover:not(:disabled) {
-    color: #ef5d6e;
-    border-color: rgba(239, 93, 110, 0.4);
-    background: rgba(239, 93, 110, 0.1);
+    color: #F43F5E;
+    border-color: color-mix(in srgb, #F43F5E 45%, var(--border-h));
   }
 
   .sk-more {
@@ -1218,19 +1174,20 @@
   .sk-search {
     width: 100%;
     box-sizing: border-box;
-    border: 1px solid rgba(120, 130, 160, 0.28);
-    border-radius: 6px;
-    background: rgba(14, 18, 30, 0.85);
-    color: #d8dae3;
-    font: 500 11.5px 'JetBrains Mono', monospace;
-    padding: 7px 9px;
+    height: 32px;
+    border: 1px solid var(--border-h);
+    border-radius: 10px;
+    background: var(--surface-1);
+    color: var(--text-1);
+    font: 500 12px var(--font-body);
+    padding: 0 10px;
   }
   .sk-search:focus {
     outline: none;
-    border-color: rgba(120, 170, 255, 0.55);
+    border-color: var(--gold);
   }
   .sk-search::placeholder {
-    color: #535a6e;
+    color: var(--text-3);
   }
 
   /* Inline rather than a modal on purpose: this tab is mounted in the 3D
@@ -1249,44 +1206,26 @@
     min-width: 0;
   }
   .sk-repo-go {
-    flex: none;
-    width: auto;
-    padding: 0 10px;
-    white-space: nowrap;
+    height: 32px;
   }
   .sk-repo-head {
     margin-top: 4px;
   }
+  /* ol-seg that wraps when the repo has many categories. */
   .sk-cats {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
+    align-self: flex-start;
     margin: 2px 0 6px;
   }
-  .sk-cat {
-    cursor: pointer;
-    border-radius: 99px;
-    border: 1px solid rgba(120, 130, 160, 0.3);
-    background: rgba(26, 31, 48, 0.8);
-    color: #a9bcf0;
-    font: 600 10px 'JetBrains Mono', monospace;
-    padding: 3px 9px;
-  }
-  .sk-cat:hover {
-    border-color: #9fb4e8;
-  }
-  .sk-cat.on {
-    color: #0a0e14;
-    background: #9fb4e8;
-    border-color: #9fb4e8;
-  }
-  .sk-cat-n {
-    opacity: 0.7;
+  .sk-cats .sk-cat {
+    height: 24px;
+    padding: 0 9px;
+    font-size: 11px;
   }
   .sk-bulk {
     align-self: flex-start;
     margin-bottom: 6px;
-    padding: 5px 10px;
   }
   /* Same shape as .sk-warn, repainted: nothing went wrong here. Written as a
      two-class selector because .sk-warn is declared further down — at equal

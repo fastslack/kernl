@@ -89,10 +89,12 @@
     } catch {}
   }
   $: myPanelTabs = contributedTabs
-    .filter((t) => panelTabComponents[t.id] && tabMatches(t, selFlow))
+    .filter((t) => panelTabComponents[t.id] && tabMatches(t, selFlow ?? null))
     .sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
 
   $: selData = selectedAgent ? agents.find(a => a.id === selectedAgent) : null;
+  /** Raw `variables` column (WorkspaceTab reads __cwd_path__); not on the WorldAgent type. */
+  $: selVariables = (selData as any)?.variables;
 
   $: selStats = selectedAgent ? stats[selectedAgent] : null;
   $: selChains = selectedAgent ? chains.filter(c => c.source_agent_id === selectedAgent || c.target_agent_id === selectedAgent) : [];
@@ -1141,25 +1143,26 @@ Boss says: "${msg || '(see the attached files)'}"`;
              the jump to HISTORY) is this component's. -->
         <svelte:fragment slot="result">
           {#if latestRun && (latestRun.result || latestRun.error)}
-            <div class="result-hero" class:result-ok={latestRun.status === 'completed'} class:result-fail={latestRun.status === 'failed'}>
+            {@const rc = latestRun.status === 'completed' ? '#34D399' : latestRun.status === 'failed' ? '#F43F5E' : '#94A3B8'}
+            <section class="ol-card result-hero" class:result-ok={latestRun.status === 'completed'} class:result-fail={latestRun.status === 'failed'} style="--oc: {rc}">
               <div class="result-hero-top">
-                <button class="result-hero-badge result-hero-toggle" type="button" aria-expanded={!resultCollapsed} on:click={toggleResult}>
-                  <span class="result-hero-caret" class:open={!resultCollapsed} aria-hidden="true">▸</span>
-                  <span class="result-hero-icon">{latestRun.status === 'completed' ? '✓' : latestRun.status === 'failed' ? '✗' : '●'}</span>
-                  <span class="result-hero-lbl">Last result</span>
-                </button>
-                <div class="result-hero-date">
-                  {fmtRelTime(latestRun.created_at)}
-                  {#if latestRun.created_at}
-                    <span class="result-hero-date-full">{String(latestRun.created_at).slice(0,16).replace('T',' ')}</span>
-                  {/if}
-                </div>
+                <h3 class="ol-h result-hero-h">
+                  <button class="result-hero-toggle" type="button" aria-expanded={!resultCollapsed} on:click={toggleResult}>
+                    <span class="result-hero-caret" class:open={!resultCollapsed} aria-hidden="true">▸</span>
+                    <span class="ol-st" style="--sc: {rc}"><i></i>{latestRun.status === 'completed' ? '✓' : latestRun.status === 'failed' ? '✗' : '●'}</span>
+                    <span class="result-hero-lbl">Last result</span>
+                  </button>
+                  <small class="result-hero-date">
+                    {fmtRelTime(latestRun.created_at)}
+                    {#if latestRun.created_at}
+                      <span class="result-hero-date-full">{String(latestRun.created_at).slice(0,16).replace('T',' ')}</span>
+                    {/if}
+                  </small>
+                </h3>
                 <div class="result-hero-meta">
-                  <span class="result-hero-trigger" style="--c:{triggerColor(latestRun.trigger_type)}">{latestRun.trigger_type}</span>
-                  <span class="result-hero-dot">·</span>
-                  <span>{latestRun.steps_count} steps</span>
-                  <span class="result-hero-dot">·</span>
-                  <span>{fmtTokens(latestRun.tokens_used)} tok</span>
+                  <span class="ol-chip" style="--c: {triggerColor(latestRun.trigger_type)}"><i></i>{latestRun.trigger_type}</span>
+                  <span class="ol-chip soft">{latestRun.steps_count} steps</span>
+                  <span class="ol-chip soft">{fmtTokens(latestRun.tokens_used)} tok</span>
                 </div>
               </div>
               {#if resultCollapsed}
@@ -1181,28 +1184,28 @@ Boss says: "${msg || '(see the attached files)'}"`;
               {/if}
               {#if !resultCollapsed}
               <div class="result-hero-actions">
-                <button class="result-hero-action" on:click={() => latestRun && copy(latestRun.result ?? latestRun.error ?? '', 'hero-' + latestRun.id)}>
+                <button class="ol-btn ghost sm" on:click={() => latestRun && copy(latestRun.result ?? latestRun.error ?? '', 'hero-' + latestRun.id)}>
                   {copiedKey === 'hero-' + latestRun.id ? '✓ copied' : '⧉ copy'}
                 </button>
-                <button class="result-hero-action" on:click={() => { selectPanelTab('history'); }}>See all runs →</button>
+                <button class="ol-btn ghost sm" on:click={() => { selectPanelTab('history'); }}>See all runs →</button>
               </div>
               {/if}
-            </div>
+            </section>
           {:else if latestRunLoading}
-            <div class="result-hero result-hero-loading">Loading last result…</div>
+            <div class="ol-empty result-hero-loading">Loading last result…</div>
           {/if}
         </svelte:fragment>
 
         <svelte:fragment slot="auth">
           {#if dependsOnGoogleAuth(selData)}
-            <div class="ip-auth-cta" title="This agent talks to Google — re-login any time tokens expire.">
-              <span class="ip-auth-hint">Depends on Google auth</span>
+            <div class="ol-card ip-auth-cta" style="--oc: #F59E0B" title="This agent talks to Google — re-login any time tokens expire.">
+              <span class="ol-st" style="--sc: #F59E0B"><i></i><span class="ip-auth-hint">Depends on Google auth</span></span>
               <button
-                class="ip-auth-btn"
+                class="ol-btn sm"
                 disabled={reauthLoading}
                 on:click={() => startReauth('google')}
               >
-                <span class="ip-auth-ico">🔑</span>
+                <span aria-hidden="true">🔑</span>
                 <span>{reauthLoading ? '… opening Google' : 'Re-login Google'}</span>
               </button>
             </div>
@@ -1211,7 +1214,7 @@ Boss says: "${msg || '(see the attached files)'}"`;
 
         <svelte:fragment slot="footer">
           {#if detailLoading && !agentDetail}
-            <div class="ip-loading">Loading full details…</div>
+            <div class="ol-empty">Loading full details…</div>
           {/if}
         </svelte:fragment>
       </OverviewTab>
@@ -1313,7 +1316,7 @@ Boss says: "${msg || '(see the attached files)'}"`;
     <svelte:fragment slot="workspace">
       <WorkspaceTab
         info={selWorkspaceInfo}
-        variables={selData?.variables}
+        variables={selVariables}
         previewUrl={workspacePreviewUrl}
         loading={workspaceLoading}
         files={visibleWorkspaceFiles}
@@ -1333,130 +1336,43 @@ Boss says: "${msg || '(see the attached files)'}"`;
   /* ── Body (scrollable) ────────── */
   .ip-body{
     flex:1;overflow-y:auto;overflow-x:hidden;
-    padding:16px 18px 24px;
+    padding:12px 14px 20px;
     scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
   }
   .ip-body::-webkit-scrollbar{width:6px}
   .ip-body::-webkit-scrollbar-thumb{background:rgba(120,130,160,.2);border-radius:3px}
   .ip-body::-webkit-scrollbar-thumb:hover{background:rgba(120,130,160,.35)}
 
-  /* Misc */
-  .ip-loading{
-    font:500 11px 'Manrope',sans-serif;color:#6a6f82;
-    text-align:center;padding:24px 12px;
-  }
-
-  /* ── Markdown output (run.result / step.content) ── */
+  /* ── Markdown output box (run.result); its inner rules live in panel-globals.css ── */
   .ip-out-md{
-    font:400 12.5px/1.6 'Manrope',sans-serif;color:#d0d4e0;
-    padding:14px 18px;border-radius:6px;background:rgba(0,0,0,.22);
+    font:400 12.5px/1.6 var(--font-body);color:var(--text-1);
+    padding:10px 12px;border-radius:10px;background:color-mix(in srgb, var(--surface-2) 60%, #000);
     word-break:break-word;overflow-wrap:anywhere;max-height:380px;overflow-y:auto;
     scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
   }
 
-  /* ── Latest result hero card (Overview) ── */
-  .result-hero{
-    position:relative;margin:0 0 14px;padding:14px 16px 10px;
-    border-radius:12px;
-    background:
-      linear-gradient(180deg, rgba(120,220,140,.08) 0%, rgba(120,220,140,.02) 60%, rgba(0,0,0,0) 100%),
-      #0f121c;
-    border:1px solid rgba(120,220,140,.28);
-    box-shadow:0 4px 18px rgba(0,0,0,.25), inset 0 0 0 1px rgba(255,255,255,.02);
-    overflow:hidden;
-  }
-  .result-hero::before{
-    content:'';position:absolute;top:0;left:0;right:0;height:2px;
-    background:linear-gradient(90deg, transparent, #78dc8c, transparent);
-    opacity:.6;
-  }
-  .result-hero.result-fail{
-    background:linear-gradient(180deg, rgba(239,93,110,.08) 0%, rgba(239,93,110,.02) 60%, rgba(0,0,0,0) 100%), #0f121c;
-    border-color:rgba(239,93,110,.32);
-  }
-  .result-hero.result-fail::before{background:linear-gradient(90deg, transparent, #ef5d6e, transparent)}
-  .result-hero-loading{padding:14px;color:#6a6f82;font:500 11px 'Manrope',sans-serif;text-align:center}
-  .result-hero-top{
-    display:flex;justify-content:space-between;align-items:center;gap:10px;
-    margin-bottom:10px;flex-wrap:wrap;
-  }
-  .result-hero-badge{display:flex;align-items:center;gap:8px}
-  /* The badge is the fold toggle: a button that keeps the badge's look. */
-  .result-hero-toggle{background:none;border:none;padding:0;cursor:pointer;font:inherit;color:inherit}
-  .result-hero-toggle:hover .result-hero-lbl{color:#f0f2f7}
-  .result-hero-toggle:focus-visible{outline:2px solid rgba(159,232,192,.5);outline-offset:2px;border-radius:4px}
-  .result-hero-caret{display:inline-block;font:400 9px monospace;color:#6a6f82;transition:transform .2s}
-  .result-hero-caret.open{transform:rotate(90deg)}
-  .result-hero-icon{
-    width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;
-    border-radius:50%;font:700 12px 'JetBrains Mono',monospace;
-    background:rgba(120,220,140,.18);color:#78dc8c;border:1px solid rgba(120,220,140,.4);
-  }
-  .result-hero.result-fail .result-hero-icon{background:rgba(239,93,110,.18);color:#ef5d6e;border-color:rgba(239,93,110,.4)}
-  .result-hero-lbl{
-    font:700 10px 'Syne',sans-serif;color:#d0d4e0;
-    letter-spacing:1.2px;text-transform:uppercase;
-  }
-  .result-hero-date{
-    font:700 13px 'Manrope',sans-serif;color:#e0e2ea;margin-bottom:2px;
-  }
-  .result-hero-date-full{
-    font:400 10px 'JetBrains Mono',monospace;color:#6a6f82;margin-left:8px;
-  }
-  .result-hero-meta{
-    display:flex;align-items:center;gap:5px;flex-wrap:wrap;
-    font:500 9px 'JetBrains Mono',monospace;color:#8a8fa8;
-  }
-  .result-hero-dot{color:#4a4f6a}
-  .result-hero-trigger{
-    padding:2px 7px;border-radius:4px;
-    background:color-mix(in srgb, var(--c, #6366f1) 15%, transparent);
-    border:1px solid color-mix(in srgb, var(--c, #6366f1) 35%, transparent);
-    color:var(--c, #6366f1);
-    font:600 9px 'JetBrains Mono',monospace;letter-spacing:.4px;
-  }
-  .result-hero-body{
-    padding:2px 0;max-height:260px;overflow-y:auto;
-    scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
-  }
-  .result-hero-err{padding:10px 12px;border-radius:8px;background:rgba(239,93,110,.08);border:1px solid rgba(239,93,110,.22)}
-  .result-hero-actions{
-    display:flex;justify-content:flex-end;gap:8px;margin-top:10px;
-    padding-top:8px;border-top:1px dashed rgba(120,130,160,.12);
-  }
-  .result-hero-action{
-    padding:5px 10px;border-radius:6px;
-    font:600 9px 'JetBrains Mono',monospace;letter-spacing:.3px;
-    background:rgba(120,130,160,.08);border:1px solid rgba(120,130,160,.22);
-    color:#c0c5d8;cursor:pointer;transition:all .12s;
-  }
-  .result-hero-action:hover{background:rgba(120,130,160,.16);border-color:rgba(120,130,160,.38);color:#fff}
+  .ol-btn.sm{height:28px;padding:0 10px;font-size:11.5px}
 
-  /* ── Inline "Re-login Google" CTA in the description area ── */
-  /* Always visible for gsync:* agents, regardless of last-run status. */
-  .ip-auth-cta{
-    display:flex;align-items:center;gap:10px;
-    padding:8px 12px;margin:0 0 14px;
-    background:linear-gradient(180deg, rgba(245,158,11,.10), rgba(245,158,11,.03));
-    border:1px solid rgba(245,158,11,.30);border-radius:10px;
-  }
-  .ip-auth-hint{
-    flex:1;min-width:0;
-    font:600 10.5px 'JetBrains Mono',monospace;letter-spacing:.4px;text-transform:uppercase;
-    color:#ffd175;
-  }
-  .ip-auth-btn{
-    display:inline-flex;align-items:center;gap:6px;
-    padding:6px 12px;border-radius:7px;
-    font:700 11px 'JetBrains Mono',monospace;letter-spacing:.3px;
-    background:linear-gradient(180deg, rgba(245,158,11,.28), rgba(245,158,11,.10));
-    border:1px solid rgba(245,158,11,.65);color:#fff;cursor:pointer;
-    transition:all .12s;
-  }
-  .ip-auth-btn:hover:not(:disabled){
-    background:linear-gradient(180deg, rgba(245,158,11,.42), rgba(245,158,11,.16));
-    border-color:rgba(245,158,11,.95);
-  }
-  .ip-auth-btn:disabled{opacity:.55;cursor:wait}
-  .ip-auth-ico{font-size:13px;line-height:1}
+  /* ── Last result (Overview): an ol-card tinted by the run's state ── */
+  .result-hero{margin:0 0 10px;gap:8px}
+  .result-hero-loading{padding:12px}
+  .result-hero-top{display:flex;align-items:center;justify-content:space-between;gap:6px 10px;flex-wrap:wrap}
+  .result-hero-h{flex:1}
+  /* The heading is the fold toggle: a button that keeps the heading's look. */
+  .result-hero-toggle{display:inline-flex;align-items:center;gap:8px;background:none;border:none;padding:0;cursor:pointer;font:inherit;color:inherit;letter-spacing:inherit;text-transform:inherit}
+  .result-hero-toggle:hover .result-hero-lbl{color:var(--text-1)}
+  .result-hero-toggle:focus-visible{outline:2px solid var(--gold);outline-offset:2px;border-radius:4px}
+  .result-hero-caret{display:inline-block;font-size:9px;color:var(--text-3);transition:transform .2s}
+  .result-hero-caret.open{transform:rotate(90deg)}
+  .result-hero-date{font-size:11.5px;color:var(--text-2)}
+  .result-hero-date-full{font:400 10px var(--font-mono, monospace);color:var(--text-3);margin-left:6px}
+  .result-hero-meta{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+  .result-hero-body{max-height:260px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent}
+  .result-hero-err{padding:8px 10px;border-radius:10px;background:color-mix(in srgb, #F43F5E 8%, transparent);border:1px solid color-mix(in srgb, #F43F5E 22%, transparent)}
+  .result-hero-actions{display:flex;justify-content:flex-end;gap:6px}
+
+  /* ── Inline "Re-login Google" CTA, always shown for gsync:* agents ── */
+  .ip-auth-cta{flex-direction:row;align-items:center;justify-content:space-between;gap:10px;margin:0 0 10px;padding:8px 12px}
+  .ip-auth-hint{text-transform:uppercase;letter-spacing:.06em}
+  @media (prefers-reduced-motion: reduce){ .result-hero-caret{transition:none} }
 </style>

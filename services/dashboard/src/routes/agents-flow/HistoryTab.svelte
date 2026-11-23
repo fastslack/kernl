@@ -102,39 +102,27 @@
        run history belongs next to the series it summarizes, not
        leading a panel that otherwise talks about right now. -->
   {#if stats}
-    <div class="ip-kpis">
-      <div class="ip-kpi">
-        <div class="ip-kpi-v">{stats.total_runs}</div>
-        <div class="ip-kpi-l">Total runs</div>
-      </div>
-      <div class="ip-kpi">
-        <div class="ip-kpi-v" style="color:#78dc8c">{stats.completed}</div>
-        <div class="ip-kpi-l">Completed</div>
-      </div>
-      <div class="ip-kpi">
-        <div class="ip-kpi-v" style="color:#ef5d6e">{stats.failed}</div>
-        <div class="ip-kpi-l">Failed</div>
-      </div>
-      <div class="ip-kpi">
-        <div class="ip-kpi-v">{Math.round(stats.success_rate)}<span class="ip-kpi-unit">%</span></div>
-        <div class="ip-kpi-l">Success</div>
-      </div>
+    <div class="ol-kpis ip-kpis">
+      <div class="ol-kpi" style="--c:#22D3EE"><b>{stats.total_runs}</b><small>Total runs</small></div>
+      <div class="ol-kpi" style="--c:#34D399"><b>{stats.completed}</b><small>Completed</small></div>
+      <div class="ol-kpi" class:alert={stats.failed > 0} style="--c:#F43F5E"><b>{stats.failed}</b><small>Failed</small></div>
+      <div class="ol-kpi" style="--c:#FBBF24"><b>{Math.round(stats.success_rate)}<span class="ip-kpi-unit">%</span></b><small>Success</small></div>
     </div>
   {/if}
 
   {#if runsLoading}
-    <div class="ip-loading">Loading runs…</div>
+    <div class="ol-empty">Loading runs…</div>
   {:else if runs.length === 0}
-    <div class="ip-empty">No runs yet. Hit <b>Run now</b> to start one.</div>
+    <div class="ol-empty ip-empty">No runs yet. Hit <b>Run now</b> to start one.</div>
   {:else}
-    <div class="ip-runs">
+    <div class="ol-list ip-runs">
       {#each runs as run (run.id)}
-        <div class="ip-run-card" class:expanded={expandedRunId === run.id} class:run-fail={run.status === 'failed'} class:run-ok={run.status === 'completed'} class:run-live={run.status === 'running'}>
-          <button class="ip-run-head" on:click={() => onToggleRun(run.id)}>
-            <span class="ip-run-status" class:ok={run.status === 'completed'} class:fail={run.status === 'failed'} class:running={run.status === 'running'}>
-              {run.status === 'completed' ? '✓' : run.status === 'failed' ? '✗' : '●'}
+        <div class="ip-run-card" style="--oc:{run.status === 'completed' ? '#34D399' : run.status === 'failed' ? '#F43F5E' : run.status === 'running' ? '#22D3EE' : '#94A3B8'}" class:expanded={expandedRunId === run.id} class:run-fail={run.status === 'failed'} class:run-ok={run.status === 'completed'} class:run-live={run.status === 'running'}>
+          <button class="ol-row ip-run-head" class:on={expandedRunId === run.id} on:click={() => onToggleRun(run.id)}>
+            <span class="ol-st ip-run-status" class:live={run.status === 'running'} style="--sc:var(--oc)" class:ok={run.status === 'completed'} class:fail={run.status === 'failed'} class:running={run.status === 'running'}>
+              <i></i>{run.status === 'completed' ? '✓' : run.status === 'failed' ? '✗' : '●'}
             </span>
-            <span class="ip-run-trigger" style="--c:{triggerColor(run.trigger_type)}">{run.trigger_type}</span>
+            <span class="ol-chip ip-run-trigger" style="--c:{triggerColor(run.trigger_type)}">{run.trigger_type}</span>
             <span class="ip-run-steps">{run.steps_count} steps</span>
             <span class="ip-run-tokens">{fmtTokens(run.tokens_used)} tok</span>
             <span class="ip-run-time" title={run.created_at}>{fmtRelTime(run.created_at)}</span>
@@ -162,20 +150,20 @@
               </div>
 
               {#if run.error}
-                <div class="ip-err-box">
+                <div class="ol-card ip-err-box" style="--oc:#F43F5E">
                   <div class="ip-err-head">
-                    <span class="ip-err-lbl">⚠ error</span>
-                    <button class="ip-icon-btn ip-icon-btn-err" title="copy error" on:click={() => onCopy(run.error ?? '', 'err-' + run.id)}>{copiedKey === 'err-' + run.id ? '✓ copied' : '⧉ copy'}</button>
+                    <span class="ol-h ip-err-lbl">⚠ error</span>
+                    <button class="ol-btn danger ip-icon-btn" title="copy error" on:click={() => onCopy(run.error ?? '', 'err-' + run.id)}>{copiedKey === 'err-' + run.id ? '✓ copied' : '⧉ copy'}</button>
                   </div>
                   <pre class="ip-err-txt">{run.error}</pre>
                 </div>
               {/if}
 
               {#if run.result}
-                <div class="ip-out-box">
+                <div class="ol-card ip-out-box" style="--oc:#22D3EE">
                   <div class="ip-out-head">
-                    <span class="ip-out-lbl">📤 agent output (handoff)</span>
-                    <button class="ip-icon-btn" title="copy output" on:click={() => onCopy(run.result ?? '', 'out-' + run.id)}>{copiedKey === 'out-' + run.id ? '✓ copied' : '⧉ copy'}</button>
+                    <span class="ol-h ip-out-lbl">📤 agent output (handoff)</span>
+                    <button class="ol-btn ghost ip-icon-btn" title="copy output" on:click={() => onCopy(run.result ?? '', 'out-' + run.id)}>{copiedKey === 'out-' + run.id ? '✓ copied' : '⧉ copy'}</button>
                   </div>
                   <div class="ip-out-md" on:click={onOutputClick} role="presentation">
                     {@html formatRunOutput(run.result)}
@@ -184,18 +172,18 @@
               {/if}
 
               {#if stepsLoading}
-                <div class="ip-loading">Loading steps…</div>
+                <div class="ol-empty ip-loading">Loading steps…</div>
               {:else if stepsError}
                 <div class="ip-loading ip-error">
                   ⚠ Failed to load steps: {stepsError}
-                  <button class="ip-retry" on:click={() => onRetryRun(run.id)}>retry</button>
+                  <button class="ol-btn ghost ip-icon-btn" on:click={() => onRetryRun(run.id)}>retry</button>
                 </div>
               {:else if steps.length > 0}
                 {@const regularSteps = steps.filter(s => !s.is_event)}
                 {@const eventEntries = steps.filter(s => s.is_event)}
                 {@const rows = groupHistoryRows(steps)}
                 {@const allOpen = rows.every(r => openSteps.has(rowKey(run.id, r)))}
-                <div class="ip-steps-h">
+                <div class="ol-h ip-steps-h">
                   Steps <span class="ip-sec-c">{regularSteps.length}</span>
                   {#if eventEntries.length}<span class="ip-sec-c ip-sec-c-ev">+ {eventEntries.length} events</span>{/if}
                   <button type="button" class="hs-toggle-all" on:click={() => setAll(run.id, rows, !allOpen)}>
@@ -364,7 +352,7 @@
   /* ── Body (scrollable) ────────── */
   .ip-body{
     flex:1;overflow-y:auto;overflow-x:hidden;
-    padding:16px 18px 24px;
+    padding:12px 14px 20px;
     scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
   }
   .ip-body::-webkit-scrollbar{width:6px}
@@ -373,26 +361,11 @@
 
   @keyframes led-pulse{50%{opacity:.55}}
 
-  /* ── KPI grid ────────────────── */
-  .ip-kpis{
-    display:grid;grid-template-columns:repeat(4,1fr);gap:1px;
-    background:rgba(120,130,160,.1);border:1px solid rgba(120,130,160,.12);
-    border-radius:10px;overflow:hidden;
-    margin-bottom:18px;
-  }
-  .ip-kpi{
-    padding:12px 8px;background:#0f1219;
-    display:flex;flex-direction:column;align-items:center;gap:4px;
-  }
-  .ip-kpi-v{
-    font:600 22px/1 'Syne',sans-serif;color:#f0f2f7;
-    font-variant-numeric:tabular-nums;
-  }
-  .ip-kpi-unit{font-size:13px;color:#8a8fa8;font-weight:500;margin-left:1px}
-  .ip-kpi-l{
-    font:500 9px 'JetBrains Mono',monospace;
-    color:#6a6f82;text-transform:uppercase;letter-spacing:.5px;
-  }
+  /* ── KPI strip (ol-kpis) ── */
+  .ip-kpis{margin-bottom:10px;gap:6px}
+  .ip-kpis .ol-kpi{padding:5px 10px}
+  .ip-kpis .ol-kpi b{font-size:18px}
+  .ip-kpi-unit{font-size:12px;opacity:.7;margin-left:1px}
 
   .ip-sec-c{
     font:600 9px 'JetBrains Mono',monospace;
@@ -408,20 +381,8 @@
     scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
   }
 
-  /* ── Icon buttons ─────────── */
-  .ip-icon-btn{
-    background:rgba(120,130,160,.08);
-    border:1px solid rgba(120,130,160,.15);
-    color:#a0a5b8;
-    padding:4px 8px;border-radius:5px;
-    font:500 9px 'JetBrains Mono',monospace;letter-spacing:.3px;
-    cursor:pointer;transition:all .12s;
-    display:inline-flex;align-items:center;gap:4px;
-    white-space:nowrap;
-  }
-  .ip-icon-btn:hover{background:rgba(120,130,160,.16);color:#f0f2f7}
-  .ip-icon-btn-err{color:#ef5d6e;background:rgba(239,93,110,.08);border-color:rgba(239,93,110,.2)}
-  .ip-icon-btn-err:hover{background:rgba(239,93,110,.18);color:#ff7280}
+  /* Small ol-btn for the per-block copy / retry. */
+  .ip-icon-btn{height:24px;padding:0 9px;font-size:10.5px;gap:4px}
   .ip-copy-inline{
     background:transparent;border:none;
     color:#6a6f82;cursor:pointer;
@@ -433,58 +394,25 @@
   /* ═══════════════════════════════════════════════════════════════
      HISTORY TAB — run cards with expandable timeline
      ═══════════════════════════════════════════════════════════════ */
-  .ip-runs{display:flex;flex-direction:column;gap:8px}
-  .ip-run-card{
-    border-radius:10px;
-    background:linear-gradient(180deg, rgba(255,255,255,.02) 0%, rgba(255,255,255,0) 100%);
-    border:1px solid rgba(120,130,160,.14);
-    overflow:hidden;
-    transition:border-color .15s;
-  }
-  .ip-run-card:hover{border-color:rgba(120,130,160,.25)}
-  .ip-run-card.expanded{border-color:rgba(61,214,200,.35);background:rgba(61,214,200,.02)}
-  .ip-run-card.run-fail{border-left:3px solid #ef5d6e}
-  .ip-run-card.run-ok{border-left:3px solid #78dc8c}
-  .ip-run-card.run-live{border-left:3px solid #6aa0ff}
-
-  .ip-run-head{
-    display:grid;
-    grid-template-columns:18px auto auto auto 1fr auto;
-    align-items:center;gap:10px;
-    padding:10px 12px;
-    background:none;border:none;
-    color:#b0b5c8;
-    cursor:pointer;text-align:left;
-    font-family:inherit;width:100%;
-    transition:background .1s;
-  }
-  .ip-run-head:hover{background:rgba(255,255,255,.02)}
-  .ip-run-status{font:700 12px 'JetBrains Mono',monospace;width:16px;text-align:center}
-  .ip-run-status.ok{color:#78dc8c}
-  .ip-run-status.fail{color:#ef5d6e}
-  .ip-run-status.running{color:#6aa0ff;animation:led-pulse 1s ease-in-out infinite}
-  .ip-run-trigger{
-    font:600 9px 'JetBrains Mono',monospace;
-    color:var(--c,#8a8fa8);
-    background:color-mix(in srgb, var(--c,#8a8fa8) 12%, transparent);
-    border:1px solid color-mix(in srgb, var(--c,#8a8fa8) 25%, transparent);
-    padding:2px 7px;border-radius:4px;text-transform:uppercase;letter-spacing:.5px;
-  }
-  .ip-run-steps{font:500 10px 'JetBrains Mono',monospace;color:#a0a5b8}
-  .ip-run-tokens{font:500 10px 'JetBrains Mono',monospace;color:#8a8fa8}
-  .ip-run-time{
-    font:500 10px 'Manrope',sans-serif;color:#6a6f82;
-    text-align:right;
-  }
+  /* Each run: an ol-row head tinted by its state, its preview and body below. */
+  .ip-runs{gap:4px}
+  .ip-run-card{border-radius:10px;min-width:0}
+  .ip-run-card.expanded{background:color-mix(in srgb, var(--oc) 4%, transparent);box-shadow:0 0 0 1px color-mix(in srgb, var(--oc) 30%, transparent)}
+  .ip-run-head{gap:8px;padding:6px 10px;color:var(--text-2)}
+  .ip-run-status{min-width:28px}
+  .ip-run-trigger{height:19px;padding:0 7px;font-size:9px}
+  .ip-run-steps{font:500 10px var(--font-mono, monospace);color:var(--text-2)}
+  .ip-run-tokens{font:500 10px var(--font-mono, monospace);color:var(--text-3)}
+  .ip-run-time{margin-left:auto;font:500 10.5px var(--font-body);color:var(--text-3);text-align:right;white-space:nowrap}
   .ip-run-caret{
     color:#6a6f82;transition:transform .2s;font-size:11px;
   }
-  .ip-run-caret.open{transform:rotate(180deg);color:var(--flow-color)}
+  .ip-run-caret.open{transform:rotate(180deg);color:var(--oc)}
 
   .ip-run-err-pre{
     display:flex;gap:8px;align-items:baseline;
-    padding:0 12px 10px;
-    font:500 11px 'Manrope',sans-serif;
+    padding:3px 10px 6px;
+    font:500 11px var(--font-body);
   }
   .ip-run-err-lbl{
     font:600 9px 'JetBrains Mono',monospace;
@@ -494,15 +422,13 @@
   }
   .ip-run-err-txt{color:#ef8090;word-break:break-word;line-height:1.4;flex:1}
   .ip-run-prev{
-    padding:0 12px 12px;
-    font:400 12px/1.5 'Manrope',sans-serif;
-    color:#8a8fa8;word-break:break-word;
+    padding:3px 10px 6px;
+    font:400 11.5px/1.45 var(--font-body);
+    color:var(--text-3);word-break:break-word;
   }
 
   .ip-run-body{
-    padding:12px;
-    border-top:1px solid rgba(120,130,160,.1);
-    background:rgba(0,0,0,.15);
+    padding:10px;
   }
   .ip-run-meta-row{
     display:flex;gap:12px;flex-wrap:wrap;align-items:center;
@@ -515,49 +441,18 @@
   }
   .ip-run-meta-item code{color:#d8dae3;background:rgba(0,0,0,.3);padding:1px 6px;border-radius:3px}
 
-  /* Error + output blocks */
-  .ip-err-box{
-    border:1px solid rgba(239,93,110,.3);
-    background:rgba(239,93,110,.06);
-    border-radius:8px;
-    margin-bottom:12px;
-    overflow:hidden;
-  }
-  .ip-err-head{
-    display:flex;justify-content:space-between;align-items:center;
-    padding:8px 12px;
-    background:rgba(239,93,110,.1);
-    border-bottom:1px solid rgba(239,93,110,.15);
-  }
-  .ip-err-lbl{font:600 10px 'JetBrains Mono',monospace;color:#ef5d6e;text-transform:uppercase;letter-spacing:.5px}
+  /* Error + output blocks: ol-cards */
+  .ip-err-box, .ip-out-box{gap:6px;padding:8px 10px;margin-bottom:8px}
+  .ip-err-head, .ip-out-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
   .ip-err-txt{
-    margin:0;padding:12px;
-    font:400 11px/1.55 'JetBrains Mono',monospace;
+    margin:0;padding:0;
+    font:400 11px/1.55 var(--font-mono, monospace);
     color:#ff9ba8;white-space:pre-wrap;word-break:break-word;
     max-height:240px;overflow-y:auto;
   }
 
-  .ip-out-box{
-    border:1px solid rgba(61,214,200,.25);
-    background:rgba(61,214,200,.04);
-    border-radius:8px;
-    margin-bottom:12px;
-    overflow:hidden;
-  }
-  .ip-out-head{
-    display:flex;justify-content:space-between;align-items:center;
-    padding:8px 12px;
-    background:rgba(61,214,200,.08);
-    border-bottom:1px solid rgba(61,214,200,.15);
-  }
-  .ip-out-lbl{font:600 10px 'Syne',sans-serif;color:#3dd6c8;text-transform:uppercase;letter-spacing:.8px}
-
   /* Steps timeline */
-  .ip-steps-h{
-    font:600 10px 'Syne',sans-serif;color:#8a8fa8;
-    text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;
-    display:flex;align-items:center;gap:6px;
-  }
+  .ip-steps-h{margin-bottom:6px;gap:6px}
   .ip-sec-c-ev{color:#d4a84b;margin-left:2px}
   .hs-toggle-all{
     margin-left:auto;padding:3px 9px;border-radius:4px;cursor:pointer;
@@ -690,18 +585,13 @@
 
   /* Misc */
   .ip-loading,.ip-empty{
-    font:500 11px 'Manrope',sans-serif;color:#6a6f82;
-    text-align:center;padding:24px 12px;
+    font:500 12px var(--font-body);color:var(--text-3);
+    text-align:center;padding:16px 12px;
   }
-  .ip-empty b{color:#d8dae3;font-weight:600}
-  .ip-error{color:#f47070;display:flex;flex-direction:column;gap:8px;align-items:center}
-  .ip-empty-steps{color:#8a8f9e}
-  .ip-loading-dim{color:#5a5f70;font-size:10px}
-  .ip-retry{
-    background:transparent;border:1px solid #5a5f70;color:#aab0c0;
-    font:500 10px 'Manrope',sans-serif;padding:3px 10px;border-radius:3px;cursor:pointer;
-  }
-  .ip-retry:hover{border-color:#aab0c0;color:#fff}
+  .ip-empty b{color:var(--text-1);font-weight:700}
+  .ip-error{color:#fda4af;display:flex;flex-direction:column;gap:8px;align-items:center}
+  .ip-empty-steps{color:var(--text-3)}
+  .ip-loading-dim{color:var(--text-3);font-size:10px;opacity:.8}
 
   /* ── Sent-email link ── */
   .email-view-link{

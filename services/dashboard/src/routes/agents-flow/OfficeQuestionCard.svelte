@@ -56,6 +56,8 @@
   // What the chief would have answered: the text after "propuesta del Chief:".
   $: chiefProposal = guardEscalated ? (q.chief_note?.split('propuesta del Chief:')[1] ?? '').trim() : '';
   $: ctxUrl = firstUrlIn(q.context);
+  /** The one gold button is the AI's pick; with no opinion every option reads the same, so none is pushed. */
+  $: mainIdx = pick ?? -1;
 
   async function submitFree(): Promise<void> {
     const text = free.trim();
@@ -187,23 +189,23 @@
   }
 </script>
 
-<div class="bq-card" class:bq-fresh={age === 'fresh'} class:bq-week={age === 'week'} class:bq-stale={age === 'stale'}
+<div class="ol-card bq-card" style:--oc={color} class:bq-fresh={age === 'fresh'} class:bq-week={age === 'week'} class:bq-stale={age === 'stale'}
      class:bq-folded={collapsed}>
   <div class="bq-head">
-    <span class="bq-from-dot" style="background:{color}"></span>
+    <span class="ol-mark bq-mark" aria-hidden="true">{agentName.slice(0, 2).toUpperCase()}</span>
     <span class="bq-from">{agentName}</span>
     {#if q.project?.name}<span class="bq-project" title={q.project.name}>· {q.project.name}</span>{/if}
-    {#if age === 'fresh'}<span class="bq-pill bq-pill-new">{$t('office.q_age.new_badge')}</span>{/if}
-    {#if age && owed}<span class="bq-pill bq-pill-owed">{$t('office.q_age.owed_badge')}</span>{/if}
+    {#if age === 'fresh'}<span class="ol-chip bq-pill" style="--c:#6ee7a8"><i aria-hidden="true"></i>{$t('office.q_age.new_badge')}</span>{/if}
+    {#if age && owed}<span class="ol-chip bq-pill" style="--c:#f0b874"><i aria-hidden="true"></i>{$t('office.q_age.owed_badge')}</span>{/if}
     {#if age === 'stale'}
-      <span class="bq-pill bq-pill-old" title={waitTitle}>{$t('office.q_age.old_badge', { d: waitLabel })}</span>
+      <span class="ol-chip soft bq-pill bq-pill-old" style="--c:#8b90af" title={waitTitle}>{$t('office.q_age.old_badge', { d: waitLabel })}</span>
     {:else}
       <span class="bq-time" class:bq-time-fresh={age === 'fresh'} title={waitTitle}>
         {waitLabel ? $t('office.q_age.ago', { d: waitLabel }) : fmtRelTime(owed && q.owed_at ? q.owed_at : q.created_at)}
       </span>
     {/if}
     {#if age === 'stale'}
-      <button class="bq-fold" type="button" aria-expanded={expanded} on:click={() => (expanded = !expanded)}>
+      <button class="ol-btn ghost bq-fold" type="button" aria-expanded={expanded} on:click={() => (expanded = !expanded)}>
         {expanded ? $t('office.q_age.collapse') : $t('office.q_age.expand')}
       </button>
     {/if}
@@ -232,14 +234,14 @@
     </details>
   {/if}
   {#if ctxUrl}
-    <a class="bq-direct-link" href={ctxUrl} target="_blank" rel="noopener noreferrer" title={ctxUrl}>
-      🔗 {new URL(ctxUrl).host}
+    <a class="ol-chip soft bq-direct-link" style="--c:#3dd6c8" href={ctxUrl} target="_blank" rel="noopener noreferrer" title={ctxUrl}>
+      <i aria-hidden="true"></i>🔗 {new URL(ctxUrl).host}
     </a>
   {/if}
   <div class="bq-options">
     {#each shown as { o: opt, i } (i)}
       {@const optUrl = urlForOption(q, opt)}
-      <button class="bq-option" class:bq-option-link={!!optUrl} class:bq-option-pick={pick === i}
+      <button class="ol-btn bq-option" class:ghost={i !== mainIdx} class:bq-option-link={!!optUrl} class:bq-option-pick={pick === i}
               on:click={() => sent(!opt.task && isTakeLabel(opt.label) ? onTake(q) : onAnswer(q, i, opt))}
               disabled={busy}
               title={pick === i && opinion?.reasoning ? opinion.reasoning : optUrl ? `Opens ${optUrl}` : opt.label}>
@@ -252,7 +254,7 @@
 
     {#if !owed}
       {#if !hasTakeOption}
-        <button class="bq-option bq-take" type="button" on:click={() => onTake(q)} disabled={busy}>
+        <button class="ol-btn ghost bq-option bq-take" type="button" on:click={() => onTake(q)} disabled={busy}>
           <span class="bq-option-lbl">{$t('office.chief.take_it')}</span>
         </button>
       {/if}
@@ -260,7 +262,7 @@
       <div class="bq-done-row">
         <input class="bq-free-input" placeholder={$t('office.chief.done_note')} bind:value={doneNote} disabled={busy}
                aria-label={$t('office.chief.done_note')} />
-        <button class="bq-option bq-done" type="button" on:click={() => sent(onDone(q, doneNote))} disabled={busy}>
+        <button class="ol-btn ghost bq-option bq-done" type="button" on:click={() => sent(onDone(q, doneNote))} disabled={busy}>
           <span class="bq-option-lbl">{$t('office.chief.done')}</span>
         </button>
       </div>
@@ -302,7 +304,7 @@
                 <span class="bq-also-a">→ {a.option !== null && other.options[a.option] ? other.options[a.option].label : `${$t('office.chief.also_free')}: ${a.answer}`}</span>
               </label>
             {/each}
-            <button class="bq-opinion-retry bq-also-send" type="button" on:click={sendAlso}
+            <button class="ol-btn ghost bq-sm bq-also-send" type="button" on:click={sendAlso}
                     disabled={alsoSending || alsoChecked.length === 0 || busy}>
               {alsoSending ? '…' : $t('office.chief.also_send', { n: String(alsoChecked.length) })}
             </button>
@@ -319,11 +321,11 @@
           </details>
         {/if}
         <div class="bq-opinion-actions">
-          <button class="bq-opinion-retry" type="button" on:click={copyAnswer}>{copied ? $t('office.chief.q_opinion_copied') : $t('office.chief.q_opinion_copy')}</button>
-          <button class="bq-opinion-retry" type="button" on:click={askOpinion} disabled={opinionLoading || busy}>
+          <button class="ol-btn ghost bq-sm" type="button" on:click={copyAnswer}>{copied ? $t('office.chief.q_opinion_copied') : $t('office.chief.q_opinion_copy')}</button>
+          <button class="ol-btn ghost bq-sm" type="button" on:click={askOpinion} disabled={opinionLoading || busy}>
             {opinionLoading ? $t('office.chief.q_opinion_loading') : $t('office.chief.q_opinion_retry')}
           </button>
-          <button class="bq-opinion-send" type="button" on:click={takeOpinion} disabled={busy || opinionLoading}>{$t('office.chief.q_opinion_send')}</button>
+          <button class="ol-btn bq-sm bq-opinion-send" type="button" on:click={takeOpinion} disabled={busy || opinionLoading}>{$t('office.chief.q_opinion_send')}</button>
         </div>
       </div>
     {:else}
@@ -342,7 +344,7 @@
         <div class="bq-opinion-err" role="alert">
           <p>{$t(opinionReason === 'no_answer' ? 'office.chief.q_opinion_no_answer' : 'office.chief.q_opinion_unavailable')}</p>
           <div class="bq-opinion-err-actions">
-            <button type="button" class="bq-opinion-retry" on:click={askOpinion} disabled={opinionLoading || busy}>{$t('office.chief.q_opinion_try_again')}</button>
+            <button type="button" class="ol-btn ghost bq-sm" on:click={askOpinion} disabled={opinionLoading || busy}>{$t('office.chief.q_opinion_try_again')}</button>
             {#if opinionReason === 'unavailable'}<a class="bq-opinion-link" href="/settings?section=ai&card=providers">{$t('office.chief.q_opinion_open_ai')}</a>{/if}
             <details class="bq-opinion-detail">
               <summary>{$t('office.chief.q_opinion_details')}</summary>
@@ -356,203 +358,131 @@
   <form class="bq-free" on:submit|preventDefault={submitFree}>
     <input class="bq-free-input" placeholder={$t('office.chief.q_other')} bind:value={free} disabled={busy}
            aria-label={$t('office.chief.q_other')} />
-    <button class="bq-free-send" type="submit" disabled={busy || !free.trim()}>{$t('office.chief.q_send')}</button>
+    <button class="ol-btn ghost bq-sm bq-free-send" type="submit" disabled={busy || !free.trim()}>{$t('office.chief.q_send')}</button>
   </form>
   {/if}
 </div>
 
 <style>
-  .bq-card{
-    background:linear-gradient(180deg, rgba(240,184,116,.08) 0%, rgba(240,184,116,.02) 100%);
-    border:1px solid rgba(240,184,116,.25); border-left:3px solid #f0b874;
-    border-radius:8px; padding:10px 12px;
-  }
-  .bq-head{ display:flex; align-items:center; gap:8px; margin-bottom:6px; font:600 10px 'JetBrains Mono',monospace; color:#cbd0e8; }
-  .bq-from-dot{ width:7px; height:7px; border-radius:50%; }
-  .bq-from{ color:#e7e9f4; }
+  /* The card, chips, buttons and the office mark are the office look (ol-card / ol-chip / ol-btn / ol-mark);
+     what is left here is the card's own anatomy: age accents, the options grid and the AI's opinion. */
+  .bq-card{ gap:6px; padding:10px 12px; border-left:3px solid color-mix(in srgb, var(--oc) 70%, transparent); }
+  .bq-head{ display:flex; align-items:center; gap:8px; min-width:0; font:600 10.5px var(--font-body); color:var(--text-2); }
+  .bq-mark{ width:24px; height:24px; border-radius:7px; font-size:9.5px; }
+  .bq-from{ font:700 12.5px var(--font-display); color:var(--text-1); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   /* Which project the question is about: an office like Growth asks for several. */
   .bq-project{ color:#f5c86b; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .bq-time{ margin-left:auto; color:#6b7090; font-size:9px; }
+  .bq-pill{ height:18px; padding:0 7px; font-size:8.5px; }
+  .bq-time{ margin-left:auto; color:var(--text-3); font-size:10px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .bq-pill-old{ margin-left:auto; }
+  .bq-time-fresh{ color:#6ee7a8; }
   /* Age (question-age.ts): fresh ones loud, a week old quieter, stale ones folded. */
-  .bq-card.bq-fresh{
-    background:linear-gradient(180deg, rgba(110,231,168,.11) 0%, rgba(110,231,168,.02) 100%);
-    border-color:rgba(110,231,168,.4); border-left-color:#6ee7a8;
-    box-shadow:0 0 0 1px rgba(110,231,168,.08), 0 6px 18px -10px rgba(110,231,168,.45);
-  }
-  .bq-card.bq-week{ background:rgba(240,184,116,.035); border-color:rgba(240,184,116,.16); border-left-color:rgba(240,184,116,.6); }
-  .bq-card.bq-stale{
-    background:rgba(255,255,255,.015); border-color:rgba(139,144,175,.18); border-left-color:#5a5f7d;
-    transition:opacity .15s ease, border-color .15s ease;
-  }
-  .bq-card.bq-folded{ opacity:.72; padding:7px 12px; }
-  .bq-card.bq-folded:hover, .bq-card.bq-folded:focus-within{ opacity:1; border-color:rgba(139,144,175,.35); }
-  .bq-card.bq-folded .bq-head{ margin-bottom:3px; }
-  .bq-pill{
-    font:600 9px 'JetBrains Mono',monospace; letter-spacing:.04em; text-transform:uppercase;
-    padding:1px 6px; border-radius:999px; white-space:nowrap;
-  }
-  .bq-pill-new{ color:#0e1a14; background:#6ee7a8; }
-  .bq-pill-owed{ color:#f0b874; border:1px solid rgba(240,184,116,.45); }
-  .bq-pill-old{ margin-left:auto; color:#8b90af; border:1px solid rgba(139,144,175,.3); text-transform:none; }
-  .bq-time-fresh{ color:#6ee7a8; font-size:10px; }
-  .bq-fold{
-    background:transparent; border:1px solid rgba(139,144,175,.3); border-radius:4px; color:#a9aecb;
-    font:500 9px 'JetBrains Mono',monospace; padding:1px 6px; cursor:pointer;
-  }
-  .bq-fold:hover{ color:#e7e9f4; border-color:rgba(139,144,175,.6); }
+  .bq-card.bq-fresh{ border-color:color-mix(in srgb, #6ee7a8 45%, var(--border)); border-left-color:#6ee7a8; box-shadow:0 8px 22px -14px #6ee7a8; }
+  .bq-card.bq-week{ border-left-color:color-mix(in srgb, var(--oc) 40%, transparent); }
+  .bq-card.bq-stale{ border-left-color:#5a5f7d; filter:saturate(.6); transition:opacity .15s ease, filter .15s ease; }
+  .bq-card.bq-folded{ opacity:.72; gap:3px; padding:7px 12px; }
+  .bq-card.bq-folded:hover, .bq-card.bq-folded:focus-within{ opacity:1; filter:none; }
+  .bq-fold{ height:22px; padding:0 8px; font-size:10.5px; }
   .bq-question-folded{
     display:block; width:100%; text-align:left; background:none; border:none; padding:0; margin:0; cursor:pointer;
-    font:500 12px/1.4 'Manrope',sans-serif; color:#a9aecb;
+    font:500 12px/1.4 var(--font-body); color:var(--text-2);
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   }
-  .bq-question-folded:hover{ color:#e7e9f4; }
-  .bq-dismiss{
-    background:transparent; border:none; color:#6b7090; font-size:16px;
-    cursor:pointer; padding:0 3px; line-height:1;
-  }
+  .bq-question-folded:hover{ color:var(--text-1); }
+  .bq-dismiss{ background:transparent; border:none; color:var(--text-3); font-size:16px; cursor:pointer; padding:0 3px; line-height:1; }
   .bq-dismiss:hover{ color:#ef5d6e; }
-  .bq-question{
-    font:600 13px/1.45 'Manrope',sans-serif; color:#e7e9f4;
-    margin:0 0 8px; word-break:break-word;
-  }
-  .bq-context{ margin:0 0 8px; }
-  .bq-context summary{
-    cursor:pointer; color:#8b90af; font:500 10px 'JetBrains Mono',monospace;
-    list-style:none;
-  }
+  .bq-question{ font:600 13px/1.45 var(--font-body); color:var(--text-1); word-break:break-word; }
+  .bq-context summary{ cursor:pointer; color:var(--text-3); font:600 10.5px var(--font-body); list-style:none; }
   .bq-context summary::-webkit-details-marker{ display:none; }
-  .bq-context summary::before{ content:'▸ '; color:#6b7090; }
+  .bq-context summary::before{ content:'▸ '; }
   .bq-context[open] summary::before{ content:'▾ '; }
   .bq-context-body{
-    margin-top:6px; padding:8px 10px; background:#0a0b14; border:1px solid #1f2236;
-    border-radius:4px; font:500 11px/1.5 'JetBrains Mono',monospace; color:#8b90af;
+    margin-top:6px; padding:8px 10px; background:color-mix(in srgb, var(--surface-1) 60%, #000); border:1px solid var(--border);
+    border-radius:8px; font:500 11px/1.5 'JetBrains Mono',monospace; color:var(--text-2);
     white-space:pre-wrap; word-break:break-word; max-height:160px; overflow-y:auto;
   }
-  .bq-options{ display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap:5px; }
-  .bq-option{
-    display:flex; align-items:center; gap:8px;
-    padding:8px 10px; background:#161827; color:#cbd0e8;
-    border:1px solid #2a2f4a; border-radius:5px;
-    font:600 11px 'Manrope',sans-serif;
-    cursor:pointer; transition:all .12s; text-align:left;
-  }
-  .bq-option:hover:not(:disabled){
-    background:#252840; border-color:#f0b874; color:#f4e1a3;
-    transform:translateY(-1px);
-  }
-  .bq-option:disabled{ opacity:.5; cursor:not-allowed; }
+  .bq-direct-link{ align-self:flex-start; max-width:100%; overflow:hidden; text-overflow:ellipsis; text-decoration:none; }
+  .bq-direct-link:hover{ border-color:#3dd6c8; }
+
+  /* Options: the AI's pick gold, the rest ghost; labels wrap. */
+  .bq-options{ display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap:5px; }
+  .bq-option{ height:auto; min-height:34px; padding:6px 10px; white-space:normal; text-align:left; font-size:11.5px; line-height:1.35; }
   .bq-option-idx{
-    flex-shrink:0; width:20px; height:20px; border-radius:3px;
-    background:#0a0b14; display:inline-flex; align-items:center; justify-content:center;
-    font:700 10px 'JetBrains Mono',monospace; color:#f0b874;
+    flex-shrink:0; width:20px; height:20px; border-radius:6px; display:inline-flex; align-items:center; justify-content:center;
+    font:800 10px var(--font-display); color:var(--gold); background:color-mix(in srgb, var(--surface-1) 55%, #000);
   }
-  .bq-option-lbl{ flex:1; word-break:break-word; }
-  /* Options that open a URL — make them visually distinct (subtle teal tint
-     + arrow chevron). */
-  .bq-option-link{
-    border-color:rgba(61,214,200,.35);
-    background:linear-gradient(180deg, #161827 0%, #15212a 100%);
-  }
-  .bq-option-link:hover:not(:disabled){
-    border-color:#3dd6c8;
-    background:linear-gradient(180deg, #1a2f33 0%, #142329 100%);
-    color:#a8e4dc;
-  }
-  .bq-option-link .bq-option-idx{ color:#3dd6c8; }
-  .bq-option-linkico{
-    flex-shrink:0; color:#3dd6c8; font:700 11px 'JetBrains Mono',monospace;
-    opacity:.7; transition:opacity .12s, transform .12s;
-  }
-  .bq-option-link:hover:not(:disabled) .bq-option-linkico{
-    opacity:1; transform:translate(2px,-2px);
-  }
+  .bq-option:not(.ghost) .bq-option-idx{ color:#1a1306; background:rgba(255,255,255,.35); }
+  .bq-option-lbl{ flex:1; min-width:0; word-break:break-word; }
+  .bq-option-link.ghost{ border-color:color-mix(in srgb, #3dd6c8 40%, var(--border-h)); }
+  .bq-option-linkico{ flex-shrink:0; color:#3dd6c8; font-weight:800; transition:transform .12s; }
+  .bq-option:not(.ghost) .bq-option-linkico{ color:inherit; }
+  .bq-option-link:hover:not(:disabled) .bq-option-linkico{ transform:translate(2px,-2px); }
+  .bq-option-pick{ box-shadow:0 0 0 2px #a78bfa, 0 8px 20px -12px #a78bfa; }
+  .bq-pick-tag{ flex-shrink:0; font:800 8.5px var(--font-body); letter-spacing:.05em; color:#1a1430; background:#a78bfa; padding:2px 6px; border-radius:999px; text-transform:uppercase; }
+  .bq-take{ border-style:dashed; color:var(--gold); }
+  .bq-done-row{ grid-column:1 / -1; display:flex; gap:5px; }
+  .bq-done{ flex-shrink:0; width:auto; color:#7ee0a1; border-color:color-mix(in srgb, #7ee0a1 45%, var(--border-h)); }
+  .bq-sm{ height:28px; padding:0 10px; font-size:11.5px; }
+
   /* The AI's opinion: a violet fifth slot under the chief's four options. */
   .bq-ask-ai, .bq-opinion{ grid-column:1 / -1; }
   .bq-ask-ai{
-    display:flex; align-items:center; gap:8px; padding:8px 10px;
+    display:flex; align-items:center; gap:8px; min-height:32px; padding:6px 10px;
     background:rgba(167,139,250,.06); color:#c4b5fd;
-    border:1px dashed rgba(167,139,250,.45); border-radius:5px;
-    font:600 11px 'Manrope',sans-serif; cursor:pointer; text-align:left; transition:all .12s;
+    border:1px dashed rgba(167,139,250,.45); border-radius:10px;
+    font:600 11.5px var(--font-body); cursor:pointer; text-align:left; transition:background .12s, color .12s;
   }
   .bq-ask-ai:hover:not(:disabled){ background:rgba(167,139,250,.14); border-style:solid; color:#e4dcff; }
   .bq-ask-ai:disabled{ cursor:progress; }
+  .bq-ask-ai:focus-visible{ outline:2px solid var(--gold); outline-offset:2px; }
   .bq-ai-idx{ color:#a78bfa !important; }
   .bq-spin{ width:11px; height:11px; border-radius:50%; border:2px solid rgba(167,139,250,.3); border-top-color:#a78bfa; animation:bq-spin .8s linear infinite; }
   @keyframes bq-spin{ to{ transform:rotate(360deg); } }
   .bq-opinion{
-    padding:9px 10px; border-radius:6px;
-    background:linear-gradient(180deg, rgba(167,139,250,.14) 0%, rgba(167,139,250,.05) 100%);
+    padding:9px 10px; border-radius:10px;
+    background:linear-gradient(160deg, rgba(167,139,250,.16), rgba(167,139,250,.04) 70%);
     border:1px solid rgba(167,139,250,.45);
   }
   .bq-opinion-head{ display:flex; align-items:center; gap:8px; }
-  .bq-opinion-title{ font:700 11px 'Manrope',sans-serif; color:#e4dcff; }
-  .bq-opinion-answer{ margin:7px 0 0; font:600 12px/1.5 'Manrope',sans-serif; color:#f1edff; word-break:break-word; white-space:pre-wrap; }
-  .bq-opinion-why{ margin:5px 0 0; font:500 10.5px/1.5 'Manrope',sans-serif; color:#a9a3c9; word-break:break-word; }
+  .bq-opinion-title{ font:700 11.5px var(--font-body); color:#e4dcff; }
+  .bq-opinion-answer{ margin:7px 0 0; font:600 12px/1.5 var(--font-body); color:#f1edff; word-break:break-word; white-space:pre-wrap; }
+  .bq-opinion-why{ margin:5px 0 0; font:500 10.5px/1.5 var(--font-body); color:#a9a3c9; word-break:break-word; }
   .bq-opinion-actions{ display:flex; justify-content:flex-end; gap:6px; margin-top:8px; }
-  .bq-opinion-retry, .bq-opinion-send{ padding:6px 11px; border-radius:5px; font:600 11px 'Manrope',sans-serif; cursor:pointer; }
-  .bq-opinion-retry{ background:transparent; color:#c4b5fd; border:1px solid rgba(167,139,250,.35); }
-  .bq-opinion-send{ background:#a78bfa; color:#1a1430; border:1px solid #a78bfa; }
-  .bq-opinion-send:hover:not(:disabled){ filter:brightness(1.08); }
-  .bq-opinion-retry:disabled, .bq-opinion-send:disabled{ opacity:.5; cursor:default; }
-  .bq-opinion-err{ grid-column:1 / -1; margin:0; font:500 11px 'Manrope',sans-serif; color:#e8b04b; display:flex; flex-direction:column; gap:6px; }
+  .bq-opinion-send{ color:#1a1430; background:linear-gradient(180deg, #c4b5fd, #a78bfa); border-color:#a78bfa; box-shadow:0 8px 20px -12px #a78bfa; }
+  .bq-opinion-err{ grid-column:1 / -1; margin:0; font:500 11px var(--font-body); color:#e8b04b; display:flex; flex-direction:column; gap:6px; }
   .bq-opinion-err p{ margin:0; }
   .bq-opinion-err-actions{ display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
   .bq-opinion-link{ color:#9fb4e8; font-size:11px; text-decoration:none; }
   .bq-opinion-link:hover{ text-decoration:underline; }
-  .bq-opinion-detail{ color:#8b93aa; font-size:10.5px; }
+  .bq-opinion-detail{ color:var(--text-3); font-size:10.5px; }
   .bq-opinion-detail summary{ cursor:pointer; }
-  .bq-opinion-detail pre{ margin:4px 0 0; max-height:90px; overflow:auto; white-space:pre-wrap; font:500 10px 'JetBrains Mono',monospace; color:#8b93aa; }
-  .bq-verified{ margin-left:auto; flex-shrink:0; font:700 9px 'JetBrains Mono',monospace; color:#7ee0a1; background:rgba(126,224,161,.12); border:1px solid rgba(126,224,161,.35); padding:1px 6px; border-radius:8px; }
+  .bq-opinion-detail pre{ margin:4px 0 0; max-height:90px; overflow:auto; white-space:pre-wrap; font:500 10px 'JetBrains Mono',monospace; color:var(--text-3); }
+  .bq-verified{ margin-left:auto; flex-shrink:0; display:inline-flex; align-items:center; gap:5px; font:800 9px var(--font-body); text-transform:uppercase; letter-spacing:.05em; color:#7ee0a1; background:rgba(126,224,161,.12); border:1px solid rgba(126,224,161,.35); padding:2px 7px; border-radius:999px; }
+  .bq-verified::before{ content:''; width:6px; height:6px; border-radius:50%; background:currentColor; box-shadow:0 0 8px currentColor; }
   .bq-verified-no{ color:#e8b04b; background:rgba(232,176,75,.1); border-color:rgba(232,176,75,.35); }
-  .bq-op-label{ display:block; font:700 9.5px 'JetBrains Mono',monospace; text-transform:uppercase; letter-spacing:.3px; color:#c4b5fd; margin:6px 0 2px; }
-  .bq-op-human{ margin-top:6px; padding:5px 8px; border-left:2px solid #e8b04b; background:rgba(232,176,75,.08); border-radius:3px; }
+  .bq-op-label{ display:block; font:800 9.5px var(--font-body); text-transform:uppercase; letter-spacing:.06em; color:#c4b5fd; margin:6px 0 2px; }
+  .bq-op-human{ margin-top:6px; padding:5px 8px; border-left:2px solid #e8b04b; background:rgba(232,176,75,.08); border-radius:6px; }
   .bq-op-human .bq-op-label{ color:#e8b04b; margin-top:0; }
-  .bq-op-human ul, .bq-op-evidence ul{ margin:0; padding-left:16px; font:500 10.5px/1.45 'Manrope',sans-serif; color:#cbc5e6; }
+  .bq-op-human ul, .bq-op-evidence ul{ margin:0; padding-left:16px; font:500 10.5px/1.45 var(--font-body); color:#cbc5e6; }
   .bq-op-evidence{ margin-top:6px; }
-  .bq-op-evidence summary{ cursor:pointer; font:500 10px 'JetBrains Mono',monospace; color:#a9a3c9; }
+  .bq-op-evidence summary{ cursor:pointer; font:600 10.5px var(--font-body); color:#a9a3c9; }
   .bq-op-evidence ul{ margin-top:4px; max-height:140px; overflow-y:auto; }
   .bq-op-warn{ color:#e8b04b !important; }
-  .bq-op-also{ margin-top:6px; padding:5px 8px; border-left:2px solid #a78bfa; background:rgba(167,139,250,.07); border-radius:3px; display:flex; flex-direction:column; gap:3px; }
+  .bq-op-also{ margin-top:6px; padding:5px 8px; border-left:2px solid #a78bfa; background:rgba(167,139,250,.07); border-radius:6px; display:flex; flex-direction:column; gap:3px; }
   .bq-op-also .bq-op-label{ margin-top:0; }
-  .bq-also-row{ display:grid; grid-template-columns:auto 1fr; gap:2px 6px; align-items:start; cursor:pointer; font:500 10.5px/1.4 'Manrope',sans-serif; color:#cbc5e6; }
+  .bq-also-row{ display:grid; grid-template-columns:auto 1fr; gap:2px 6px; align-items:start; cursor:pointer; font:500 10.5px/1.4 var(--font-body); color:#cbc5e6; }
   .bq-also-row input{ margin:2px 0 0; accent-color:#a78bfa; grid-row:span 2; }
   .bq-also-q{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .bq-also-q b{ color:#e4dcff; font-weight:700; }
   .bq-also-a{ color:#a9a3c9; word-break:break-word; }
   .bq-also-send{ align-self:flex-end; margin-top:3px; }
   .bq-step{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .bq-step-n{ flex-shrink:0; font:600 9.5px 'JetBrains Mono',monospace; color:#8f86b8; }
-  .bq-option-pick{ border-color:#a78bfa; box-shadow:inset 0 0 0 1px rgba(167,139,250,.35); }
-  .bq-pick-tag{ flex-shrink:0; font:700 9px 'JetBrains Mono',monospace; color:#1a1430; background:#a78bfa; padding:1px 6px; border-radius:8px; text-transform:uppercase; }
+  .bq-step-n{ flex-shrink:0; font:700 9.5px var(--font-body); color:#8f86b8; font-variant-numeric:tabular-nums; }
   @media (prefers-reduced-motion: reduce){ .bq-spin{ animation:none; } }
-  .bq-chief-note{ font:500 10.5px 'Manrope',sans-serif; color:#f0b86e; background:#2a2214; border-left:2px solid #f0b86e; padding:5px 8px; border-radius:3px; margin:4px 0 6px; }
-  .bq-chose{ font:600 11px 'Manrope',sans-serif; color:#7ee0a1; margin:0 0 6px; }
-  .bq-take{ border-style:dashed; color:#f0b874; }
-  .bq-done-row{ grid-column:1 / -1; display:flex; gap:5px; }
-  .bq-done{ flex-shrink:0; border-color:rgba(126,224,161,.45); color:#7ee0a1; }
-  .bq-done:hover:not(:disabled){ background:rgba(126,224,161,.14); border-color:#7ee0a1; color:#c8f5d8; }
-  .bq-free{ display:flex; gap:5px; margin-top:6px; }
-  .bq-free-input{ flex:1; min-width:0; padding:7px 9px; background:#11131f; color:#cbd0e8; border:1px solid #2a2f4a; border-radius:5px; font:500 11px 'Manrope',sans-serif; }
-  .bq-free-send{ padding:7px 11px; background:#1f2440; color:#cbd0e8; border:1px solid #2a2f4a; border-radius:5px; font:600 11px 'Manrope',sans-serif; cursor:pointer; }
-  .bq-free-send:disabled{ opacity:.45; cursor:default; }
-  /* Direct link chip — surfaces the URL from `context` above the options
-     so the user can preview the link without having to commit to an answer. */
-  .bq-direct-link{
-    display:inline-flex; align-items:center; gap:5px;
-    margin:6px 0 2px;
-    padding:4px 9px;
-    border:1px solid rgba(61,214,200,.3);
-    background:rgba(61,214,200,.08);
-    border-radius:14px;
-    color:#88e0d6; text-decoration:none;
-    font:600 10.5px 'JetBrains Mono',monospace;
-    letter-spacing:.2px;
-    transition:all .12s;
-    max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-  }
-  .bq-direct-link:hover{
-    background:rgba(61,214,200,.16);
-    border-color:rgba(61,214,200,.5);
-    color:#c8f0ea;
-  }
+  .bq-chief-note{ font:500 11px/1.4 var(--font-body); color:#f0b86e; background:color-mix(in srgb, var(--gold) 10%, transparent); border-left:2px solid var(--gold); padding:5px 8px; border-radius:6px; }
+  .bq-chose{ font:700 11.5px var(--font-body); color:#7ee0a1; }
+  .bq-free{ display:flex; gap:5px; }
+  .bq-free-input{ flex:1; min-width:0; height:28px; padding:0 9px; background:var(--surface-1); color:var(--text-1); border:1px solid var(--border-h); border-radius:8px; font:500 11.5px var(--font-body); }
+  .bq-free-input:focus{ outline:none; border-color:var(--gold); }
+  .bq-free-input::placeholder{ color:var(--text-3); }
 </style>

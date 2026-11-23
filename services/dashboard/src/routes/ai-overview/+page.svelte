@@ -2,8 +2,9 @@
   /*
     /ai-overview — how the AI side of this Kernl is doing, on one screen.
 
-    The hero says it in one line (who is working right now, how the recent runs
-    went, what today cost) with the ways in. Six tiles carry the numbers. Under
+    The strip (office look) says it in one line (who is working right now) with
+    today's numbers as KPIs (how the recent runs went, what today cost) and the
+    way into the 3D; the other ways in follow, then six tiles. Under
     them, three columns: what is running and what just ran; the offices by
     activity; the models of the last 7 days and the agents that need a look
     (auto-paused, failing in a row, or a poor success rate). A click on an
@@ -25,6 +26,7 @@
 
   const L = {
     es: {
+      eyebrow: 'La IA de este Kernl, en vivo', kFailed: 'con error',
       title: 'IA', working: '{n} agentes trabajando ahora', calm: 'Todo tranquilo: ningún agente trabajando ahora',
       success: 'éxito', recentRuns: 'de las últimas {n} corridas', failures: '{n} con error', today: 'hoy', tokens: 'tokens', cost: 'gastado hoy',
       open3d: 'Abrir el 3D', chief: 'Chief', chiefT: 'Preguntas que esperan tu respuesta', newAgent: 'Nuevo agente', offices: 'Oficinas', evolutions: 'Evoluciones', skillsBtn: 'Skills',
@@ -37,6 +39,7 @@
       ago: { s: 'recién', m: 'hace {n} min', h: 'hace {n} h', d: 'hace {n} d' }, for: 'hace {t}',
     },
     en: {
+      eyebrow: 'This Kernl\'s AI, live', kFailed: 'failed',
       title: 'AI', working: '{n} agents working right now', calm: 'All quiet: no agent working right now',
       success: 'success', recentRuns: 'of the last {n} runs', failures: '{n} failed', today: 'today', tokens: 'tokens', cost: 'spent today',
       open3d: 'Open the 3D', chief: 'Chief', chiefT: 'Questions waiting on you', newAgent: 'New agent', offices: 'Offices', evolutions: 'Evolutions', skillsBtn: 'Skills',
@@ -155,64 +158,64 @@
   const nameOf = (aid: string) => agentById.get(aid)?.name ?? '—';
   const officeOf = (aid: string) => flowById.get(agentById.get(aid)?.flow_id ?? '')?.name ?? '';
   const clean = (t: string | undefined) => (t ?? '').replace(/[*#`>_]/g, '').replace(/\s+/g, ' ').trim();
-  const ST: Record<string, string> = { completed: '#34D399', failed: '#F43F5E', running: '#22D3EE', cancelled: '#94A3B8' };
+  // State colors of the office look: working (live) and done green, error rose, cancelled off-slate.
+  const ST: Record<string, string> = { completed: '#34D399', failed: '#F43F5E', running: '#34D399', cancelled: '#64748B' };
+  const mark = (name: string) => name.slice(0, 2).toUpperCase();
   const statusTxt = (s: string) => (s === 'completed' ? tx.ok : s === 'failed' ? tx.failed : s === 'running' ? tx.running : tx.cancelled);
-  // Ring: r=30 → circumference ≈ 188.5.
-  const C = 2 * Math.PI * 30;
 </script>
 
 <div class="ai">
   <!-- The page scrolls inside .body when it does not fit (narrow screens); the side panels stay docked to .ai's visible box. -->
   <div class="body">
-  <!-- ── hero ── -->
-  <section class="hero" class:busy={liveRuns.length > 0}>
-    <div class="ring" aria-label="{okRate ?? '—'}% {tx.success}">
-      <svg viewBox="0 0 76 76"><circle class="trk" cx="38" cy="38" r="30" /><circle class="arc" cx="38" cy="38" r="30" stroke-dasharray={C} stroke-dashoffset={C * (1 - (okRate ?? 0) / 100)} /></svg>
-      <span class="ring-in"><b class="num">{okRate ?? '—'}{okRate !== null ? '%' : ''}</b><small>{tx.success}</small></span>
+  <!-- ── strip: the live message, today's numbers, the way into the 3D ── -->
+  <header class="ol-strip hero">
+    <div class="ol-ttl">
+      <p class="ol-eyebrow">{tx.eyebrow}</p>
+      <h1 class="ol-title">{liveRuns.length ? fill(tx.working, { n: liveRuns.length }) : tx.calm}</h1>
     </div>
-    <div class="htxt">
-      <h1>{liveRuns.length ? fill(tx.working, { n: liveRuns.length }) : tx.calm}</h1>
-      <div class="facts">
-        <span><i style="background: #34D399"></i>{fill(tx.recentRuns, { n: finished.length })}</span>
-        {#if failedN}<span class="bad"><i style="background: #F43F5E"></i>{fill(tx.failures, { n: failedN })}</span>{/if}
-        <span><i style="background: #A78BFA"></i>{compact(tokensToday)} {tx.tokens} {tx.today}</span>
-        <span><i style="background: #FBBF24"></i>{money(costToday)} {tx.cost}</span>
+    <div class="ol-kpis">
+      <div class="ol-kpi" class:live={liveRuns.length > 0} style="--c: #34D399" aria-label="{okRate ?? '—'}% {tx.success}">
+        <b>{okRate ?? '—'}{okRate !== null ? '%' : ''}</b><small>{tx.success} · {fill(tx.recentRuns, { n: finished.length })}</small>
       </div>
+      <div class="ol-kpi" class:alert={failedN > 0} style="--c: {failedN ? '#F43F5E' : '#94A3B8'}"><b>{failedN}</b><small>{tx.kFailed}</small></div>
+      <div class="ol-kpi" style="--c: {PALETTE.violet}"><b>{compact(tokensToday)}</b><small>{tx.tokens} {tx.today}</small></div>
+      <div class="ol-kpi" style="--c: {PALETTE.gold}"><b>{money(costToday)}</b><small>{tx.cost}</small></div>
     </div>
-    <nav class="quick" aria-label="Accesos">
-      <a class="q primary" href="/agents-flow"><span>◈</span>{tx.open3d}</a>
-      <a class="q chief" class:ask={inbox > 0} href="/agents-flow" title={tx.chiefT} on:click={(e) => side(e, (p) => p.openChief())}>
-        <span>✪</span>{tx.chief}{#if inbox > 0}<em class="badge num">{inbox}</em>{/if}
-      </a>
-      <a class="q" href="/agents"><span>＋</span>{tx.newAgent}</a>
-      <a class="q" href="/agents-flow?view=offices"><span>▦</span>{tx.offices}</a>
-      <a class="q" href="/autogenesis"><span>⟲</span>{tx.evolutions}</a>
-      <a class="q" href="/extensions?tab=skills"><span>✦</span>{tx.skillsBtn}</a>
-    </nav>
-  </section>
+    <a class="ol-btn" href="/agents-flow"><span aria-hidden="true">◈</span>{tx.open3d}</a>
+  </header>
 
-  <!-- ── tiles ── -->
-  <div class="tiles">
-    <a class="tile" href="/agents" style="--c: {PALETTE.violet}"><b class="num">{activeAgents.length}<small>/{agents.length}</small></b><span>{tx.kAgents}</span></a>
-    <a class="tile" href="/agents-flow?view=offices" style="--c: {PALETTE.emerald}"><b class="num">{officesOn}<small>/{flows.length}</small></b><span>{tx.kOffices}</span></a>
-    <a class="tile" href="/agents" style="--c: {PALETTE.sky}"><b class="num">{schedOn}</b><span>{tx.kSched}</span></a>
-    <a class="tile" href="/settings?section=ai&card=usage" style="--c: {PALETTE.gold}"><b class="num">{money(cost7)}</b><span>{tx.kCost}</span></a>
-    <a class="tile" href="/extensions?tab=skills" style="--c: {PALETTE.pink}"><b class="num">{skillsN}</b><span>{tx.kSkills}</span></a>
-    <a class="tile" href="/automations" style="--c: {PALETTE.cyan}"><b class="num">{autoN}</b><span>{tx.kAuto}</span></a>
+  <!-- ── ways in + tiles ── -->
+  <nav class="ol-tools quick" aria-label="Accesos">
+    <a class="ol-btn ghost sm chief" class:ask={inbox > 0} href="/agents-flow" title={tx.chiefT} on:click={(e) => side(e, (p) => p.openChief())}>
+      <span aria-hidden="true">✪</span>{tx.chief}{#if inbox > 0}<em class="badge num">{inbox}</em>{/if}
+    </a>
+    <a class="ol-btn ghost sm" href="/agents"><span aria-hidden="true">＋</span>{tx.newAgent}</a>
+    <a class="ol-btn ghost sm" href="/agents-flow?view=offices"><span aria-hidden="true">▦</span>{tx.offices}</a>
+    <a class="ol-btn ghost sm" href="/autogenesis"><span aria-hidden="true">⟲</span>{tx.evolutions}</a>
+    <a class="ol-btn ghost sm" href="/extensions?tab=skills"><span aria-hidden="true">✦</span>{tx.skillsBtn}</a>
+  </nav>
+
+  <div class="ol-kpis tiles">
+    <a class="ol-kpi" href="/agents" style="--c: {PALETTE.violet}"><b>{activeAgents.length}<small>/{agents.length}</small></b><small>{tx.kAgents}</small></a>
+    <a class="ol-kpi" href="/agents-flow?view=offices" style="--c: {PALETTE.emerald}"><b>{officesOn}<small>/{flows.length}</small></b><small>{tx.kOffices}</small></a>
+    <a class="ol-kpi" href="/agents" style="--c: {PALETTE.sky}"><b>{schedOn}</b><small>{tx.kSched}</small></a>
+    <a class="ol-kpi" href="/settings?section=ai&card=usage" style="--c: {PALETTE.gold}"><b>{money(cost7)}</b><small>{tx.kCost}</small></a>
+    <a class="ol-kpi" href="/extensions?tab=skills" style="--c: {PALETTE.pink}"><b>{skillsN}</b><small>{tx.kSkills}</small></a>
+    <a class="ol-kpi" href="/automations" style="--c: {PALETTE.cyan}"><b>{autoN}</b><small>{tx.kAuto}</small></a>
   </div>
 
   <div class="cols">
     <!-- ── live + latest ── -->
-    <section class="card">
-      <h2><span class="pulse" class:on={liveRuns.length > 0}></span>{tx.live}<em>{liveRuns.length}</em></h2>
+    <section class="ol-card card" style="--oc: #34D399">
+      <h2 class="ol-h">{tx.live}<em>{liveRuns.length}</em></h2>
       {#if liveRuns.length}
-        <ul class="live">
+        <ul class="ol-list livelist">
           {#each liveRuns as r (r.id)}
-            <li style="--oc: {colorOf(r.agent_id)}">
-              <a href="/agents-flow?agent={r.agent_id}" on:click={(e) => side(e, (p) => p.openAgent(r.agent_id))}>
-                <span class="dot live"></span>
-                <span class="who"><b>{nameOf(r.agent_id)}</b><small>{officeOf(r.agent_id)}</small></span>
-                <span class="el num">{elapsed(r.started_at)}</span>
+            <li>
+              <a class="ol-row on" style="--oc: {colorOf(r.agent_id)}" href="/agents-flow?agent={r.agent_id}" on:click={(e) => side(e, (p) => p.openAgent(r.agent_id))}>
+                <span class="ol-mark" aria-hidden="true">{mark(nameOf(r.agent_id))}</span>
+                <span class="ol-row-txt"><b>{nameOf(r.agent_id)}</b><small>{officeOf(r.agent_id)}</small></span>
+                <span class="ol-st live el num" style="--sc: {ST.running}"><i aria-hidden="true"></i>{elapsed(r.started_at)}</span>
               </a>
             </li>
           {/each}
@@ -220,14 +223,14 @@
       {:else}
         <p class="muted">{tx.liveNone}</p>
       {/if}
-      <h2 class="sub">{tx.last}</h2>
-      <ul class="runs">
+      <h2 class="ol-h sub">{tx.last}<em>{Math.min(14, doneRuns.length)}</em></h2>
+      <ul class="ol-list runs">
         {#each doneRuns.slice(0, 14) as r (r.id)}
-          <li style="--sc: {ST[r.status] ?? '#94A3B8'}; --oc: {colorOf(r.agent_id)}">
-            <a href="/agents-flow?agent={r.agent_id}" on:click={(e) => side(e, (p) => p.openAgent(r.agent_id))} title={clean(r.error || r.result).slice(0, 400)}>
-              <span class="dot"></span>
-              <span class="who"><b>{nameOf(r.agent_id)}</b><small>{clean(r.error || r.result).slice(0, 90) || statusTxt(r.status)}</small></span>
-              <span class="meta"><span class="num">{durTxt(dur(r))}</span><small>{since(r.completed_at || r.started_at)}</small></span>
+          <li>
+            <a class="ol-row" style="--oc: {colorOf(r.agent_id)}" href="/agents-flow?agent={r.agent_id}" on:click={(e) => side(e, (p) => p.openAgent(r.agent_id))} title={clean(r.error || r.result).slice(0, 400)}>
+              <span class="ol-mark" aria-hidden="true">{mark(nameOf(r.agent_id))}</span>
+              <span class="ol-row-txt"><b>{nameOf(r.agent_id)}</b><small>{clean(r.error || r.result).slice(0, 90) || statusTxt(r.status)}</small></span>
+              <span class="meta"><span class="ol-st num" style="--sc: {ST[r.status] ?? '#94A3B8'}" title={statusTxt(r.status)}><i aria-hidden="true"></i>{durTxt(dur(r))}</span><small>{since(r.completed_at || r.started_at)}</small></span>
             </a>
           </li>
         {/each}
@@ -235,16 +238,20 @@
     </section>
 
     <!-- ── offices ── -->
-    <section class="card">
-      <h2>{tx.officesT}<em>{officesOn}/{flows.length}</em></h2>
-      <ul class="offices">
+    <section class="ol-card card" style="--oc: {PALETTE.emerald}">
+      <h2 class="ol-h">{tx.officesT}<em>{officesOn}/{flows.length}</em></h2>
+      <ul class="ol-list offices">
         {#each officeRows as o (o.f.id)}
-          <li class:off={!!o.f.paused} style="--oc: {o.f.color || '#94A3B8'}">
-            <a href="/agents-flow?office={o.f.id}" on:click={(e) => side(e, (p) => p.openOffice(o.f.id))}>
-              <span class="mark">{o.f.name.slice(0, 2).toUpperCase()}</span>
-              <span class="who"><b>{o.f.name}</b><small>{fill(tx.agentsN, { n: o.members })}{o.f.paused ? ` · ${tx.paused}` : ''}</small></span>
-              <span class="act"><i style="width: {(100 * o.recent) / maxRecent}%"></i></span>
-              {#if o.working}<span class="now"><span class="dot live"></span>{fill(tx.nowN, { n: o.working })}</span>{:else}<span class="now dim">{o.f.paused ? tx.paused : tx.idle}</span>{/if}
+          <li class:off={!!o.f.paused}>
+            <a class="ol-row" style="--oc: {o.f.color || '#94A3B8'}" href="/agents-flow?office={o.f.id}" on:click={(e) => side(e, (p) => p.openOffice(o.f.id))}>
+              <span class="ol-mark" aria-hidden="true">{mark(o.f.name)}</span>
+              <span class="ol-row-txt"><b>{o.f.name}</b><small>{fill(tx.agentsN, { n: o.members })}{o.f.paused ? ` · ${tx.paused}` : ''}</small></span>
+              <span class="ol-meter act" aria-hidden="true"><i style="width: {(100 * o.recent) / maxRecent}%"></i></span>
+              {#if o.working}
+                <span class="ol-st live now" style="--sc: #34D399"><i aria-hidden="true"></i>{fill(tx.nowN, { n: o.working })}</span>
+              {:else}
+                <span class="ol-st now" style="--sc: {o.f.paused ? '#64748B' : '#94A3B8'}"><i aria-hidden="true"></i>{o.f.paused ? tx.paused : tx.idle}</span>
+              {/if}
             </a>
           </li>
         {/each}
@@ -252,8 +259,8 @@
     </section>
 
     <!-- ── models + attention ── -->
-    <section class="card">
-      <h2>{tx.models}<em>{money(cost7)}</em></h2>
+    <section class="ol-card card" style="--oc: {PALETTE.gold}">
+      <h2 class="ol-h">{tx.models}<em>{money(cost7)}</em></h2>
       <div class="days" aria-label={tx.perDay}>
         {#each days7 as d (d.key)}
           <span class="col" title="{d.key} · {money(d.cost)} · {d.calls} {tx.calls}">
@@ -263,10 +270,10 @@
         {/each}
       </div>
       {#if topModels.length}
-        <ul class="models">
+        <ul class="ol-list models">
           {#each topModels as m (m.key + (m.slug ?? ''))}
-            <li>
-              <span class="who"><b>{m.key}</b><small>{m.slug ?? ''} · {compact(m.calls)} {tx.calls}{m.fails ? ` · ${Math.round((100 * m.fails) / Math.max(1, m.calls))}% err` : ''}</small></span>
+            <li class="ol-row" style="--oc: {PALETTE.gold}">
+              <span class="ol-row-txt"><b>{m.key}</b><small>{m.slug ?? ''} · {compact(m.calls)} {tx.calls}{m.fails ? ` · ${Math.round((100 * m.fails) / Math.max(1, m.calls))}% err` : ''}</small></span>
               <span class="bar"><i style="width: {Math.max(4, (100 * m.costUsd) / maxModelCost)}%"></i></span>
               <span class="num cost">{money(m.costUsd)}</span>
             </li>
@@ -275,12 +282,17 @@
       {:else}
         <p class="muted">{tx.noUsage}</p>
       {/if}
-      <h2 class="sub warn">{tx.attention}<em>{attention.length}</em></h2>
+      <h2 class="ol-h sub warn">{tx.attention}<em>{attention.length}</em></h2>
       {#if attention.length}
-        <ul class="attn">
+        <ul class="ol-list attn">
           {#each attention as x (x.a.id)}
             <li class:hot={x.weight >= 2}>
-              <a href="/agents-flow?agent={x.a.id}" on:click={(e) => side(e, (p) => p.openAgent(x.a.id))}><span class="dot"></span><span class="who"><b>{x.a.name}</b><small>{x.why}</small></span><span class="go">›</span></a>
+              <a class="ol-row" style="--oc: {colorOf(x.a.id)}" href="/agents-flow?agent={x.a.id}" on:click={(e) => side(e, (p) => p.openAgent(x.a.id))}>
+                <span class="ol-mark" aria-hidden="true">{mark(x.a.name)}</span>
+                <span class="ol-row-txt"><b>{x.a.name}</b><small>{x.why}</small></span>
+                <span class="ol-st" style="--sc: {x.weight >= 2 ? '#F43F5E' : '#FB923C'}"><i aria-hidden="true"></i></span>
+                <span class="go" aria-hidden="true">›</span>
+              </a>
             </li>
           {/each}
         </ul>
@@ -297,133 +309,79 @@
 </div>
 
 <style>
-  /* One screen: hero, tiles and three columns that share the height; each column scrolls inside if it must. */
+  /* One screen: strip, ways in, tiles and three columns that share the height; each column scrolls inside if it must. */
   .ai { height: 100%; min-height: 0; overflow: hidden; position: relative; }
   .body { height: 100%; min-height: 0; box-sizing: border-box; padding: 12px 18px 14px; display: flex; flex-direction: column; gap: 10px; }
   .num { font-variant-numeric: tabular-nums; }
-  a { color: inherit; text-decoration: none; }
+  a { text-decoration: none; }
 
-  .hero { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 18px; align-items: center; padding: 12px 18px; border-radius: 16px;
-    background: radial-gradient(500px 160px at 0% 0%, color-mix(in srgb, #A78BFA 22%, transparent), transparent 70%),
-      radial-gradient(420px 180px at 100% 100%, color-mix(in srgb, #22D3EE 16%, transparent), transparent 70%),
-      linear-gradient(135deg, color-mix(in srgb, #F472B6 8%, var(--surface-1)), var(--surface-1));
-    border: 1px solid color-mix(in srgb, #A78BFA 30%, var(--border)); }
-  .ring { position: relative; width: 76px; height: 76px; }
-  .ring svg { width: 76px; height: 76px; transform: rotate(-90deg); }
-  .trk { fill: none; stroke: color-mix(in srgb, #34D399 15%, transparent); stroke-width: 7; }
-  .arc { fill: none; stroke: #34D399; stroke-width: 7; stroke-linecap: round; filter: drop-shadow(0 0 5px #34D399); transition: stroke-dashoffset .6s ease; }
-  .ring-in { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; }
-  .ring-in b { font-size: 19px; font-weight: 800; color: var(--text-1); line-height: 1; }
-  .ring-in small { font-size: 9.5px; color: var(--text-3); text-transform: uppercase; letter-spacing: .08em; }
-  .htxt h1 { margin: 0 0 6px; font-size: 21px; font-weight: 800; line-height: 1.2;
-    background: linear-gradient(90deg, #A78BFA, #F472B6 45%, #22D3EE); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .facts { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--text-2); }
-  .facts span { display: inline-flex; align-items: center; gap: 6px; }
-  .facts i { width: 7px; height: 7px; border-radius: 50%; box-shadow: 0 0 8px currentColor; }
-  .facts .bad { color: #fda4af; }
-  .hero.busy .ring .arc { animation: breathe 2.6s ease-in-out infinite; }
-  @keyframes breathe { 50% { filter: drop-shadow(0 0 10px #34D399); } }
-  .quick { display: grid; grid-template-columns: repeat(6, auto); gap: 6px; }
-  .q { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 12px; min-width: 74px; border-radius: 11px; font-size: 11px; font-weight: 700; color: var(--text-2);
-    background: color-mix(in srgb, var(--surface-2, #1f2230) 70%, transparent); border: 1px solid var(--border); transition: transform .15s, border-color .15s, color .15s; }
-  .q span { font-size: 16px; color: #c4b5fd; }
-  .q:hover { transform: translateY(-1px); color: var(--text-1); border-color: #A78BFA; }
-  .q.primary { color: #0b1020; background: linear-gradient(135deg, #C4B5FD, #A78BFA); border-color: transparent; box-shadow: 0 8px 22px -12px #A78BFA; }
-  .q.primary span { color: #0b1020; }
-  .q.chief { position: relative; }
-  .q.chief span { color: #e8c96a; }
-  .q.chief.ask { border-color: color-mix(in srgb, #F43F5E 55%, var(--border)); color: var(--text-1); }
+  .ol-kpis.tiles { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  a.ol-kpi { cursor: pointer; }
+  a.ol-kpi:hover { transform: translateY(-1px); box-shadow: 0 10px 22px -16px var(--c); }
+  .ol-kpi b small { font-size: 13px; opacity: .65; color: inherit; }
+
+  .quick { gap: 6px; }
+  .ol-btn.sm { height: 28px; padding: 0 11px; font-size: 11.5px; }
+  .quick .ol-btn span { color: #c4b5fd; }
+  .quick .chief { position: relative; }
+  .quick .chief span { color: #e8c96a; }
+  .quick .chief.ask { border-color: color-mix(in srgb, #F43F5E 55%, var(--border)); }
   .badge { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px;
     display: grid; place-items: center; font: 800 10px/1 inherit; font-style: normal; color: #fff; background: #F43F5E; box-shadow: 0 0 10px -2px #F43F5E; }
 
-  .tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
-  .tile { display: flex; flex-direction: column; padding: 8px 12px; border-radius: 12px; min-width: 0;
-    background: linear-gradient(160deg, color-mix(in srgb, var(--c) 18%, var(--surface-1)), var(--surface-1) 72%); border: 1px solid color-mix(in srgb, var(--c) 32%, var(--border));
-    transition: transform .15s, box-shadow .15s; }
-  .tile:hover { transform: translateY(-1px); box-shadow: 0 10px 22px -16px var(--c); }
-  .tile b { font-size: 22px; font-weight: 800; line-height: 1.1; color: color-mix(in srgb, var(--c) 75%, white); text-shadow: 0 0 14px color-mix(in srgb, var(--c) 45%, transparent); white-space: nowrap; }
-  .tile b small { font-size: 13px; opacity: .65; }
-  .tile span { font-size: 11px; color: color-mix(in srgb, var(--c) 45%, var(--text-2)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
   .cols { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 12px; }
-  .card { min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 14px; overflow: hidden;
-    background: linear-gradient(160deg, rgba(167, 139, 250, .05), var(--surface-1) 55%); border: 1px solid var(--border); }
-  h2 { margin: 0; font-size: 13px; font-weight: 800; color: var(--text-1); display: flex; align-items: center; gap: 8px; flex: none; }
-  h2::before { content: ''; width: 3px; height: 14px; border-radius: 2px; background: linear-gradient(#22D3EE, #A78BFA); }
-  h2 em { margin-left: auto; font-style: normal; font-size: 11px; font-weight: 700; color: var(--text-3); }
-  h2.sub { margin-top: 6px; }
-  h2.warn::before { background: linear-gradient(#FBBF24, #F43F5E); }
-  .pulse { display: none; }
+  .card { min-height: 0; gap: 6px; overflow: hidden; }
+  .ol-h { flex: none; }
+  .ol-h.sub { margin-top: 6px; }
+  .ol-h.warn::before { background: linear-gradient(#FB923C, #F43F5E); }
   .muted { margin: 0; font-size: 12px; color: var(--text-3); line-height: 1.5; }
   .muted.ok { color: #6ee7b7; }
-  ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; min-height: 0; }
-  li a { display: grid; align-items: center; gap: 8px; padding: 5px 7px; border-radius: 9px; transition: background .15s; }
-  li a:hover { background: rgba(255, 255, 255, .05); }
-  li a:focus-visible, .q:focus-visible, .tile:focus-visible { outline: 2px solid #22D3EE; outline-offset: 1px; }
-  .who { display: flex; flex-direction: column; min-width: 0; }
-  .who b { font-size: 12.5px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .who small { font-size: 10.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--sc, #94A3B8); box-shadow: 0 0 8px var(--sc, #94A3B8); }
-  .dot.live { --sc: #22D3EE; animation: blink 1.3s ease-in-out infinite; }
-  @keyframes blink { 50% { opacity: .35; } }
+  .ol-list { min-height: 0; gap: 3px; }
+  .ol-row { padding: 5px 7px; gap: 8px; }
+  .ol-row-txt b { font-size: 12.5px; }
 
-  .live { flex: none; max-height: 34%; overflow: auto; }
-  .live li a { grid-template-columns: 10px minmax(0, 1fr) auto; background: linear-gradient(90deg, color-mix(in srgb, var(--oc) 14%, transparent), transparent); border: 1px solid color-mix(in srgb, var(--oc) 25%, transparent); }
-  .el { font-size: 12px; font-weight: 800; color: #67e8f9; }
+  .livelist { flex: none; max-height: 34%; overflow: auto; }
+  .el { font-size: 12px; font-weight: 800; }
   .runs { flex: 1; overflow: auto; }
-  .runs li a { grid-template-columns: 10px minmax(0, 1fr) auto; }
   .meta { display: flex; flex-direction: column; align-items: flex-end; font-size: 11px; color: var(--text-2); }
   .meta small { font-size: 10px; color: var(--text-3); }
 
   .offices { flex: 1; overflow: auto; }
-  .offices li a { grid-template-columns: 26px minmax(0, 1fr) 60px auto; }
   .offices li.off { opacity: .5; }
-  .mark { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; font: 800 9.5px var(--font-display, inherit);
-    color: color-mix(in srgb, var(--oc) 65%, white); background: color-mix(in srgb, var(--oc) 22%, transparent); box-shadow: 0 0 10px -3px var(--oc); }
-  .act { height: 5px; border-radius: 3px; background: color-mix(in srgb, var(--oc) 12%, var(--surface-2, #1f2230)); overflow: hidden; }
-  .act i { display: block; height: 100%; border-radius: 3px; background: var(--oc); box-shadow: 0 0 8px var(--oc); }
-  .now { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; color: #67e8f9; white-space: nowrap; min-width: 64px; justify-content: flex-end; }
-  .now.dim { color: var(--text-3); font-weight: 600; }
+  .act { flex: none; width: 60px; }
+  .now { min-width: 64px; justify-content: flex-end; }
 
   .days { flex: none; height: 64px; display: flex; align-items: flex-end; gap: 6px; padding: 2px 2px 0; }
   .days .col { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 3px; }
   .days i { width: 100%; border-radius: 4px 4px 2px 2px; background: linear-gradient(#FBBF24, color-mix(in srgb, #FB923C 70%, transparent)); box-shadow: 0 0 10px -2px #FBBF24; }
   .days small { font-size: 9.5px; color: var(--text-3); text-transform: uppercase; }
   .models { flex: none; }
-  .models li { display: grid; grid-template-columns: minmax(0, 1fr) 70px auto; gap: 8px; align-items: center; padding: 3px 4px; }
-  .bar { height: 6px; border-radius: 3px; background: rgba(251, 191, 36, .12); overflow: hidden; }
+  .bar { flex: none; width: 70px; height: 6px; border-radius: 3px; background: rgba(251, 191, 36, .12); overflow: hidden; }
   .bar i { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #FBBF24, #F472B6); box-shadow: 0 0 8px rgba(251, 191, 36, .6); }
   .cost { font-size: 11.5px; font-weight: 800; color: #fde68a; min-width: 62px; text-align: right; }
   .attn { flex: 1; overflow: auto; }
-  .attn li a { grid-template-columns: 10px minmax(0, 1fr) auto; --sc: #FBBF24; }
-  .attn li.hot a { --sc: #F43F5E; background: color-mix(in srgb, #F43F5E 8%, transparent); }
+  .attn li.hot .ol-row { background: color-mix(in srgb, #F43F5E 8%, var(--surface-2)); border-color: color-mix(in srgb, #F43F5E 30%, transparent); }
   .go { color: var(--text-3); font-size: 16px; }
 
   .loading { position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(167, 139, 250, .05), transparent); background-size: 200% 100%; animation: shimmer 1.2s linear infinite; pointer-events: none; }
   @keyframes shimmer { to { background-position: -200% 0; } }
-  @media (prefers-reduced-motion: reduce) { .dot.live, .hero.busy .ring .arc, .loading { animation: none; } }
-  @media (max-height: 760px) { .hero { padding: 8px 14px; } .ring, .ring svg { width: 60px; height: 60px; } .htxt h1 { font-size: 18px; } .q { padding: 6px 9px; min-width: 64px; } .tile b { font-size: 18px; } .days { height: 48px; } }
+  @media (prefers-reduced-motion: reduce) { .loading { animation: none; } a.ol-kpi { transition: none; } }
+  @media (max-height: 760px) { .ol-kpi b { font-size: 18px; } .ol-title { font-size: 19px; } .days { height: 48px; } }
   /* Narrow: one column that scrolls; every card takes its content's height, capped, and scrolls its own list. */
   @media (max-width: 1100px) {
     .body { overflow-y: auto; overscroll-behavior: contain; }
-    .hero { grid-template-columns: auto minmax(0, 1fr); } .quick { grid-column: 1 / -1; grid-template-columns: repeat(6, minmax(0, 1fr)); }
-    .q { min-width: 0; }
-    .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .ol-kpis.tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .cols { flex: none; grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-auto-rows: auto; }
     .card { max-height: 70vh; }
-    .live { max-height: 30vh; }
+    .livelist { max-height: 30vh; }
     .runs, .offices, .attn { flex: 0 1 auto; }
   }
   @media (max-width: 700px) {
     .body { padding: 10px 12px 12px; }
-    .hero { padding: 10px 12px; gap: 12px; }
-    .ring, .ring svg { width: 60px; height: 60px; }
-    .htxt h1 { font-size: 17px; }
-    .quick { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-    .tile b { font-size: 19px; }
-    .offices li a { grid-template-columns: 26px minmax(0, 1fr) auto; }
+    .ol-title { font-size: 17px; }
+    .ol-kpis.tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .ol-kpi b { font-size: 19px; }
     .offices .act { display: none; }
-    .models li { grid-template-columns: minmax(0, 1fr) 48px auto; }
+    .bar { width: 48px; }
   }
 </style>

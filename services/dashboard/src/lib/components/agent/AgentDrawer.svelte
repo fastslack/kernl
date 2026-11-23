@@ -328,6 +328,21 @@
     }
   }
 
+  // ── Head look (office look): the state as one colored dot ────────
+  // working > review > error (breaker tripped) > paused > idle.
+  const STATE_COLOR = { working: '#34D399', review: '#FB923C', paused: '#60A5FA', idle: '#94A3B8', off: '#64748B', error: '#F43F5E' } as const;
+  $: headState = !agent ? 'off'
+    : running ? 'working'
+    : agent.under_revision ? 'review'
+    : autoPaused ? 'error'
+    : agent.active !== 1 ? 'paused'
+    : 'idle';
+  $: headStateColor = STATE_COLOR[headState as keyof typeof STATE_COLOR];
+  function initialsOf(name: string): string {
+    const w = String(name || '').trim().split(/\s+/).filter(Boolean);
+    return ((w[0]?.[0] ?? '') + (w.length > 1 ? w[w.length - 1][0] : (w[0]?.[1] ?? ''))).toUpperCase() || '·';
+  }
+
   /** ¿El tab abierto lo aporta una extensión? Decide si se pinta el slot extra. */
   $: extraTabOpen = extraTabs.some((t) => t.id === panelTab);
 </script>
@@ -339,17 +354,18 @@
            the actions on the same band — they used to take a row of their own
            under a three-line identity block, and the panel lost ~70px of
            height to it. -->
-      <div class="ip-head">
+      <div class="ip-head ol-mhead">
         <!-- The id is rarely read, so it left the meta line (where it was
              always the part cut off) for the glyph: hover shows it, a click
              copies it. -->
-        <button class="ip-glyph" type="button"
+        <button class="ip-glyph ol-mark lg" type="button" style="--oc:{flow?.color || '#22D3EE'}"
                 title={`${$t('agent.drawer.agent_id_title')}: ${agent.id} — ${$t('agent.drawer.copy_id_title')}`}
                 aria-label={$t('agent.drawer.copy_id_title')}
                 on:click|stopPropagation={() => copy(agent.id, 'agent-id')}>
-          {copiedKey === 'agent-id' ? '✓' : agentType(agent) === 'llm' ? '◆' : agentType(agent) === 'claude_code' ? '◇' : agentType(agent) === 'function' ? '▣' : '▲'}
+          {copiedKey === 'agent-id' ? '✓' : initialsOf(agent.name)}
         </button>
-        <div class="ip-head-txt">
+        <div class="ip-head-txt ol-ttl">
+          <p class="ol-eyebrow ip-eyebrow">{flow?.name ?? $t('office.rail.unassigned')}{agent.role ? ` · ${agent.role}` : ''}</p>
           <div class="ip-title-row">
             {#if editingName}
               <div class="ip-name-edit">
@@ -371,7 +387,7 @@
                   on:click={() => dispatch('rename-cancel')} disabled={savingName}>×</button>
               </div>
             {:else}
-              <div class="ip-name">{agent.name}</div>
+              <div class="ip-name ol-title">{agent.name}</div>
             {/if}
             <!-- The schedule switch. It used to be a separate Pausar/Reanudar
                  button next to Ejecutar; both live on the state they change
@@ -379,12 +395,12 @@
             {#if agent.system_protected}
               <!-- The Chief and the core system agents are never switched
                    off; the kernel refuses it too (409). -->
-              <span class="ip-state ip-state-on ip-state-locked" title={$t('agent.head.always_on_title')}>
+              <span class="ip-state ol-st ip-state-locked" class:live={headState === 'working'} style="--sc:{headStateColor}" title={$t('agent.head.always_on_title')}>
                 <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
                 <span class="ip-state-l">{$t('agent.head.always_on')}</span>
               </span>
             {:else}
-            <button class="ip-state" type="button" role="switch" aria-checked={agent.active === 1}
+            <button class="ip-state ol-st" type="button" role="switch" class:live={headState === 'working'} style="--sc:{headStateColor}" aria-checked={agent.active === 1}
                     class:ip-state-on={agent.active === 1} class:ip-state-off={agent.active !== 1}
                     class:ip-state-tripped={autoPaused}
                     disabled={togglingPause}
@@ -394,7 +410,7 @@
                         ? $t('agent.head.state_auto_title', { n: String(agent.consecutive_failures) })
                         : $t('agent.head.state_paused_title') + ' ' + $t('agent.head.switch_to_resume')}
                     on:click={() => dispatch('resume')}>
-              <span class="ip-sw" aria-hidden="true"><span class="ip-sw-knob"></span></span>
+              <i aria-hidden="true"></i>
               <span class="ip-state-l">{togglingPause
                 ? '…'
                 : agent.active === 1
@@ -457,7 +473,7 @@
                              providers={headProviders} loading={headProvidersLoading} requiresTools={true} engineFollows
                              busy={headSaving} disabled={headSaving} error={headModelError}
                              on:change={(e) => setHeadModel(e.detail)}>
-                  <span class="ip-chip ip-chip-llm ip-chip-btn" class:ip-chip-err={!!headModelError}
+                  <span class="ip-chip ol-chip soft ip-chip-llm ip-chip-btn" class:ip-chip-err={!!headModelError}
                         title={headModelError || $t('agent.head.change_model_title')}>
                     <b>{$t('agent.head.kind_llm')}</b>{#if agent.model}<span class="ip-chip-v">{agent.model}</span>{/if}{#if fb > 0}<span class="ip-chip-x" title={$t('agent.drawer.fallbacks_title')}>+{fb}</span>{/if}<span class="ip-chip-caret" aria-hidden="true">{headSaving || headProvidersLoading ? '◌' : '▾'}</span>
                   </span>
@@ -470,14 +486,14 @@
                              providers={headProviders} loading={headProvidersLoading} requiresTools={true} engineFollows
                              busy={headSaving} disabled={headSaving} error={headModelError}
                              on:change={(e) => setHeadModel(e.detail)}>
-                  <span class="ip-chip ip-chip-sdk ip-chip-btn" class:ip-chip-err={!!headModelError || ccMissing}
+                  <span class="ip-chip ol-chip soft ip-chip-sdk ip-chip-btn" class:ip-chip-err={!!headModelError || ccMissing}
                         title={headModelError || (ccMissing ? $t('llm.cc_agent_not_connected') : $t('agent.head.change_model_title'))}>
                     <b>Claude Code</b><span class="ip-chip-v">{agent.model || CLAUDE_CODE_DEFAULT_MODEL}</span><span class="ip-chip-caret" aria-hidden="true">{headSaving || headProvidersLoading ? '◌' : '▾'}</span>
                   </span>
                 </ModelPicker>
               </span>
             {:else}
-              <span class="ip-chip ip-chip-script" title={agent.builtin_handler ? String(agent.builtin_handler) : $t('agent.drawer.kind_script_title')}>
+              <span class="ip-chip ol-chip soft ip-chip-script" title={agent.builtin_handler ? String(agent.builtin_handler) : $t('agent.drawer.kind_script_title')}>
                 <b>{agentType(agent) === 'function' ? $t('agent.head.kind_function') : $t('agent.head.kind_script')}</b>{#if agent.builtin_handler}<span class="ip-chip-v">{String(agent.builtin_handler).replace(/^script:/, '')}</span>{/if}
               </span>
             {/if}
@@ -491,7 +507,7 @@
              run is in flight (POST /api/agents/stop, raised as `stop`). The
              glyph is one clip-path that morphs triangle ⇄ square, and a ring
              turns around it while the agent works. -->
-        <button class="ip-btn ip-run" class:ip-run-on={running} class:ip-run-wait={starting || stopping}
+        <button class="ol-btn ip-run" class:danger={running} class:ip-run-on={running} class:ip-run-wait={starting || stopping}
                 type="button"
                 aria-label={running ? $t('agent.head.stop') : $t('agent.head.run')}
                 title={running
@@ -511,22 +527,22 @@
           </span>
         </button>
         {#if timeMachine}
-          <button class="ip-btn" type="button" on:click={() => dispatch('timemachine')} title={$t('tm.agent.open')}>
+          <button class="ol-btn ghost ip-btn" type="button" on:click={() => dispatch('timemachine')} title={$t('tm.agent.open')}>
             <span class="ip-btn-ico">⏱</span><span>{$t('tm.title')}</span>
           </button>
         {/if}
         {#if creativosOffice}
-          <button class="ip-btn ip-btn-live" on:click={() => (sceneOpen = true)}
+          <button class="ol-btn ghost ip-btn ip-btn-live" on:click={() => (sceneOpen = true)}
                   title="Watch this office draw, live, without leaving the office">
             <span class="ip-btn-ico">🎬</span><span>Ver en vivo</span>
           </button>
         {/if}
         {#if agent.under_revision}
-          <button class="ip-btn ip-btn-accept" on:click={() => dispatch('revision', { mode: 'accept' })} disabled={revisionBusy}
+          <button class="ol-btn ghost ip-btn ip-btn-accept" on:click={() => dispatch('revision', { mode: 'accept' })} disabled={revisionBusy}
                   title={$t('agent.drawer.accept_title')}>
             <span class="ip-btn-ico">✓</span><span>{revisionBusy ? '…' : 'Accept'}</span>
           </button>
-          <button class="ip-btn ip-btn-reject" on:click={() => dispatch('revision', { mode: 'reject' })} disabled={revisionBusy}
+          <button class="ol-btn danger ip-btn ip-btn-reject" on:click={() => dispatch('revision', { mode: 'reject' })} disabled={revisionBusy}
                   title={$t('agent.drawer.reject_title')}>
             <span class="ip-btn-ico">✗</span><span>{revisionBusy ? '…' : 'Reject'}</span>
           </button>
@@ -578,32 +594,32 @@
       {/if}
 
       <!-- Tabs -->
-      <div class="ip-tabs">
-        <button class="ip-tab" class:active={panelTab === 'info'} on:click={() => selectTab('info')}>{$t('agent.drawer.tab_overview')}</button>
-        <button class="ip-tab" class:active={panelTab === 'config'} on:click={() => selectTab('config')}>{$t('agent.drawer.tab_config')}</button>
+      <div class="ip-tabs"><div class="ol-seg">
+        <button class="ip-tab" class:active={panelTab === 'info'} class:on={panelTab === 'info'} on:click={() => selectTab('info')}>{$t('agent.drawer.tab_overview')}</button>
+        <button class="ip-tab" class:active={panelTab === 'config'} class:on={panelTab === 'config'} on:click={() => selectTab('config')}>{$t('agent.drawer.tab_config')}</button>
         {#if running && $$slots.live}
-          <button class="ip-tab ip-tab-live" class:active={panelTab === 'live'} on:click={() => selectTab('live')}>
+          <button class="ip-tab ip-tab-live" style="--c:#F43F5E" class:active={panelTab === 'live'} class:on={panelTab === 'live'} on:click={() => selectTab('live')}>
             <span class="live-dot"></span>LIVE
           </button>
         {/if}
         {#if canUseSkills}
-          <button class="ip-tab" class:active={panelTab === 'skills'} on:click={() => selectTab('skills')}>
-            Skills{#if skillCount}<span class="ip-tab-count">{skillCount}</span>{/if}
+          <button class="ip-tab" class:active={panelTab === 'skills'} class:on={panelTab === 'skills'} on:click={() => selectTab('skills')}>
+            Skills{#if skillCount}<em class="ip-tab-count">{skillCount}</em>{/if}
           </button>
         {/if}
-        <button class="ip-tab" class:active={panelTab === 'history'} on:click={() => selectTab('history')}>
-          History{#if historyCount}<span class="ip-tab-count">{historyCount}</span>{/if}
+        <button class="ip-tab" class:active={panelTab === 'history'} class:on={panelTab === 'history'} on:click={() => selectTab('history')}>
+          History{#if historyCount}<em class="ip-tab-count">{historyCount}</em>{/if}
         </button>
         {#each extraTabs as tab (tab.id)}
-          <button class="ip-tab ip-tab-ext" class:active={panelTab === tab.id} on:click={() => selectTab(tab.id)}>{tab.label}</button>
+          <button class="ip-tab ip-tab-ext" class:active={panelTab === tab.id} class:on={panelTab === tab.id} on:click={() => selectTab(tab.id)}>{tab.label}</button>
         {/each}
         {#if $$slots.chat}
-          <button class="ip-tab" class:active={panelTab === 'chat'} on:click={() => selectTab('chat')}>{$t('agent.drawer.tab_message')}</button>
+          <button class="ip-tab" class:active={panelTab === 'chat'} class:on={panelTab === 'chat'} on:click={() => selectTab('chat')}>{$t('agent.drawer.tab_message')}</button>
         {/if}
         {#if $$slots.workspace}
-          <button class="ip-tab" class:active={panelTab === 'workspace'} on:click={() => selectTab('workspace')}>Workspace{#if workspaceCount}<span class="ip-tab-count">{workspaceCount}</span>{/if}</button>
+          <button class="ip-tab" class:active={panelTab === 'workspace'} class:on={panelTab === 'workspace'} on:click={() => selectTab('workspace')}>Workspace{#if workspaceCount}<em class="ip-tab-count">{workspaceCount}</em>{/if}</button>
         {/if}
-      </div>
+      </div></div>
 
       <!-- El cuerpo de cada tab sigue en quien monta el drawer. El slot se
            renderiza sólo con su tab abierto, así que el contenido se crea y se
@@ -733,31 +749,21 @@
 
   /* ── Header ───────────────────── */
   .ip-head{
-    display:flex;align-items:center;gap:12px;flex-wrap:wrap;
-    padding:12px 14px 12px 16px;
-    border-bottom:1px solid rgba(120,130,160,.08);
+    flex-wrap:wrap;gap:10px 12px;
+    padding:10px 12px 10px 14px;
+    border-bottom:1px solid var(--border);
     flex-shrink:0;
   }
-  .ip-glyph{
-    width:36px;height:36px;border-radius:9px;
-    display:grid;place-items:center;
-    font:500 15px 'JetBrains Mono',monospace;
-    color:var(--flow-color);
-    background:color-mix(in srgb, var(--flow-color) 10%, transparent);
-    border:1px solid color-mix(in srgb, var(--flow-color) 32%, transparent);
-    flex-shrink:0;padding:0;cursor:copy;transition:background .15s, border-color .15s;
-  }
-  .ip-glyph:hover{background:color-mix(in srgb, var(--flow-color) 18%, transparent);border-color:color-mix(in srgb, var(--flow-color) 55%, transparent)}
-  .ip-glyph:focus-visible{outline:2px solid rgba(120,170,255,.7);outline-offset:2px}
+  /* The mark doubles as the copy-id button. */
+  .ip-glyph{border:0;padding:0;cursor:copy;transition:filter .15s}
+  .ip-glyph:hover{filter:brightness(1.2)}
+  .ip-glyph:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+  .ip-eyebrow{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   /* One rhythm for the whole header. The name, the identity row and the tag
      row used ad-hoc 4px/5px margins, so nothing lined up with anything. */
-  .ip-head-txt{min-width:0;flex:1 1 240px;display:flex;flex-direction:column;gap:4px}
+  .ip-head-txt{min-width:0;flex:1 1 240px;display:flex;flex-direction:column;gap:3px}
   .ip-title-row{display:flex;align-items:center;gap:6px;min-width:0}
-  .ip-name{
-    font:600 17px/1.2 'Syne',sans-serif;min-width:0;
-    color:#f0f2f7;letter-spacing:-.01em;
-    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  }
+  .ip-name{min-width:0;margin:0}
   .ip-name-edit-btn{
     border:none;background:transparent;color:#7a7f92;cursor:pointer;
     font-size:13px;padding:2px 5px;border-radius:5px;opacity:0;
@@ -767,7 +773,7 @@
   .ip-name-edit-btn:hover{color:#ecc968;background:rgba(201,168,76,0.12)}
   .ip-name-edit{display:flex;align-items:center;gap:6px}
   .ip-name-input{
-    font:600 17px/1.1 'Syne',sans-serif;color:#f0f2f7;
+    font:700 17px/1.1 var(--font-display);color:var(--text-1);
     background:rgba(10,12,22,0.7);
     border:1px solid rgba(201,168,76,0.4);
     border-radius:3px;padding:3px 8px;min-width:180px;flex:1;outline:none;
@@ -783,24 +789,25 @@
   .ip-name-btn:disabled{opacity:0.5;cursor:wait}
   /* Second line: two chips of ONE shape — where it sits, what runs it. */
   .ip-meta{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0;white-space:nowrap}
-  .ip-chip, .ip-flow, .ip-office{
+  .ip-flow, .ip-office{
     display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;min-width:0;
     border-radius:6px;font:500 11px 'Manrope',sans-serif;color:#c4c8d6;
     background:rgba(255,255,255,.03);border:1px solid rgba(120,130,160,.18);
   }
-  .ip-chip b{font-weight:700;color:var(--chip, #c4c8d6)}
-  .ip-chip-v{font:500 11px 'JetBrains Mono',monospace;color:#c9d0e0;overflow:hidden;text-overflow:ellipsis}
-  .ip-chip-v::before{content:'';display:inline-block;width:1px;height:10px;margin:0 7px 0 1px;background:rgba(120,130,160,.3);vertical-align:-1px}
-  .ip-chip-x{font:600 10px 'JetBrains Mono',monospace;color:#8a8fa8}
-  .ip-chip-llm{--chip:#6fe4b8}
-  .ip-chip-sdk{--chip:#c8a8ff}
-  .ip-chip-script{--chip:#f0a040}
+  .ip-chip{min-width:0;gap:0}
+  .ip-chip b{font-weight:800}
+  .ip-chip-v{font:500 10.5px var(--font-mono, monospace);color:var(--text-1);overflow:hidden;text-overflow:ellipsis}
+  .ip-chip-v::before{content:'';display:inline-block;width:1px;height:10px;margin:0 6px;background:color-mix(in srgb, var(--c) 45%, transparent);vertical-align:-1px}
+  .ip-chip-x{margin-left:5px;font:600 10px var(--font-mono, monospace);color:var(--text-3)}
+  .ip-chip-llm{--c:#34D399}
+  .ip-chip-sdk{--c:#A78BFA}
+  .ip-chip-script{--c:#FB923C}
   /* The model chip is the model picker's trigger. */
   .ip-chip-pick{display:inline-flex;min-width:0}
   .ip-chip-btn{cursor:pointer;transition:border-color .12s, background .12s}
-  .ip-chip-btn:hover{border-color:color-mix(in srgb, var(--chip) 55%, transparent);background:color-mix(in srgb, var(--chip) 8%, transparent)}
-  .ip-chip-caret{margin-left:7px;font-size:9px;color:#8a8fa8}
-  .ip-chip-err{border-color:rgba(239,93,110,.65)}
+  .ip-chip-btn:hover{border-color:var(--c);background:color-mix(in srgb, var(--c) 24%, transparent)}
+  .ip-chip-caret{margin-left:6px;font-size:9px;color:var(--text-3)}
+  .ip-chip-err{border-color:#F43F5E}
   .ip-flow{color:#dde0ea;font-weight:600}
   .ip-flow::before{content:'';width:8px;height:8px;border-radius:2px;background:var(--f, var(--flow-color))}
   .ip-office { position: relative; max-width: 200px; cursor: pointer; color: #dde0ea; font-weight: 600; transition: border-color .12s, background .12s; }
@@ -857,43 +864,17 @@
   /* One button shape. Only "Ejecutar" is filled; everything else is the same
      quiet outline, and the colour that says what a button does lives in its
      icon — four differently filled buttons in a row read as four warnings. */
-  .ip-btn{
-    display:inline-flex;align-items:center;gap:6px;
-    height:32px;padding:0 12px;border-radius:8px;
-    font:600 12px 'Manrope',sans-serif;letter-spacing:0;
-    cursor:pointer;transition:background .15s, border-color .15s, color .15s;
-    border:1px solid rgba(120,130,160,.22);
-    background:rgba(255,255,255,.03);color:#dde0ea;
-  }
-  .ip-btn:hover:not(:disabled){background:rgba(255,255,255,.07);border-color:rgba(120,130,160,.4)}
-  .ip-btn:focus-visible{outline:2px solid rgba(120,170,255,.7);outline-offset:2px}
-  .ip-btn:disabled{opacity:.5;cursor:wait}
+  .ip-btn{height:30px;padding:0 11px;font-size:12px}
   .ip-btn-ico{font:500 11px 'JetBrains Mono',monospace;color:#8a8fa8}
   /* Watch-live link (CREATIVOS → Scene Studio). Violet to match that office's
      colour, so the way through is findable without reading the label. */
-  .ip-btn-live{
-    background:rgba(168,85,247,.10);
-    border-color:rgba(168,85,247,.38);
-    color:#c9a2fb;
-  }
-  .ip-btn-live:hover{background:rgba(168,85,247,.20);border-color:rgba(168,85,247,.60)}
+  .ip-btn-live{border-color:rgba(168,85,247,.45);color:#c9a2fb}
   /* REVISION resolution buttons — only shown when agent.under_revision = 1.
    * Green accept (mirror of ip-btn-resume), orange reject (matches the REVISION
    * pill that lives over the agent's head in the 3D office). */
-  .ip-btn-accept{
-    background:rgba(120,220,140,.08);
-    border-color:rgba(120,220,140,.35);
-    color:#78dc8c;
-  }
-  .ip-btn-accept:hover:not(:disabled){background:rgba(120,220,140,.18);border-color:rgba(120,220,140,.55)}
-  .ip-btn-accept:disabled{opacity:.5;cursor:wait}
-  .ip-btn-reject{
-    background:rgba(251,146,60,.08);
-    border-color:rgba(251,146,60,.4);
-    color:#fb923c;
-  }
-  .ip-btn-reject:hover:not(:disabled){background:rgba(251,146,60,.2);border-color:rgba(251,146,60,.6)}
-  .ip-btn-reject:disabled{opacity:.5;cursor:wait}
+  /* Revision: the icon carries the colour (accept green; reject is .danger). */
+  .ip-btn-accept .ip-btn-ico{color:#34D399}
+  .ip-btn-reject .ip-btn-ico{color:inherit}
   .ip-start-msg{
     font:500 10px 'JetBrains Mono',monospace;
     color:#8a8fa8;margin-left:4px;
@@ -904,61 +885,24 @@
 
   /* ── Tabs ─────────────────────── */
   .ip-tabs{
-    display:flex;gap:2px;
-    padding:0 18px;
-    border-bottom:1px solid rgba(120,130,160,.08);
-    flex-shrink:0;
+    padding:8px 12px;
+    border-bottom:1px solid var(--border);
+    flex-shrink:0;overflow-x:auto;scrollbar-width:none;
   }
-  .ip-tab{
-    position:relative;
-    padding:12px 16px;
-    font:600 10px 'Syne',sans-serif;letter-spacing:1px;text-transform:uppercase;
-    background:none;border:none;
-    color:#6a6f82;cursor:pointer;transition:color .15s;
-    display:inline-flex;align-items:center;gap:6px;
-  }
-  .ip-tab:hover{color:#b0b5c8}
-  .ip-tab.active{color:#f0f2f7}
-  .ip-tab.active::after{
-    content:'';position:absolute;bottom:-1px;left:12px;right:12px;height:2px;
-    background:var(--flow-color);border-radius:2px 2px 0 0;
-  }
-  .ip-tab-count{
-    font:600 9px 'JetBrains Mono',monospace;
-    padding:1px 5px;border-radius:6px;
-    background:rgba(120,130,160,.15);color:#a0a5b8;
-  }
+  .ip-tabs::-webkit-scrollbar{display:none}
   /* ── Run state ─────────────────
      A pill next to the name: the first thing read, with the word, not only
      the colour. */
+  /* The state: an ol-st dot that is also the schedule switch. */
   .ip-state{
-    display:inline-flex;align-items:center;gap:7px;flex:none;
-    height:24px;padding:0 10px 0 4px;border-radius:999px;cursor:pointer;
-    font:600 11px 'Manrope',sans-serif;
-    background:color-mix(in srgb, currentColor 10%, transparent);
-    border:1px solid color-mix(in srgb, currentColor 30%, transparent);
-    transition:color .25s, background .25s, border-color .25s;
+    flex:none;height:22px;padding:0 9px;border-radius:999px;cursor:pointer;
+    background:color-mix(in srgb, var(--sc) 12%, transparent);
+    border:1px solid color-mix(in srgb, var(--sc) 35%, transparent);
+    transition:background .2s, border-color .2s;
   }
-  .ip-state:hover:not(:disabled){background:color-mix(in srgb, currentColor 18%, transparent)}
-  .ip-state:focus-visible{outline:2px solid rgba(120,170,255,.7);outline-offset:2px}
+  .ip-state:hover:not(:disabled){background:color-mix(in srgb, var(--sc) 22%, transparent)}
+  .ip-state:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
   .ip-state:disabled{cursor:wait;opacity:.75}
-  /* The switch inside the pill: knob right = on. */
-  .ip-sw{
-    position:relative;width:26px;height:16px;border-radius:999px;flex:none;
-    background:color-mix(in srgb, currentColor 28%, transparent);
-    transition:background .25s;
-  }
-  .ip-sw-knob{
-    position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;
-    background:currentColor;box-shadow:0 1px 3px rgba(0,0,0,.4);
-    transition:transform .28s cubic-bezier(.34,1.56,.64,1);
-  }
-  .ip-state-on .ip-sw-knob{transform:translateX(10px)}
-  .ip-state-on{color:#78dc8c}
-  .ip-state-off{color:#fbbf24}
-  /* An agent the kernel stopped reads as a fault, not as a warning: the
-     operator did not choose this state and something upstream is broken. */
-  .ip-state-tripped{color:#f87171}
 
   .ip-tripped{
     display:flex; gap:9px; align-items:flex-start;
@@ -981,24 +925,15 @@
   }
   .ip-tripped-hint{font-size:10.5px; color:var(--text-3)}
   .ip-tripped-fix{font-size:12px; color:var(--text-1)}
-  @media (prefers-reduced-motion: reduce){ .ip-sw-knob, .ip-state{transition:none} }
+  @media (prefers-reduced-motion: reduce){ .ip-state{transition:none} }
 
   /* ── Run ⇄ Stop ─────────────────
      One button. Idle: filled green, ▶. Running: red outline, ◼, a ring
      turning around the glyph. The glyph is a single clip-path whose four
      points move from a triangle to a square, so the change is a morph and
      not a swap. */
-  .ip-run{
-    background:#78dc8c;color:#0a0e14;border-color:#78dc8c;
-    min-width:112px;justify-content:center;
-    transition:background .25s, color .25s, border-color .25s, box-shadow .25s;
-  }
-  .ip-run:hover:not(:disabled){background:#8ee4a0;border-color:#8ee4a0}
-  .ip-run-on{
-    background:rgba(240,71,112,.1);color:#ff8fa8;border-color:rgba(240,71,112,.55);
-    box-shadow:0 0 0 0 rgba(240,71,112,.4);animation:ip-run-pulse 1.8s ease-out infinite;
-  }
-  .ip-run-on:hover:not(:disabled){background:rgba(240,71,112,.2);border-color:rgba(240,71,112,.8)}
+  .ip-run{height:30px;min-width:104px;justify-content:center}
+  .ip-run-on{animation:ip-run-pulse 1.8s ease-out infinite}
   .ip-run:disabled{cursor:wait;opacity:.8}
   @keyframes ip-run-pulse{0%{box-shadow:0 0 0 0 rgba(240,71,112,.35)}70%{box-shadow:0 0 0 7px rgba(240,71,112,0)}100%{box-shadow:0 0 0 0 rgba(240,71,112,0)}}
   .ip-run-ico{position:relative;width:14px;height:14px;display:grid;place-items:center;flex:none}
@@ -1024,19 +959,7 @@
 
 
   /* ── LIVE tab ── */
-  .ip-tab-live{
-    position:relative;display:flex;align-items:center;gap:6px;
-    color:#ef5d6e !important;
-    background:linear-gradient(180deg, rgba(239,93,110,.12), rgba(239,93,110,.04)) !important;
-    border-color:rgba(239,93,110,.35) !important;
-    font-weight:700;letter-spacing:.5px;
-  }
-  .ip-tab-live.active{
-    background:rgba(239,93,110,.22) !important;
-    border-color:#ef5d6e !important;
-    color:#fff !important;
-    box-shadow:0 0 12px rgba(239,93,110,.35);
-  }
+  .ip-tab-live{color:#fda4af !important}
   .live-dot{
     width:7px;height:7px;border-radius:50%;background:#ef5d6e;
     box-shadow:0 0 8px #ef5d6e;
@@ -1103,5 +1026,5 @@
     flex:1;min-height:0;width:100%;
     border:0;display:block;background:#0b0d14;
   }
-  .ip-state-locked{cursor:default;gap:6px}
+  .ip-state-locked{cursor:default}
 </style>

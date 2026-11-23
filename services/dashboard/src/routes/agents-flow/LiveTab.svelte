@@ -128,10 +128,10 @@
     </div>
   {/if}
   {#if !liveHeadEvent || !modelSwitches.includes(liveHeadEvent)}
-  <div class="live-hero">
+  <div class="ol-card live-hero" style="--oc:#34D399">
     <div class="live-hero-head">
-      <span class="live-badge"><span class="live-dot-big"></span>LIVE</span>
-      <span class="live-hero-name">{agentName}</span>
+      <span class="ol-st live live-badge" style="--sc:#34D399"><i></i>LIVE</span>
+      <span class="ol-name live-hero-name">{agentName}</span>
     </div>
     {#if liveHeadEvent}
       {@const hType = liveEventType(liveHeadEvent)}
@@ -187,19 +187,19 @@
 
   {/if}
 
-  <div class="live-timeline-head">
+  <div class="ol-h live-timeline-head">
     <span class="live-timeline-h">Activity</span>
-    <span class="ip-sec-c">{events.length}</span>
+    <em>{events.length}</em>
     {#if liveRunElapsedMs > 0 || liveRunTokensTotal > 0}
       <span class="live-totals">
-        {#if liveRunElapsedMs > 0}<span class="live-totals-chip live-totals-time" title="Wall-clock elapsed since the first event in this run">⏱ {liveFmtDelta(liveRunElapsedMs)}</span>{/if}
-        {#if liveRunTokensTotal > 0}<span class="live-totals-chip live-totals-tok" title="Cumulative tokens reported by the model so far">◉ {liveFmtTokens(liveRunTokensTotal)} tok</span>{/if}
+        {#if liveRunElapsedMs > 0}<span class="ol-chip soft live-totals-chip" style="--c:#60A5FA" title="Wall-clock elapsed since the first event in this run">⏱ {liveFmtDelta(liveRunElapsedMs)}</span>{/if}
+        {#if liveRunTokensTotal > 0}<span class="ol-chip soft live-totals-chip" style="--c:#34D399" title="Cumulative tokens reported by the model so far">◉ {liveFmtTokens(liveRunTokensTotal)} tok</span>{/if}
       </span>
     {/if}
   </div>
 
   {#if events.length === 0}
-    <div class="ip-empty">No events yet — stay tuned.</div>
+    <div class="ol-empty ip-empty">No events yet — stay tuned.</div>
   {:else}
     <ol class="live-timeline">
       {#each displayRows as row (row.kind === 'tools' ? row.key : liveEventKey(row.e))}
@@ -309,7 +309,7 @@
             {/if}
           </button>
           {#if etype === 'tool_result'}
-            {@const _cid = emailCommId(e.data.tool_name, String(e.data.content_preview ?? e.data.result ?? ''))}
+            {@const _cid = emailCommId(typeof e.data.tool_name === 'string' ? e.data.tool_name : undefined, String(e.data.content_preview ?? e.data.result ?? ''))}
             {#if _cid}
               <button class="email-view-link" on:click|stopPropagation={() => onOpenEmail(_cid)} title="Ver el email enviado (de/para/asunto/cuerpo)">📧 Ver email</button>
             {/if}
@@ -366,24 +366,15 @@
 
   .ip-body{
     flex:1;overflow-y:auto;overflow-x:hidden;
-    padding:16px 18px 24px;
+    padding:12px 14px 20px;
     scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
   }
   .ip-body::-webkit-scrollbar{width:6px}
   .ip-body::-webkit-scrollbar-thumb{background:rgba(120,130,160,.2);border-radius:3px}
   .ip-body::-webkit-scrollbar-thumb:hover{background:rgba(120,130,160,.35)}
 
-  .ip-empty{
-    font:500 11px 'Manrope',sans-serif;color:#6a6f82;
-    text-align:center;padding:24px 12px;
-  }
+  .ip-empty{padding:16px 12px;font-size:12px}
 
-  .ip-sec-c{
-    font:600 9px 'JetBrains Mono',monospace;
-    padding:1px 6px;border-radius:4px;
-    background:rgba(120,130,160,.15);color:#a0a5b8;
-    letter-spacing:0;text-transform:none;
-  }
 
   .ip-out-md{
     font:400 12.5px/1.6 'Manrope',sans-serif;color:#d0d4e0;
@@ -408,39 +399,10 @@
   }
 
   .live-body{padding-top:4px}
-  .live-hero{
-    margin:0 0 14px;padding:14px 16px;border-radius:12px;
-    background:
-      radial-gradient(600px 200px at 50% -80%, rgba(239,93,110,.18), transparent 70%),
-      linear-gradient(180deg, #161a28 0%, #0d1020 100%);
-    border:1px solid rgba(239,93,110,.25);
-    box-shadow:0 4px 22px rgba(239,93,110,.12);
-    position:relative;overflow:hidden;
-  }
-  .live-hero::before{
-    content:'';position:absolute;inset:0;pointer-events:none;
-    background:linear-gradient(90deg, transparent 0%, rgba(239,93,110,.08) 50%, transparent 100%);
-    animation:live-sheen 3s ease-in-out infinite;
-  }
-  @keyframes live-sheen{
-    0%{transform:translateX(-100%)}100%{transform:translateX(100%)}
-  }
-  .live-hero-head{
-    display:flex;align-items:center;gap:10px;margin-bottom:12px;position:relative;z-index:1;
-  }
-  .live-badge{
-    display:inline-flex;align-items:center;gap:6px;
-    padding:3px 9px;border-radius:5px;
-    background:rgba(239,93,110,.22);
-    border:1px solid rgba(239,93,110,.5);
-    font:700 9px 'Syne',sans-serif;letter-spacing:2px;color:#ff7a8a;
-  }
-  .live-dot-big{
-    width:8px;height:8px;border-radius:50%;background:#ff3b4f;
-    box-shadow:0 0 10px #ff3b4f, 0 0 18px rgba(255,59,79,.5);
-    animation:live-pulse 1s ease-in-out infinite;
-  }
-  .live-hero-name{font:600 13px 'Manrope',sans-serif;color:#e0e2ea}
+  .live-hero{margin:0 0 10px;gap:8px;position:relative;overflow:hidden}
+  .live-hero-head{display:flex;align-items:center;gap:10px;position:relative;z-index:1}
+  .live-badge{letter-spacing:.12em}
+  .live-hero-name{font-size:13px}
 
   .live-now{
     display:flex;align-items:flex-start;gap:14px;position:relative;z-index:1;
@@ -485,15 +447,8 @@
     flex-shrink:0;font:500 9px 'JetBrains Mono',monospace;color:#6a6f82;
   }
 
-  .live-timeline-head{
-    display:flex;align-items:center;justify-content:space-between;
-    padding:0 2px 6px;margin-bottom:4px;
-    border-bottom:1px solid rgba(120,130,160,.12);
-  }
-  .live-timeline-h{
-    font:700 9px 'Syne',sans-serif;letter-spacing:1.2px;
-    text-transform:uppercase;color:#8a8fa8;
-  }
+  .live-timeline-head{padding:0 2px 6px;margin-bottom:4px;border-bottom:1px solid var(--border)}
+  .live-timeline-head em{margin-left:0}
 
   .live-timeline{
     list-style:none;margin:0;padding:0 0 0 20px;position:relative;
@@ -579,11 +534,6 @@
     font:600 10px 'JetBrains Mono',monospace;color:#d0b87a;flex-shrink:0;
     padding:1px 5px;border-radius:3px;background:rgba(208,184,122,.10);
   }
-  .live-cat-shell  .live-step-tool{color:#fbbf24;background:rgba(251,191,36,.10)}
-  .live-cat-fs     .live-step-tool{color:#6aa0ff;background:rgba(106,160,255,.10)}
-  .live-cat-web    .live-step-tool{color:#4dd6e0;background:rgba(77,214,224,.10)}
-  .live-cat-kernel .live-step-tool{color:#5fdba0;background:rgba(95,219,160,.10)}
-  .live-cat-mcp    .live-step-tool{color:#c693ff;background:rgba(198,147,255,.10)}
   /* The human-readable summary — takes the rest of the row and truncates
      gracefully when the description is long. */
   .live-step-text{
@@ -711,15 +661,7 @@
   
   /* ── Totals row inside the timeline header — current run elapsed + tok */
   .live-totals{display:inline-flex;gap:6px;margin-left:auto}
-  .live-totals-chip{
-    display:inline-flex;align-items:center;gap:3px;
-    padding:2px 7px;border-radius:4px;
-    font:600 10px 'JetBrains Mono',monospace;letter-spacing:.4px;
-    background:rgba(120,130,160,.10);color:#a8b0c8;
-    border:1px solid rgba(120,130,160,.15);
-  }
-  .live-totals-time{color:#9ec0ef;background:rgba(106,160,255,.10);border-color:rgba(106,160,255,.22)}
-  .live-totals-tok {color:#bee2a3;background:rgba(120,220,140,.10);border-color:rgba(120,220,140,.22)}
+  .live-totals-chip{height:20px;padding:0 8px;font-size:10.5px}
 
   /* ── Acting on another agent ─────────────
      The steps the 3D world animates (the desk-to-desk shot of a message, an

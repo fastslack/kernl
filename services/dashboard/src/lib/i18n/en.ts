@@ -237,6 +237,8 @@ const en = {
   "live.d.error": "Could not read the details: {err}",
   "live.d.noCaller": "untagged",
   "live.d.bench": "Bench",
+  "bench.eyebrow": "The models at a glance",
+  "bench.question": "Which model should I use?",
   "bench.title": "Model bench",
   "bench.meta": "suite v{v} · run of {when} · {n} models",
   "bench.metaEmpty": "{tasks} tasks · {n} configured models",

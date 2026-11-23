@@ -54,10 +54,11 @@
   const firstLine = (s: string) => s.split('\n')[0].slice(0, 160);
 </script>
 
-<div class="qb-card" style="--qc:{color}">
+<div class="ol-card qb-card" style:--oc={color}>
   <div class="qb-head">
-    <span class="qb-dot"></span>
+    <span class="ol-mark qb-mark" aria-hidden="true">{agentName.slice(0, 2).toUpperCase()}</span>
     <span class="qb-title">{$t('office.chief.batch_title', { n: String(questions.length), agent: agentName })}</span>
+    <span class="ol-chip qb-n" style="--c:var(--gold)"><i aria-hidden="true"></i>{questions.length}</span>
   </div>
   <ul class="qb-list">
     {#each questions as q (q.id)}<li title={q.question}>{firstLine(q.question)}</li>{/each}
@@ -70,15 +71,15 @@
       <span>{confirming
         ? $t('office.chief.batch_confirm', { opt: confirming.label, n: String(questions.length) })
         : $t('office.chief.batch_confirm_dismiss', { n: String(questions.length) })}</span>
-      <button class="qb-yes" type="button" on:click={() => runAll(confirming ? confirming.run : dismiss)}>{$t('office.chief.batch_yes')}</button>
-      <button class="qb-no" type="button" on:click={() => { confirming = null; dismissing = false; }}>{$t('office.chief.batch_cancel')}</button>
+      <button class="ol-btn qb-sm" type="button" on:click={() => runAll(confirming ? confirming.run : dismiss)}>{$t('office.chief.batch_yes')}</button>
+      <button class="ol-btn ghost qb-sm" type="button" on:click={() => { confirming = null; dismissing = false; }}>{$t('office.chief.batch_cancel')}</button>
     </div>
   {:else}
     <div class="qb-picks">
-      {#each picks as p (p.label)}
-        <button class="qb-pick" type="button" on:click={() => (confirming = p)}>{$t('office.chief.batch_all', { opt: p.label })}</button>
+      {#each picks as p, k (p.label)}
+        <button class="ol-btn qb-sm qb-pick" class:ghost={k > 0} type="button" on:click={() => (confirming = p)}>{$t('office.chief.batch_all', { opt: p.label })}</button>
       {/each}
-      <button class="qb-pick qb-pick-dismiss" type="button" on:click={() => (dismissing = true)}>{$t('office.chief.batch_dismiss_all')}</button>
+      <button class="ol-btn ghost qb-sm qb-pick-dismiss" type="button" on:click={() => (dismissing = true)}>{$t('office.chief.batch_dismiss_all')}</button>
     </div>
   {/if}
 
@@ -89,33 +90,25 @@
 </div>
 
 <style>
-  .qb-card{ min-width:0;
-    background:linear-gradient(180deg, rgba(240,184,116,.10) 0%, rgba(240,184,116,.03) 100%);
-    border:1px solid rgba(240,184,116,.3); border-left:3px solid #f0b874; border-radius:8px; padding:10px 12px;
-  }
-  .qb-head{ display:flex; align-items:center; gap:8px; margin-bottom:6px; }
-  .qb-dot{ width:7px; height:7px; border-radius:50%; background:var(--qc); flex-shrink:0; }
-  .qb-title{ font:700 12px 'Manrope',sans-serif; color:#e7e9f4; }
+  /* Card, mark, chip and buttons are the office look; here only the batch's own parts. */
+  .qb-card{ gap:7px; padding:10px 12px; border-left:3px solid color-mix(in srgb, var(--oc) 70%, transparent); }
+  .qb-head{ display:flex; align-items:center; gap:8px; min-width:0; }
+  .qb-mark{ width:24px; height:24px; border-radius:7px; font-size:9.5px; }
+  .qb-title{ flex:1; min-width:0; font:700 12.5px var(--font-display); color:var(--text-1); }
+  .qb-n{ height:18px; padding:0 7px; font-variant-numeric:tabular-nums; }
   .qb-list{
-    margin:0 0 8px; padding:6px 8px 6px 22px; background:#0a0b14; border:1px solid #1f2236; border-radius:4px;
-    max-height:150px; overflow-y:auto; font:500 10.5px/1.5 'JetBrains Mono',monospace; color:#a9aecb;
+    margin:0; padding:6px 8px 6px 22px; background:color-mix(in srgb, var(--surface-1) 60%, #000); border:1px solid var(--border); border-radius:8px;
+    max-height:150px; overflow-y:auto; font:500 10.5px/1.5 'JetBrains Mono',monospace; color:var(--text-2);
   }
   .qb-list li{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .qb-list li::marker{ color:var(--oc); }
   .qb-picks{ display:flex; flex-wrap:wrap; gap:5px; }
-  .qb-pick{
-    padding:7px 10px; background:#161827; color:#cbd0e8; border:1px solid #2a2f4a; border-radius:5px;
-    font:600 11px 'Manrope',sans-serif; cursor:pointer;
-  }
-  .qb-pick:hover{ background:#252840; border-color:#f0b874; color:#f4e1a3; }
-  .qb-pick-dismiss:hover{ border-color:#ef5d6e; color:#ffb3bc; }
-  .qb-confirm{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; font:600 11px 'Manrope',sans-serif; color:#f4e1a3; }
-  .qb-yes, .qb-no{ padding:6px 11px; border-radius:5px; font:600 11px 'Manrope',sans-serif; cursor:pointer; }
-  .qb-yes{ background:#f0b874; color:#1a1408; border:1px solid #f0b874; }
-  .qb-no{ background:transparent; color:#cbd0e8; border:1px solid #2a2f4a; }
-  .qb-progress{ font:600 11px 'JetBrains Mono',monospace; color:#f0b874; }
-  .qb-toggle{
-    margin-top:8px; background:transparent; border:none; padding:0; cursor:pointer;
-    font:500 10px 'JetBrains Mono',monospace; color:#8b90af;
-  }
-  .qb-each{ display:flex; flex-direction:column; gap:8px; margin-top:8px; }
+  .qb-sm{ height:28px; padding:0 10px; font-size:11.5px; }
+  .qb-pick-dismiss:hover:not(:disabled){ border-color:#ef5d6e; color:#ffb3bc; }
+  .qb-confirm{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; font:600 11.5px var(--font-body); color:#f4e1a3; }
+  .qb-progress{ font:700 11.5px var(--font-body); color:var(--gold); font-variant-numeric:tabular-nums; }
+  .qb-toggle{ align-self:flex-start; background:transparent; border:none; padding:0; cursor:pointer; font:600 11px var(--font-body); color:var(--text-3); }
+  .qb-toggle:hover{ color:var(--text-1); }
+  .qb-toggle:focus-visible{ outline:2px solid var(--gold); outline-offset:2px; }
+  .qb-each{ display:flex; flex-direction:column; gap:8px; }
 </style>

@@ -144,10 +144,11 @@
     {#if projects.length > 0}
       <!-- Each project has its own thread; the agent only sees this one's. -->
       <div class="chat-project" role="group" aria-label="Project">
-        <span class="chat-project-lbl">project</span>
+        <span class="ol-eyebrow chat-project-lbl">project</span>
         {#if projects.length === 1}
-          <span class="chat-project-chip on">{projects[0].name}</span>
+          <span class="ol-chip soft chat-project-chip on" style="--c:var(--flow-color, var(--gold))">{projects[0].name}</span>
         {:else}
+          <div class="ol-seg chat-project-seg">
           {#each projects as p (p.slug)}
             <button class="chat-project-chip" class:on={project === p.slug}
                     on:click={() => onPickProject(p.slug)} disabled={sending || pending}>{p.name}</button>
@@ -155,6 +156,7 @@
           <button class="chat-project-chip none" class:on={project === ''}
                   on:click={() => onPickProject('')} disabled={sending || pending}
                   title="A thread tied to no project — the agent will ask which one when it matters">none</button>
+          </div>
         {/if}
       </div>
     {/if}
@@ -379,24 +381,11 @@
   }
 
   /* ── Project of the thread ── */
-  .chat-project{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-bottom:10px}
-  .chat-project-lbl{
-    font:600 9px 'JetBrains Mono',monospace;color:#6a6f82;
-    text-transform:uppercase;letter-spacing:.5px;margin-right:2px;
-  }
-  .chat-project-chip{
-    padding:2px 9px;border-radius:999px;cursor:pointer;
-    font:600 10px 'JetBrains Mono',monospace;color:#a0a5b8;
-    background:rgba(120,130,160,.06);border:1px solid rgba(120,130,160,.18);
-    transition:background .12s,border-color .12s,color .12s;
-  }
-  span.chat-project-chip{cursor:default}
-  .chat-project-chip:hover:not(:disabled):not(.on){border-color:rgba(120,130,160,.4);color:#d8dae3}
-  .chat-project-chip.on{
-    color:var(--flow-color);
-    background:color-mix(in srgb, var(--flow-color) 14%, transparent);
-    border-color:color-mix(in srgb, var(--flow-color) 45%, transparent);
-  }
+  .chat-project{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+  .chat-project-lbl{margin-right:2px}
+  /* Project picker: an ol-seg in the office's colour. */
+  .chat-project-seg{flex-wrap:wrap}
+  .chat-project-seg .chat-project-chip{--c:var(--flow-color, var(--gold));height:24px;padding:0 9px;font-size:11px}
   .chat-project-chip.none{font-style:italic}
   .chat-project-chip:disabled{cursor:wait;opacity:.6}
 
