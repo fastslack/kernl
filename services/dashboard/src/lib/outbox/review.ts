@@ -52,3 +52,44 @@ export function previewDoc(it: ReviewItem, mode: 'design' | 'text'): string {
   const text = typeof it.payload.body === 'string' ? it.payload.body : typeof it.payload.text === 'string' ? it.payload.text : '';
   return `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:#fff;color:#111}pre{white-space:pre-wrap;padding:16px;margin:0;font:14px/1.55 Arial,sans-serif}</style></head><body><pre>${esc(text)}</pre></body></html>`;
 }
+
+/** What a row and the detail need to read a draft at a glance: who asks, what it asks, what approving it does. */
+export interface GlanceItem extends ReviewItem {
+  account_ref?: string;
+  preview?: { title?: string; meta?: Record<string, string>; choice?: { value: string; options: Array<{ value: string; label: string; hint?: string }> } };
+}
+
+/** Who asks for it: the area the draft says it comes from (`from`), else the agent that wrote it. */
+export function requesterOf(it: GlanceItem, agent: string): string {
+  const from = typeof it.payload.from === 'string' ? it.payload.from.trim() : '';
+  return from || agent || 'Un agente';
+}
+
+/** The ask without the requester's tag in front of it ("[Seguridad] web: …" reads "web: …" under a Seguridad mark). */
+export function cleanTitle(title: string, requester: string): string {
+  const t = title.trim();
+  const m = /^\[([^\]]{1,40})\]\s*/.exec(t);
+  return m && m[1].toLowerCase() === requester.toLowerCase() ? t.slice(m[0].length) || t : t;
+}
+
+/** What approving it does, in one line: the destination chosen on the draft, its channel's own note, or where it goes out. */
+export function intentOf(it: GlanceItem, channelLabel: string, kind: 'post' | 'mail' | 'chat'): string {
+  const c = it.preview?.choice;
+  const opt = c?.options.find((o) => o.value === c.value);
+  if (opt) return opt.hint ? `${opt.label}: ${opt.hint}` : opt.label;
+  const note = it.preview?.meta?.canal;
+  if (note) return note.charAt(0).toUpperCase() + note.slice(1);
+  const meta = it.preview?.meta ?? {};
+  const to = Array.isArray(it.payload.to) ? (it.payload.to as unknown[]).map(String).join(', ') : meta.Para ?? meta.para ?? '';
+  const from = it.account_ref ? ` desde ${it.account_ref}` : '';
+  if (kind === 'mail') return to ? `Sale un mail a ${to}${from}` : `Sale un mail${from}`;
+  if (kind === 'chat') return to ? `Sale un mensaje a ${to}${from}` : `Sale un mensaje${from}`;
+  return `${channelLabel}${from}`;
+}
+
+/** How many items each project has (key '' = all of them): the project filter shows them, so an empty one reads as empty. */
+export function countByProject(items: Array<{ project_id: string | null }>): Record<string, number> {
+  const out: Record<string, number> = { '': items.length };
+  for (const i of items) { const k = i.project_id ?? ''; if (k) out[k] = (out[k] ?? 0) + 1; }
+  return out;
+}

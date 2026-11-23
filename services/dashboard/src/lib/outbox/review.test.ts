@@ -46,3 +46,26 @@ describe('outbox review', () => {
   });
 });
 
+
+import { requesterOf, cleanTitle, intentOf, countByProject } from './review.js';
+
+describe('a draft at a glance', () => {
+  const base = { id: '1', status: 'draft', channel: 'web_change' };
+  it('names who asks: the area it comes from, else the agent', () => {
+    expect(requesterOf({ ...base, payload: { from: 'Security' } }, 'Agent X')).toBe('Security');
+    expect(requesterOf({ ...base, payload: {} }, 'Agent X')).toBe('Agent X');
+  });
+  it('drops the requester tag in front of the ask, and only that one', () => {
+    expect(cleanTitle('[Security] api: bump a library', 'Security')).toBe('api: bump a library');
+    expect(cleanTitle('[WIP] api: bump a library', 'Security')).toBe('[WIP] api: bump a library');
+  });
+  it('says what approving it does: the chosen destination, the channel note, or where it goes out', () => {
+    const choice = { value: 'issue', options: [{ value: 'issue', label: 'Issue', hint: 'on the board' }, { value: 'o', label: 'Office' }] };
+    expect(intentOf({ ...base, payload: {}, preview: { choice, meta: { canal: 'x' } } }, 'Change', 'post')).toBe('Issue: on the board');
+    expect(intentOf({ ...base, payload: {}, preview: { meta: { canal: 'opens an issue' } } }, 'Change', 'post')).toBe('Opens an issue');
+    expect(intentOf({ ...base, channel: 'email', payload: { to: ['a@b.c'] }, account_ref: 'me@x' }, 'Mail', 'mail')).toBe('Sale un mail a a@b.c desde me@x');
+  });
+  it('counts per project, with the total under the empty key', () => {
+    expect(countByProject([{ project_id: 'a' }, { project_id: 'a' }, { project_id: null }])).toEqual({ '': 3, a: 2 });
+  });
+});
