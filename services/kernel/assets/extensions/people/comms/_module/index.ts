@@ -22,6 +22,7 @@ import { commsTools, commsTriageTools } from "./tools.js";
 import { agentCommsTools } from "./agent-tools.js";
 import { EmailAnalysisService } from "./email-analysis-service.js";
 import { EmailTriageService } from "./email-triage-service.js";
+import { SpamFilter } from "./spam-filter.js";
 import { emailAnalysisTools } from "./email-analysis-tools.js";
 import { registerEmailRoutes } from "./email-routes.js";
 import { registerEmailSuggestionsRoutes } from "./email-suggestions-routes.js";
@@ -79,6 +80,7 @@ export function createCommsModule(): CommsModule {
   let emailServiceRef: EmailService | null = null;
   let emailAnalysisRef: EmailAnalysisService | null = null;
   let emailTriageRef: EmailTriageService | null = null;
+  let spamFilterRef: SpamFilter | null = null;
   let dbRef: SqliteDb | null = null;
   let eventsRef: EventBus | null = null;
   let configRef: KernelConfig | null = null;
@@ -148,6 +150,10 @@ export function createCommsModule(): CommsModule {
       // are still resolved post-extension-load via getEmailAnalysisTools().
       emailAnalysisRef = new EmailAnalysisService(ctx.sqlite, ctx.config);
       emailTriageRef = new EmailTriageService(ctx.sqlite, ctx.config);
+      spamFilterRef = new SpamFilter(ctx.sqlite, (accountId) => {
+        if (!service.getProvider(accountId)) service.registerAccountProvider(accountId);
+        return service.getProvider(accountId);
+      });
 
       // Wire Google OAuth + Resend fallback so accounts can register providers
       // on-the-fly (e.g., right after the user adds them via the dashboard).
@@ -305,6 +311,7 @@ export function createCommsModule(): CommsModule {
         notifier: () => notifierRef,
         agenda: resolveAgenda,
         office: resolveOffice,
+        spam: () => spamFilterRef,
       });
     },
 
@@ -369,6 +376,7 @@ export function createCommsModule(): CommsModule {
               notifierRef,
               configRef,
               emailTriageRef,
+              spamFilterRef,
             );
           }
         },

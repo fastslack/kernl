@@ -40,7 +40,12 @@ export const COMM_SOURCE = `(
          COALESCE(json_extract(c.metadata, '$.mail.is_read'), 0) AS is_read,
          COALESCE(json_extract(c.metadata, '$.mail.is_starred'), 0) AS is_starred,
          EXISTS (SELECT 1 FROM comm_attachments ca WHERE ca.comm_id = c.id) AS has_attachments,
-         CASE c.direction WHEN 'inbound' THEN '["INBOX"]' ELSE '["SENT"]' END AS labels,
+         -- Mail the spam filter moved out of INBOX on the server leaves the inbox here too.
+         CASE
+           WHEN c.direction = 'inbound' AND json_extract(c.metadata, '$.spam.action') = 'moved' THEN '["SPAM"]'
+           WHEN c.direction = 'inbound' THEN '["INBOX"]'
+           ELSE '["SENT"]'
+         END AS labels,
          length(COALESCE(c.body, '')) AS size_bytes,
          c.account_id,
          COALESCE(json_extract(c.metadata, '$.triage.urgency'), '') AS urgency,

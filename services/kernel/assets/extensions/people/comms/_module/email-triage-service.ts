@@ -37,6 +37,11 @@ export interface ClassificationResult {
   attention_needed: boolean;
   summary: string;
   agenda_items: AgendaItem[];
+  /** The model's spam verdict; absent/false when it gave none. */
+  spam?: boolean;
+  /** 0–1; 0 when the model gave none. */
+  spam_confidence?: number;
+  spam_reason?: string;
 }
 
 export interface GoogleEmailRow {
@@ -132,6 +137,17 @@ export function extractJsonArray(raw: string): unknown[] | null {
   return best?.value ?? null;
 }
 
+/** The spam fields of one answer, defaulting to "not spam" when missing or malformed. */
+export function parseSpam(r: { spam?: unknown; spam_confidence?: unknown; spam_reason?: unknown }): {
+  spam: boolean; spam_confidence: number; spam_reason: string;
+} {
+  const spam = r.spam === true || r.spam === "true";
+  const c = Number(r.spam_confidence);
+  const spam_confidence = spam && Number.isFinite(c) ? Math.min(Math.max(c, 0), 1) : 0;
+  const spam_reason = spam && typeof r.spam_reason === "string" ? r.spam_reason.slice(0, 300) : "";
+  return { spam, spam_confidence, spam_reason };
+}
+
 // ── Service ──────────────────────────────────────────────────────────────────
 
 export class EmailTriageService {
@@ -223,7 +239,10 @@ Output ONLY valid JSON array. Each element:
   "urgency": "critical" | "high" | "normal" | "low",
   "attention_needed": boolean,
   "summary": "string — one sentence summary",
-  "agenda_items": [ ... ]
+  "agenda_items": [ ... ],
+  "spam": boolean,
+  "spam_confidence": number,
+  "spam_reason": "string"
 }
 
 Classification rules:
@@ -245,6 +264,15 @@ attention_needed = false when:
 - FYI emails that don't require action
 
 Be conservative: only mark attention_needed=true when a response is clearly expected.
+
+spam = true only for mail nobody would want: phishing and credential grabs, scams and fraud
+(fake prizes, inheritances, crypto or investment schemes, fake invoices or delivery fees),
+malware attachments, impersonation of a bank/brand/authority, and unsolicited bulk mail from
+a sender with no relation to the user. NOT spam: newsletters and marketing from services the
+user signed up for, receipts, notifications, cold but personal business mail, anything from a
+known contact. A spam mail is never attention_needed.
+spam_confidence: 0–1, how sure you are of the spam verdict (use 0.9+ only when it is clear).
+spam_reason: a few words on why (empty when not spam).
 
 ${agendaPromptRules(this.agendaLanguage())}
 Use an empty array for agenda_items when the email has no dated item.
@@ -273,6 +301,9 @@ Respond ONLY with the JSON array.`;
         attention_needed: boolean;
         summary: string;
         agenda_items?: unknown;
+        spam?: unknown;
+        spam_confidence?: unknown;
+        spam_reason?: unknown;
       }> | null;
       if (!parsed) {
         log.warn(
@@ -289,6 +320,7 @@ Respond ONLY with the JSON array.`;
         attention_needed: r.attention_needed,
         summary: r.summary,
         agenda_items: parseAgendaItems(r.agenda_items, nowLocal),
+        ...parseSpam(r),
       })).filter((r) => r.gmail_id);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -397,13 +429,15 @@ Respond ONLY with the JSON array.`;
               'urgency', ?,
               'attention_needed', ?,
               'summary', ?,
+              'spam', ?,
+              'spam_confidence', ?,
               'classified_at', datetime('now')
             )),
           updated_at = datetime('now')
       WHERE id = ?
     `);
     for (const r of results) {
-      stmt.run(r.urgency, r.attention_needed ? 1 : 0, r.summary, r.gmail_id);
+      stmt.run(r.urgency, r.attention_needed ? 1 : 0, r.summary, r.spam ? 1 : 0, r.spam_confidence ?? 0, r.gmail_id);
     }
   }
 

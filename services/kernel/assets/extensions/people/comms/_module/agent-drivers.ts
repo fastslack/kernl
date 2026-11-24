@@ -23,6 +23,7 @@ import { FETCH_BATCH, FETCH_POLL_MINUTES, writeFetchStatus } from "./fetch-statu
 import type { EmailTriageService } from "./email-triage-service.js";
 import type { AgendaWriter, AgendaWriteResult } from "./agenda-writer.js";
 import type { MailOfficeDispatch } from "./mail-office-dispatch.js";
+import type { SpamFilter } from "./spam-filter.js";
 
 const CAP_NOTIFIED_KEY = "comms.agent_runs.cap_notified";
 const EMPTY_AGENDA: AgendaWriteResult = { created: 0, updated: 0, skipped: 0, lines: [] };
@@ -37,6 +38,8 @@ export interface CommsDriverDeps {
   agenda: () => AgendaWriter | null;
   /** Hands attention-needed mail to the office router as an inbox letter. */
   office: () => MailOfficeDispatch | null;
+  /** Moves (or flags) what triage calls spam, per account settings. */
+  spam?: () => SpamFilter | null;
 }
 
 export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
@@ -329,6 +332,25 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
         triageService.applyClassification(gmailResults);
         triageService.applyClassificationComms(commsResults);
 
+        // Spam the account wants filtered gets moved (or flagged in dry run)
+        // and skips the agenda, the draft and the office letter.
+        let spamIds = new Set<string>();
+        let spamNote = "";
+        const spamFilter = deps.spam?.() ?? null;
+        if (spamFilter) {
+          try {
+            const out = await spamFilter.apply(commsResults.map((r) => ({
+              id: r.gmail_id, spam: !!r.spam, confidence: r.spam_confidence ?? 0, reason: r.spam_reason ?? "",
+            })));
+            spamIds = out.spamIds;
+            if (out.moved || out.flagged || out.failed) {
+              spamNote = ` Spam: ${out.moved} movido(s) a spam, ${out.flagged} marcado(s) en modo prueba${out.failed ? `, ${out.failed} no se pudieron mover` : ""}.`;
+            }
+          } catch (err) {
+            log.warn(`EmailTriage: spam filter failed: ${String(err)}`);
+          }
+        }
+
         // Dated items (meetings, deliverables, expiries) go straight to the
         // calendar, whether or not the mail needs a reply.
         const agenda = deps.agenda();
@@ -336,7 +358,7 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
         let agendaCreated = 0;
         for (const r of results) {
           const row = allRows.find((e) => e.gmail_id === r.gmail_id);
-          if (!row || !agenda || r.agenda_items.length === 0) continue;
+          if (!row || !agenda || r.agenda_items.length === 0 || spamIds.has(r.gmail_id)) continue;
           try {
             const written = agenda.write({
               source_table: gmailIds.has(r.gmail_id) ? "google_emails" : "communications",
@@ -354,7 +376,7 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
 
         // Auto-draft for every attention_needed across both sources, then
         // hand the mail to the office router as a letter from this agent.
-        const needAttention = results.filter((r) => r.attention_needed);
+        const needAttention = results.filter((r) => r.attention_needed && !spamIds.has(r.gmail_id));
         let draftsCreated = 0;
         let draftErrors = 0;
         let lettersSent = 0;
@@ -422,8 +444,8 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
         }
 
         // Notify on critical/high urgency
-        const critical = results.filter((r) => r.urgency === "critical");
-        const high = results.filter((r) => r.urgency === "high" && r.attention_needed);
+        const critical = results.filter((r) => r.urgency === "critical" && !spamIds.has(r.gmail_id));
+        const high = results.filter((r) => r.urgency === "high" && r.attention_needed && !spamIds.has(r.gmail_id));
 
         if ((critical.length > 0 || high.length > 0) && notifier) {
           const lines: string[] = [];
@@ -443,7 +465,7 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
         }
 
         const router = office?.routerName() ?? "la oficina";
-        return `Classified ${results.length} (${gmailResults.length} Gmail, ${commsResults.length} IMAP): ${critical.length} critical, ${high.length} high, ${needAttention.length} need attention. ${draftsCreated} drafts${draftErrors > 0 ? ` (${draftErrors} errors)` : ""}. ${agendaCreated} al calendario, ${lettersSent} a ${router}${capped ? `, ${capped} en cola por tope` : ""}${retrying ? `, ${retrying} en cola hasta que ${router} esté disponible` : ""}.${drainedNote}${translatedNote}`;
+        return `Classified ${results.length} (${gmailResults.length} Gmail, ${commsResults.length} IMAP): ${critical.length} critical, ${high.length} high, ${needAttention.length} need attention. ${draftsCreated} drafts${draftErrors > 0 ? ` (${draftErrors} errors)` : ""}. ${agendaCreated} al calendario, ${lettersSent} a ${router}${capped ? `, ${capped} en cola por tope` : ""}${retrying ? `, ${retrying} en cola hasta que ${router} esté disponible` : ""}.${spamNote}${drainedNote}${translatedNote}`;
       },
     },
   ];

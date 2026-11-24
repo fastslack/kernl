@@ -28,6 +28,20 @@ export interface ProviderCapabilities {
   send: boolean;
   searchInbox: boolean;
   fetchEmail: boolean;
+  /** Can move a message between folders (moveMessage). */
+  move?: boolean;
+}
+
+/** A message to move: its UID in `from`, or its Message-ID header when the UID is unknown. */
+export interface MoveRef {
+  uid?: string;
+  messageId?: string;
+}
+
+/** Where a moved message landed. `uid` is "" when the server could not say. */
+export interface MoveResult {
+  folder: string;
+  uid: string;
 }
 
 export interface EmailProvider {
@@ -36,6 +50,11 @@ export interface EmailProvider {
 
   send(options: SendEmailOptions): Promise<SendResult>;
   searchInbox(query: string, maxResults: number): Promise<InboxMessage[]>;
+  /**
+   * Move one message from `from` (default INBOX) to `to`. `to` is a folder
+   * path, or "junk" for the server's spam folder and "inbox" for INBOX.
+   */
+  moveMessage?(ref: MoveRef, to: string, from?: string): Promise<MoveResult>;
   fetchEmail(messageId: string): Promise<{
     from: string;
     fromName: string;

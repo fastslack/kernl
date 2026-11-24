@@ -3,7 +3,7 @@ import { ImapFlow } from "imapflow";
 import nodemailer from "nodemailer";
 import { log } from "@kernl/extension-sdk";
 import type { InboxMessage } from "../types.js";
-import type { EmailProvider, ProviderCapabilities, SendEmailOptions, SendResult } from "./types.js";
+import type { EmailProvider, MoveRef, MoveResult, ProviderCapabilities, SendEmailOptions, SendResult } from "./types.js";
 import { stripHtml } from "../gmail-helpers.js";
 import { extractMessage, type MailPart } from "./mime-decode.js";
 
@@ -60,6 +60,7 @@ export class ImapSmtpProvider implements EmailProvider {
     send: true,
     searchInbox: true,
     fetchEmail: true,
+    move: true,
   };
 
   /**
@@ -228,6 +229,35 @@ export class ImapSmtpProvider implements EmailProvider {
     });
   }
 
+  async moveMessage(ref: MoveRef, to: string, from = "INBOX"): Promise<MoveResult> {
+    return this.withImap(async (client) => {
+      const dest = to === "inbox" ? "INBOX" : to === "junk" ? pickJunkFolder(await client.list()) : to;
+      if (!dest) throw new Error("The server has no spam/junk folder");
+      const lock = await client.getMailboxLock(from);
+      let uid = Number(ref.uid);
+      let moved: { uidMap?: Map<number, number> } | false;
+      try {
+        if (!Number.isFinite(uid) || uid <= 0) uid = await findUidByMessageId(client, ref.messageId);
+        if (!uid) throw new Error(`Message not found in ${from}`);
+        moved = await client.messageMove(String(uid), dest, { uid: true });
+      } finally {
+        lock.release();
+      }
+      if (!moved) throw new Error(`The server refused to move the message to ${dest}`);
+      const mapped = moved.uidMap?.get(uid);
+      if (mapped) return { folder: dest, uid: String(mapped) };
+      // No UIDPLUS: look the message up in its new folder.
+      if (!ref.messageId) return { folder: dest, uid: "" };
+      const destLock = await client.getMailboxLock(dest);
+      try {
+        const found = await findUidByMessageId(client, ref.messageId);
+        return { folder: dest, uid: found ? String(found) : "" };
+      } finally {
+        destLock.release();
+      }
+    });
+  }
+
   /**
    * Try IMAP, then SMTP. `skipSmtpOnImapFailure` leaves SMTP untested when IMAP
    * already failed (a connect that is going to be refused anyway should not
@@ -298,3 +328,22 @@ export function parseHeaderBlock(source: string): Record<string, string> {
   return result;
 }
 
+/**
+ * The spam folder among a server's mailboxes: the one flagged \Junk
+ * (RFC 6154, which Gmail, Fastmail and Dovecot set), else the usual names.
+ */
+export function pickJunkFolder(list: Array<{ path: string; specialUse?: string; name?: string }>): string {
+  const flagged = list.find((m) => m.specialUse === "\\Junk");
+  if (flagged) return flagged.path;
+  const names = ["junk", "spam", "junk e-mail", "junk email", "bulk mail", "correo no deseado"];
+  const named = list.find((m) => names.includes((m.name ?? m.path.split(/[/.]/).pop() ?? "").toLowerCase()));
+  return named?.path ?? "";
+}
+
+/** Highest UID in the open mailbox whose Message-ID header matches, or 0. */
+async function findUidByMessageId(client: ImapFlow, messageId?: string): Promise<number> {
+  const id = (messageId ?? "").trim();
+  if (!id) return 0;
+  const found = await client.search({ header: { "message-id": id } }, { uid: true });
+  return Array.isArray(found) && found.length ? Math.max(...found) : 0;
+}

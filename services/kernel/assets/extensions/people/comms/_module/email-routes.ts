@@ -15,6 +15,7 @@ import type { EmailService } from "./email-service.js";
 import type { CommsService } from "./service.js";
 import type { EmailAnalysisService } from "./email-analysis-service.js";
 import type { EmailTriageService } from "./email-triage-service.js";
+import type { SpamFilter } from "./spam-filter.js";
 import type { EmailCategory, EmailDetail, EmailFolder } from "./types.js";
 import { EMAIL_CATEGORIES, COMM_MAIL_PREFIX } from "./email-service.js";
 import { storableHtml } from "./gmail-helpers.js";
@@ -40,6 +41,7 @@ export function registerEmailRoutes(
   notifier?: Notifier | null,
   config?: KernelConfig,
   triageService?: EmailTriageService | null,
+  spamFilter?: SpamFilter | null,
 ): void {
   /**
    * `server.route` with this file's failure contract: anything thrown but a
@@ -377,6 +379,36 @@ export function registerEmailRoutes(
     const withMessage = (err: unknown) => ({ error: errorMessage(err) });
 
     route("GET", "/api/email-accounts", "Failed to list accounts", () => svc.listAccountsForDisplay());
+
+    // ── Spam filter (per account) ─────────────────
+    if (spamFilter) {
+      const spam = spamFilter;
+      const requireAccount = (id: unknown): string => {
+        if (typeof id !== "string" || !id) throw new HttpError(400, "Missing account_id");
+        if (!svc.getAccount(id)) throw new HttpError(404, "Account not found");
+        return id;
+      };
+      const requireId = (id: unknown): string => {
+        if (typeof id !== "string" || !id) throw new HttpError(400, "Missing id");
+        return id;
+      };
+
+      route("GET", "/api/email-accounts/spam-settings", "Failed to read spam settings", ({ query }) =>
+        spam.getSettings(requireAccount(query.get("account_id"))));
+
+      route<{ account_id?: string; mode?: string; min_confidence?: number; folder?: string }>(
+        "POST", "/api/email-accounts/spam-settings", "Failed to save spam settings", ({ body }) =>
+          spam.setSettings(requireAccount(body.account_id), body));
+
+      route("GET", "/api/emails/spam-log", "Failed to list spam decisions", ({ query }) =>
+        spam.list({ accountId: query.get("account_id") ?? undefined, limit: Number(query.get("limit")) || 50 }));
+
+      route<{ id?: string }>("POST", "/api/emails/spam/restore", withMessage, ({ body }) =>
+        spam.restore(requireId(body.id)));
+
+      route<{ id?: string }>("POST", "/api/emails/spam/move", withMessage, ({ body }) =>
+        spam.moveNow(requireId(body.id)));
+    }
 
     route<{
       label: string; email: string;

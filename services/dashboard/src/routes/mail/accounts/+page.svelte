@@ -3,6 +3,7 @@
   import { confirm as confirmDialog } from '$shared/feedback';
   import { onMount } from 'svelte';
   import Skeleton from '$shared/components/Skeleton.svelte';
+  import SpamFilterPanel from '$lib/components/mail/SpamFilterPanel.svelte';
   import { goto } from '$app/navigation';
   import { fmtRelTime } from '$lib/display-format.js';
   import {
@@ -644,6 +645,10 @@
                       <pre>{JSON.stringify(test.details, null, 2)}</pre>
                     {/if}
                   </div>
+                {/if}
+                {#if r.account.provider === 'imap_smtp'}
+                  <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+                  <div on:click|stopPropagation><SpamFilterPanel accountId={r.id} /></div>
                 {/if}
                 <div class="dactions">
                   <button class="primary small" on:click|stopPropagation={() => openMailbox(r.id)}>Open mailbox →</button>
