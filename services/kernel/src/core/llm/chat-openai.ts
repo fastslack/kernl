@@ -53,7 +53,6 @@ export class ChatOpenAiProvider implements ChatLlmProvider {
     // Per-model request tweaks the provider documents (sampling, template
     // flags). The caller's own temperature still wins.
     applyModelQuirks(body, this.name, model);
-    fitOpenAiParams(body, this.name, model);
     // Pass tools in OpenAI format if provided (sequential tool calls only).
     // truncateTools applies the right cap per slug — openai 128, grok 64,
     // nvidia 64 (Grok/NVIDIA inherit ChatOpenAiProvider but pass their
@@ -66,6 +65,8 @@ export class ChatOpenAiProvider implements ChatLlmProvider {
       }));
       body.parallel_tool_calls = false;
     }
+    // After the tools: whether the request carries them decides the reasoning effort (fitOpenAiParams).
+    fitOpenAiParams(body, this.name, model);
 
     const resp = await retryWithBackoff(
       () => fetch(url, {
@@ -144,13 +145,19 @@ export class ChatOpenAiProvider implements ChatLlmProvider {
  *   - Their token cap covers the reasoning as well as the answer: a probe
  *     asking for 1024 tokens got them all spent thinking and came back empty.
  *     They get a floor of REASONING_MIN_TOKENS; only what is used is billed.
+ *   - From GPT-6 on, the models reason by default and chat/completions refuses
+ *     function tools while they do ("Function tools with reasoning_effort are
+ *     not supported … use /v1/responses or set reasoning_effort to 'none'").
+ *     A request with tools asks them not to reason; one without keeps it.
  *
  * OpenAI-compatible providers (NVIDIA, Groq, OpenRouter, LM Studio…) keep
  * `max_tokens`: several of them do not know the newer name.
  */
 
 /** Models that reason before answering and only accept default sampling. */
-const REASONING = /^(gpt-5|o[1-9])(\b|[-.])/i;
+const REASONING = /^(gpt-([5-9]|[1-9]\d)|o[1-9])(\b|[-.])/i;
+/** Models that refuse tools on chat/completions while reasoning (GPT-6 and later). */
+const NO_TOOLS_WHILE_REASONING = /^gpt-([6-9]|[1-9]\d)(\b|[-.])/i;
 const REASONING_MIN_TOKENS = 8192;
 
 export function fitOpenAiParams(body: Record<string, unknown>, slug: string, model: string): void {
@@ -164,5 +171,9 @@ export function fitOpenAiParams(body: Record<string, unknown>, slug: string, mod
     delete body.top_p;
     const cap = Number(body.max_completion_tokens);
     if (Number.isFinite(cap) && cap < REASONING_MIN_TOKENS) body.max_completion_tokens = REASONING_MIN_TOKENS;
+  }
+  const tools = body.tools;
+  if (NO_TOOLS_WHILE_REASONING.test(model) && Array.isArray(tools) && tools.length > 0 && body.reasoning_effort === undefined) {
+    body.reasoning_effort = "none";
   }
 }

@@ -40,4 +40,26 @@ describe("fitOpenAiParams", () => {
     expect(big).toEqual({ max_completion_tokens: 20000 });
     expect(body).toEqual({ max_completion_tokens: 64, temperature: 0.3 });
   });
+
+  it("asks GPT-6 models not to reason when the request carries tools", () => {
+    const tools = [{ type: "function", function: { name: "x", parameters: {} } }];
+    const withTools: Record<string, unknown> = { max_tokens: 4096, temperature: 0.2, tools };
+    fitOpenAiParams(withTools, "openai", "gpt-6.2-sol");
+    expect(withTools).toEqual({ max_completion_tokens: 8192, tools, reasoning_effort: "none" });
+
+    const plain: Record<string, unknown> = { max_tokens: 4096 };
+    fitOpenAiParams(plain, "openai", "gpt-6.2-sol");
+    expect(plain).toEqual({ max_completion_tokens: 8192 });
+
+    // gpt-5 takes tools while reasoning; an effort the caller set is kept; other providers are left alone.
+    const five: Record<string, unknown> = { tools };
+    fitOpenAiParams(five, "openai", "gpt-5.6-terra");
+    expect(five.reasoning_effort).toBeUndefined();
+    const own: Record<string, unknown> = { tools, reasoning_effort: "low" };
+    fitOpenAiParams(own, "openai", "gpt-6.2-sol");
+    expect(own.reasoning_effort).toBe("low");
+    const other: Record<string, unknown> = { tools };
+    fitOpenAiParams(other, "openrouter", "gpt-6.2-sol");
+    expect(other.reasoning_effort).toBeUndefined();
+  });
 });
