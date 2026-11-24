@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 import { runScript } from "../src/modules/meta/code-runner.js";
 import type { ToolDefinition } from "../src/core/types.js";
+import { getRequestContext, runWithContext } from "../src/core/request-context.js";
 
 // Contract characterization for the kernel_code_run sandbox. These lock the
 // observable behavior so the vm→worker_thread isolation refactor (C2) cannot
@@ -79,5 +80,23 @@ describe("code_run sandbox contract", () => {
     await expect(
       runScript({ script: `return ({}).constructor.constructor("return 1")();`, timeoutMs: 5000 }, catalog),
     ).rejects.toThrow(/Script rejected/);
+  });
+
+  // Run-scoped tools (post_to_colleague, workspace, inbox) read the caller
+  // from the request context; it used to be lost across the worker boundary.
+  test("tool() runs nested calls with the caller's request context", async () => {
+    const whoAmI: ToolDefinition = {
+      name: "whoami",
+      description: "returns the caller agent id",
+      inputSchema: z.object({}),
+      async handler() {
+        return { content: [{ type: "text", text: getRequestContext().callerAgentId || "none" }] };
+      },
+    };
+    const out = await runWithContext(
+      { callerAgentId: "agent-1", callerRunId: "run-1", callerDepth: 0 },
+      () => runScript({ script: `return await tool("whoami", {});`, timeoutMs: 5000 }, () => [whoAmI]),
+    );
+    expect(out.result).toBe("agent-1");
   });
 });

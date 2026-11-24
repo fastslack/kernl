@@ -31,6 +31,7 @@ import { Worker } from "node:worker_threads";
 import type { ToolDefinition, ToolResult } from "../../core/types.js";
 import { RankingService } from "../../core/ranking/service.js";
 import type { EmbeddingsClient } from "../../core/embeddings/client.js";
+import { getRequestContext, runWithContext } from "../../core/request-context.js";
 
 export interface SandboxDeps {
   ranking?: RankingService | null;
@@ -162,6 +163,10 @@ export async function runScript(
 
   const logs: string[] = [];
   const catalog = new Map(getCatalog().map((t) => [t.name, t]));
+  // Worker messages arrive outside the caller's async context, so run-scoped
+  // tools (post_to_colleague, workspace, inbox…) would see no caller agent.
+  // Capture it here and restore it around every nested call.
+  const callerCtx = getRequestContext();
   const started = Date.now();
 
   // ── Main-thread RPC dispatch: the only capabilities the worker can reach ──
@@ -173,7 +178,7 @@ export async function runScript(
       // Validate args against the tool's schema, exactly like the server's
       // CallTool path — surfaces script typos as structured zod errors.
       const parsed = def.inputSchema.parse(payload.args ?? {});
-      const result: ToolResult = await def.handler(parsed);
+      const result: ToolResult = await runWithContext(callerCtx, () => def.handler(parsed));
       if (result.isError) {
         const text = result.content.map((c) => c.text).join("\n");
         throw new Error(`tool(${name}) returned isError: ${text}`);
