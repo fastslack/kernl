@@ -4,7 +4,8 @@
  * connecting gpt-5-nano failed with "Algo falló al conectar".
  */
 import { describe, it, expect } from "bun:test";
-import { fitOpenAiParams } from "../src/core/llm/chat-openai.js";
+import { fitOpenAiParams, usesResponsesApi, buildResponsesBody, parseResponsesResult } from "../src/core/llm/chat-openai.js";
+import type { ChatMessage } from "../src/core/llm/chat-types.js";
 
 describe("fitOpenAiParams", () => {
   it("sends max_completion_tokens to the official API", () => {
@@ -41,25 +42,54 @@ describe("fitOpenAiParams", () => {
     expect(body).toEqual({ max_completion_tokens: 64, temperature: 0.3 });
   });
 
-  it("asks GPT-6 models not to reason when the request carries tools", () => {
-    const tools = [{ type: "function", function: { name: "x", parameters: {} } }];
-    const withTools: Record<string, unknown> = { max_tokens: 4096, temperature: 0.2, tools };
-    fitOpenAiParams(withTools, "openai", "gpt-6.2-sol");
-    expect(withTools).toEqual({ max_completion_tokens: 8192, tools, reasoning_effort: "none" });
-
-    const plain: Record<string, unknown> = { max_tokens: 4096 };
+  it("sends GPT-6 turns with tools to the Responses API, and only those", () => {
+    expect(usesResponsesApi("openai", "gpt-6.2-sol", true)).toBe(true);
+    expect(usesResponsesApi("openai", "gpt-6.2-sol", false)).toBe(false);
+    expect(usesResponsesApi("openai", "gpt-5.6-terra", true)).toBe(false);
+    expect(usesResponsesApi("openrouter", "gpt-6.2-sol", true)).toBe(false);
+    // GPT-6 also gets the reasoning-model params on chat/completions.
+    const plain: Record<string, unknown> = { max_tokens: 4096, temperature: 0.2 };
     fitOpenAiParams(plain, "openai", "gpt-6.2-sol");
     expect(plain).toEqual({ max_completion_tokens: 8192 });
+  });
 
-    // gpt-5 takes tools while reasoning; an effort the caller set is kept; other providers are left alone.
-    const five: Record<string, unknown> = { tools };
-    fitOpenAiParams(five, "openai", "gpt-5.6-terra");
-    expect(five.reasoning_effort).toBeUndefined();
-    const own: Record<string, unknown> = { tools, reasoning_effort: "low" };
-    fitOpenAiParams(own, "openai", "gpt-6.2-sol");
-    expect(own.reasoning_effort).toBe("low");
-    const other: Record<string, unknown> = { tools };
-    fitOpenAiParams(other, "openrouter", "gpt-6.2-sol");
-    expect(other.reasoning_effort).toBeUndefined();
+  it("builds a Responses request from a kernel tool conversation", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "hola" },
+      { role: "assistant", content: [{ type: "text", text: "Miro." }, { type: "tool_use", id: "call_1", name: "tasks_list", input: { limit: 3 } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "call_1", content: "[]" }] },
+    ];
+    const tools = [{ name: "tasks_list", description: "List tasks", input_schema: { type: "object", properties: {} } }];
+    const body = buildResponsesBody(messages, "gpt-6.2-sol", { system: "Sos el Lead.", max_tokens: 1024, temperature: 0.3, tools }, tools);
+    expect(body).toEqual({
+      model: "gpt-6.2-sol",
+      instructions: "Sos el Lead.",
+      max_output_tokens: 8192,
+      store: false,
+      parallel_tool_calls: false,
+      tools: [{ type: "function", name: "tasks_list", description: "List tasks", parameters: { type: "object", properties: {} } }],
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "hola" }] },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "Miro." }] },
+        { type: "function_call", call_id: "call_1", name: "tasks_list", arguments: '{"limit":3}' },
+        { type: "function_call_output", call_id: "call_1", output: "[]" },
+      ],
+    });
+  });
+
+  it("reads a Responses answer: text, tool calls, no reasoning", () => {
+    const r = parseResponsesResult({
+      model: "gpt-6.2-sol-2026",
+      output: [
+        { type: "reasoning", summary: [] },
+        { type: "message", content: [{ type: "output_text", text: "Listo." }] },
+        { type: "function_call", call_id: "call_9", name: "tasks_create", arguments: '{"title":"x"}' },
+      ],
+      usage: { total_tokens: 30, input_tokens: 20, output_tokens: 10 },
+    }, "gpt-6.2-sol");
+    expect(r).toEqual({
+      content: "Listo.", model: "gpt-6.2-sol-2026", tokens_used: 30, input_tokens: 20, output_tokens: 10,
+      tool_calls: [{ type: "tool_use", id: "call_9", name: "tasks_create", input: { title: "x" } }],
+    });
   });
 });

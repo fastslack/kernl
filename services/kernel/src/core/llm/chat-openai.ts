@@ -2,7 +2,7 @@
  *  (NVIDIA, Groq, Gemini, xAI, DeepSeek, Ollama, …), keyed by `name`. */
 import type { ChatMessage, ChatCompletionResult, ChatCompletionOptions, ToolUseBlock } from "./chat-types.js";
 import { ADAPTER_TIMEOUT_MS, truncateTools, type ChatLlmProvider } from "./chat-provider.js";
-import { kernelMessagesToOpenAi } from "./chat-messages.js";
+import { kernelMessagesToOpenAi, kernelMessagesToResponsesInput } from "./chat-messages.js";
 import { applyModelQuirks } from "./provider-catalog.js";
 import { stripReasoning } from "./strip-reasoning.js";
 import { retryWithBackoff } from "./retry.js";
@@ -36,6 +36,7 @@ export class ChatOpenAiProvider implements ChatLlmProvider {
     opts?: ChatCompletionOptions,
   ): Promise<ChatCompletionResult> {
     const model = opts?.model || this.defaultModel;
+    if (usesResponsesApi(this.name, model, (opts?.tools?.length ?? 0) > 0)) return this.responsesCompletion(messages, model, opts);
     const url = `${this.baseUrl.replace(/\/+$/, "")}/chat/completions`;
 
     const apiMessages: Array<Record<string, unknown>> = [];
@@ -65,7 +66,6 @@ export class ChatOpenAiProvider implements ChatLlmProvider {
       }));
       body.parallel_tool_calls = false;
     }
-    // After the tools: whether the request carries them decides the reasoning effort (fitOpenAiParams).
     fitOpenAiParams(body, this.name, model);
 
     const resp = await retryWithBackoff(
@@ -131,6 +131,95 @@ export class ChatOpenAiProvider implements ChatLlmProvider {
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
     };
   }
+
+  /**
+   * The same turn on the Responses API (/v1/responses), for the models that refuse tools on chat/completions while
+   * they reason (see usesResponsesApi). Stateless like the chat path: the whole conversation goes every time and
+   * nothing is stored at OpenAI.
+   */
+  private async responsesCompletion(messages: ChatMessage[], model: string, opts?: ChatCompletionOptions): Promise<ChatCompletionResult> {
+    const url = `${this.baseUrl.replace(/\/+$/, "")}/responses`;
+    const body = buildResponsesBody(messages, model, opts, truncateTools(this.name, opts?.tools ?? []));
+    const resp = await retryWithBackoff(
+      () => fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.apiKey}` },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(ADAPTER_TIMEOUT_MS),
+      }),
+      opts?.onRateLimitWait,
+    );
+    if (!resp.ok) {
+      const errBody = await resp.text().catch(() => "");
+      const message = `${this.name} API error ${resp.status}: ${errBody}`;
+      if (isQuotaExhaustion(message)) markProviderExhausted(this.name);
+      throw new Error(message);
+    }
+    return parseResponsesResult(await resp.json(), model);
+  }
+}
+
+/**
+ * From GPT-6 on, OpenAI's models reason by default and chat/completions refuses function tools while they do; they do
+ * not take reasoning_effort "none" either (only low…xhigh). A turn with tools to one of them goes to /v1/responses,
+ * where the model reasons and calls tools in the same turn. Turns without tools stay on chat/completions.
+ */
+export function usesResponsesApi(slug: string, model: string, hasTools: boolean): boolean {
+  return slug === "openai" && hasTools && NO_TOOLS_WHILE_REASONING.test(model);
+}
+
+/** The Responses request for a kernel conversation: system text as instructions, tools flat, no custom sampling. */
+export function buildResponsesBody(
+  messages: ChatMessage[], model: string, opts: ChatCompletionOptions | undefined,
+  tools: Array<{ name: string; description: string; input_schema?: Record<string, unknown> }>,
+): Record<string, unknown> {
+  const { instructions, input } = kernelMessagesToResponsesInput(messages);
+  const system = [opts?.system, instructions].filter((x): x is string => !!x).join("\n\n");
+  const body: Record<string, unknown> = {
+    model,
+    input,
+    // The cap covers the reasoning as well as the answer (see fitOpenAiParams).
+    max_output_tokens: Math.max(opts?.max_tokens ?? 4096, REASONING_MIN_TOKENS),
+    store: false,
+  };
+  if (system) body.instructions = system;
+  if (tools.length > 0) {
+    body.tools = tools.map((t) => ({
+      type: "function", name: t.name, description: t.description,
+      parameters: t.input_schema ?? { type: "object", properties: {} },
+    }));
+    body.parallel_tool_calls = false;
+  }
+  return body;
+}
+
+/** A Responses answer as a kernel result: the message text, the function calls as tool_use, reasoning left out. */
+export function parseResponsesResult(data: unknown, model: string): ChatCompletionResult {
+  const d = data as {
+    output?: Array<{ type: string; content?: Array<{ type: string; text?: string }>; call_id?: string; id?: string; name?: string; arguments?: string }>;
+    model?: string;
+    status?: string;
+    usage?: { total_tokens?: number; input_tokens?: number; output_tokens?: number };
+  };
+  let content = "";
+  const toolCalls: ToolUseBlock[] = [];
+  for (const item of d.output ?? []) {
+    if (item.type === "message") {
+      for (const c of item.content ?? []) if (c.type === "output_text" && typeof c.text === "string") content += c.text;
+    } else if (item.type === "function_call") {
+      try {
+        toolCalls.push({ type: "tool_use", id: item.call_id || item.id || `oai-${Date.now()}`, name: item.name ?? "", input: JSON.parse(item.arguments || "{}") });
+      } catch { /* skip malformed */ }
+    }
+  }
+  return {
+    content,
+    model: d.model ?? model,
+    tokens_used: d.usage?.total_tokens ?? 0,
+    input_tokens: d.usage?.input_tokens,
+    output_tokens: d.usage?.output_tokens,
+    tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+  };
 }
 
 /**
@@ -146,9 +235,8 @@ export class ChatOpenAiProvider implements ChatLlmProvider {
  *     asking for 1024 tokens got them all spent thinking and came back empty.
  *     They get a floor of REASONING_MIN_TOKENS; only what is used is billed.
  *   - From GPT-6 on, the models reason by default and chat/completions refuses
- *     function tools while they do ("Function tools with reasoning_effort are
- *     not supported … use /v1/responses or set reasoning_effort to 'none'").
- *     A request with tools asks them not to reason; one without keeps it.
+ *     function tools while they do: a turn with tools goes to /v1/responses
+ *     instead (usesResponsesApi).
  *
  * OpenAI-compatible providers (NVIDIA, Groq, OpenRouter, LM Studio…) keep
  * `max_tokens`: several of them do not know the newer name.
@@ -156,7 +244,7 @@ export class ChatOpenAiProvider implements ChatLlmProvider {
 
 /** Models that reason before answering and only accept default sampling. */
 const REASONING = /^(gpt-([5-9]|[1-9]\d)|o[1-9])(\b|[-.])/i;
-/** Models that refuse tools on chat/completions while reasoning (GPT-6 and later). */
+/** Models that refuse tools on chat/completions while reasoning (GPT-6 and later): see usesResponsesApi. */
 const NO_TOOLS_WHILE_REASONING = /^gpt-([6-9]|[1-9]\d)(\b|[-.])/i;
 const REASONING_MIN_TOKENS = 8192;
 
@@ -171,9 +259,5 @@ export function fitOpenAiParams(body: Record<string, unknown>, slug: string, mod
     delete body.top_p;
     const cap = Number(body.max_completion_tokens);
     if (Number.isFinite(cap) && cap < REASONING_MIN_TOKENS) body.max_completion_tokens = REASONING_MIN_TOKENS;
-  }
-  const tools = body.tools;
-  if (NO_TOOLS_WHILE_REASONING.test(model) && Array.isArray(tools) && tools.length > 0 && body.reasoning_effort === undefined) {
-    body.reasoning_effort = "none";
   }
 }
