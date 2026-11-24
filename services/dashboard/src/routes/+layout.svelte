@@ -11,7 +11,7 @@
   import { getChannelsForPage } from '$lib/page-channels.js';
   import { extPages as extPagesStore, extPagesReady } from '$lib/ext-host.js';
   import { NAV_GROUPS, VIEWS, VIEW_TO_GROUP, SUB_TAB_LABELS, type NavGroup, type NavView } from '$lib/constants.js';
-  import { railViewsFor, buildNav, activeTabId, filterNavForSession } from '$lib/nav.js';
+  import { railViewsFor, buildNav, activeTabId, filterNavForSession, splitSystemGroup } from '$lib/nav.js';
   import { session, loadSession, isUserSession, can } from '$lib/session.js';
   import { fetchEdition } from '$lib/edition.js';
   import { applyNavPrefs, parseNavPrefs, shellNavGroups, EMPTY_NAV_PREFS, NAV_LAYOUT_KEY, SHOW_TOOLS_KEY, type NavPrefs } from '$lib/nav-prefs.js';
@@ -125,7 +125,9 @@
     label: viewLabel(v),
     icon: v.icon,
   }));
-  $: sysGroup = navGroups.find((g) => g.id === 'system') ?? navGroups[navGroups.length - 1];
+  let sysGroup: NavGroup | null = null;
+  let topGroups: NavGroup[] = [];
+  $: ({ system: sysGroup, top: topGroups } = splitSystemGroup(navGroups));
 
   // ── Nav labels ──────────────────────────────────────────────────
   // Group and view labels arrive from manifests as plain English strings —
@@ -222,7 +224,6 @@
       navPrefs = parseNavPrefs(value(NAV_LAYOUT_KEY));
     } catch { /* offline: keep the default */ }
   }
-  $: topGroups = navGroups.filter((g) => g !== sysGroup);
   $: shellNavGroups.set(topGroups.map((g) => ({ id: g.id, label: groupLabel(g), icon: g.icon })));
   $: mainGroups = applyNavPrefs(topGroups, navPrefs, editionHidden).filter((g) => g.id !== 'tools' || showToolsMenu);
 
@@ -794,16 +795,19 @@
         <span class="nav-label">{$t('nav.view.chat')}</span>
       </button>
 
-      <!-- System group pinned at bottom -->
-      <button
-        class="nav-item"
-        class:active={currentGroupId === sysGroup.id}
-        on:click={() => navigateGroup(sysGroup)}
-        title={groupLabel(sysGroup)}
-      >
-        <span class="nav-icon">{sysGroup.icon}</span>
-        <span class="nav-label">{groupLabel(sysGroup)}</span>
-      </button>
+      <!-- System group pinned at bottom (absent when the role hides it) -->
+      {#if sysGroup}
+        {@const sys = sysGroup}
+        <button
+          class="nav-item"
+          class:active={currentGroupId === sys.id}
+          on:click={() => navigateGroup(sys)}
+          title={groupLabel(sys)}
+        >
+          <span class="nav-icon">{sys.icon}</span>
+          <span class="nav-label">{groupLabel(sys)}</span>
+        </button>
+      {/if}
 
       <!-- Clock, pinned below everything.
            Clicking it goes to the planner, same as the header clock — a date

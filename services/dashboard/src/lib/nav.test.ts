@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { railParentOf, railViewsFor, buildNav, activeTabId } from './nav.js';
+import { railParentOf, railViewsFor, buildNav, activeTabId, splitSystemGroup } from './nav.js';
 import type { NavGroup, NavView } from './constants.js';
 
 const VIEWS: NavView[] = [
@@ -180,5 +180,26 @@ describe('activeTabId', () => {
 
 	it('home when the path is empty', () => {
 		expect(activeTabId('/', '', paths)).toBe('home');
+	});
+});
+
+describe('splitSystemGroup', () => {
+	const group = (id: string): NavGroup => ({ id, label: id, icon: '•', views: [] }) as unknown as NavGroup;
+
+	it('pins the system group and leaves the rest on top', () => {
+		const groups = [group('work'), group('system'), group('ai')];
+		const { system, top } = splitSystemGroup(groups);
+		expect(system?.id).toBe('system');
+		expect(top.map((g) => g.id)).toEqual(['work', 'ai']);
+	});
+
+	it('pins nothing when the role hides System, and keeps the last group on top', () => {
+		const { system, top } = splitSystemGroup([group('work'), group('ai')]);
+		expect(system).toBeNull();
+		expect(top.map((g) => g.id)).toEqual(['work', 'ai']);
+	});
+
+	it('handles an empty nav without throwing', () => {
+		expect(splitSystemGroup([])).toEqual({ system: null, top: [] });
 	});
 });

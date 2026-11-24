@@ -185,3 +185,15 @@ export function filterNavForSession(groups: NavGroup[], canRead: (module: string
 		}))
 		.filter((g) => g.views.length > 0);
 }
+
+/**
+ * The System group, which the rail pins at the bottom, and every other group,
+ * which goes at the top. Only the group with id `system` is pinned: a user
+ * whose role hides System gets no bottom button, rather than having their last
+ * group moved down there (or, with no groups yet, a layout that throws on
+ * `undefined.icon` and renders blank).
+ */
+export function splitSystemGroup(groups: NavGroup[]): { system: NavGroup | null; top: NavGroup[] } {
+	const system = groups.find((g) => g.id === 'system') ?? null;
+	return { system, top: groups.filter((g) => g !== system) };
+}
