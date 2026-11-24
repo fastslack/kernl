@@ -216,6 +216,18 @@ function claudeAccessChain(
 /** Failed grading attempts in a row before the user is told (once per streak). */
 export const EVAL_FAILURE_ALERT_STREAK = 3;
 
+/**
+ * Above this many tools an agent runs with progressive discovery even when it is off. OpenAI takes at most 128 tools
+ * and the chat adapters cut the rest blindly (the first N of the catalog), so an agent with every tool enabled lost
+ * most of them at random and still paid ~17k tokens of schemas on every turn.
+ */
+export const AUTO_PROGRESSIVE_ABOVE = 128;
+
+/** Whether a run starts from the small bootstrap set and activates tools on demand. */
+export function usesProgressiveDiscovery(enabled: boolean, catalogSize: number): boolean {
+  return enabled || catalogSize > AUTO_PROGRESSIVE_ABOVE;
+}
+
 export class AgentExecutor {
   private allTools: ToolDefinition[] = [];
 
@@ -1476,8 +1488,11 @@ export class AgentExecutor {
     if (toolExecutor.has("kernel_tool_describe")) toolExecutor.set("kernel_tool_describe", scopedDescribe.handler);
     if (toolExecutor.has("kernel_code_run")) toolExecutor.set("kernel_code_run", scopedCodeRun.handler);
 
-    if (!agent.progressive_discovery) {
+    if (!usesProgressiveDiscovery(!!agent.progressive_discovery, fullCatalog.length)) {
       return { llmTools: fullCatalog, toolExecutor };
+    }
+    if (!agent.progressive_discovery) {
+      log.info(`AgentExecutor: agent "${agent.name}" has ${fullCatalog.length} tools, more than a provider takes (${AUTO_PROGRESSIVE_ABOVE}) — using progressive discovery.`);
     }
 
     // Progressive discovery path. The LLM starts with a tiny bootstrap that
