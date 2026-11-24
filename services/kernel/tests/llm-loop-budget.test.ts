@@ -210,4 +210,29 @@ describe("llm-loop token budget", () => {
     expect(r.status).toBe("completed");
     expect(r.totalTokens).toBe(60);
   });
+
+  // A long research run used to spend its whole budget on tool calls and end
+  // with no answer at all; the last turn that fits goes to the synthesis.
+  it("keeps the last turn that fits for a final answer without tools", async () => {
+    const seen: Array<string | undefined> = [];
+    const seenTools: boolean[] = [];
+    const toolTurn = (n: number): Partial<ChatCompletionResult> => ({
+      content: "", tokens_used: 30,
+      tool_calls: [{ type: "tool_use", id: `t${n}`, name: "noop", input: { n } }],
+    });
+    const r = await runToolLoop({
+      provider: fakeProvider([toolTurn(1), toolTurn(2), { content: "THE ANSWER", tokens_used: 30 }], seen, seenTools),
+      systemText: "BASE",
+      messages: [{ role: "user", content: "hi" }],
+      tools: [{ name: "noop", description: "noop", input_schema: {} }],
+      executeTool: async () => ({ text: "ok", isError: false }),
+      budgets: { maxIterations: 20, maxTokens: 100, maxErrors: 5, timeoutMs: 60_000 },
+    });
+    expect(seen.length).toBe(3);
+    expect(seenTools[2]).toBe(false);
+    expect(seen[2]).toContain("token budget");
+    expect(r.status).toBe("completed");
+    expect(r.finalContent).toContain("THE ANSWER");
+    expect(r.totalTokens).toBe(90);
+  });
 });

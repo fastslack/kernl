@@ -264,6 +264,8 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
   let consecutiveErrors = 0;
   let abortReason = "";
   let emptyNudges = 0;
+  /** Stopped calling tools to keep one turn of budget for the answer. */
+  let budgetWrapUp = false;
 
   const toolCallCounts = new Map<string, number>();
   const toolResultCache = new Map<string, string>();
@@ -299,6 +301,12 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
       // turn that crosses the line run in full (174k on a 150k budget). Every
       // turn re-sends the whole history, so the last one is a floor for the
       // next: stop before a call that would land past the budget.
+      // Keep one turn in reserve: stop calling tools while there is still room
+      // for the answer, so a long run ends with a synthesis instead of an abort.
+      if (lastTurnTokens > 0 && totalTokens + 2 * lastTurnTokens > maxTokens && totalTokens + lastTurnTokens <= maxTokens) {
+        budgetWrapUp = true;
+        break;
+      }
       if (lastTurnTokens > 0 && totalTokens + lastTurnTokens > maxTokens) {
         abortReason = `Token budget would be exceeded by the next turn (${totalTokens} spent + ~${lastTurnTokens} for the next turn > ${maxTokens})`;
         break;
@@ -451,14 +459,17 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
   // leaving the user with a "[Reached maximum iterations]" stub.
   const lastMessage = messages[messages.length - 1];
   const stuckInToolUse =
-    hitMaxIterations &&
+    (hitMaxIterations || budgetWrapUp) &&
     lastMessage?.role === "user" &&
     Array.isArray(lastMessage.content) &&
     (lastMessage.content as ContentBlock[]).some(b => b.type === "tool_result");
 
   if (stuckInToolUse) {
     try {
-      const synthesisSystem = `${systemText}\n\n[BUDGET EXHAUSTED] You have used all ${maxIterations} tool-use turns. You MUST now write your final answer using only the tool results already in this conversation. Do NOT request more tools — they are disabled. Be direct and concise.`;
+      const spent = budgetWrapUp
+        ? `You have used almost all of your token budget (${totalTokens}/${maxTokens}).`
+        : `You have used all ${maxIterations} tool-use turns.`;
+      const synthesisSystem = `${systemText}\n\n[BUDGET EXHAUSTED] ${spent} You MUST now write your final answer using only the tool results already in this conversation. Do NOT request more tools — they are disabled. Be direct and concise.`;
       const synthesis = await provider.chatCompletion(messages, {
         model: model || undefined,
         system: synthesisSystem,
@@ -472,7 +483,10 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
       }
     } catch {
       // Synthesis pass is best-effort — fall through to the legacy stub.
-      finalContent += "\n[Reached maximum iterations]";
+      if (hitMaxIterations) finalContent += "\n[Reached maximum iterations]";
+    }
+    if (budgetWrapUp && !finalContent.trim()) {
+      abortReason = `Token budget would be exceeded by the next turn (${totalTokens}/${maxTokens}) and the final answer came back empty`;
     }
   } else if (hitMaxIterations) {
     finalContent += "\n[Reached maximum iterations]";
