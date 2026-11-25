@@ -70,6 +70,7 @@ export interface Agent {
   max_tokens: number;       // token budget per run (default 50000)
   max_errors: number;       // consecutive error limit (default 3)
   keep_full_tool_turns?: number; // tool results stay whole this many turns, then long ones are trimmed (default 3; 0 = never trim)
+  handoff_at_tokens?: number; // context size that triggers a handoff + reset of the run's conversation (0 = off, the default)
   variables: string;        // JSON key-value pairs for template interpolation
   show_on_dashboard: number; // 0/1 — show last flow result as a widget on dashboard home
   builtin_handler: string;   // if set, scheduler runs builtin function instead of LLM

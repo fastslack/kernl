@@ -99,6 +99,19 @@ export class RunRecorder {
       },
       onFinal: onText("final"),
       onThought: onText("thought"),
+      // The history was compacted into a handoff (tool-loop handoffAtTokens).
+      // Shown as a thought, since it is the model's own brief and the run's
+      // timeline is the only place it can be read back.
+      onHandoff: ({ handoff, contextTokens, tokens, messagesBefore }) => {
+        log.info(`Agent "${agent.name}": context handoff at ~${contextTokens} tokens (${messagesBefore} messages)`);
+        onText("thought")({ content: `[HANDOFF at ~${contextTokens} context tokens]\n\n${handoff}`, tokens });
+        this.logEvent({
+          event_type: "step", event_subtype: "handoff",
+          detail: `Context compacted at ~${contextTokens} tokens (${messagesBefore} messages)`,
+          raw_data: { step_number: this.stepNumber, context_tokens: contextTokens, messages_before: messagesBefore },
+          tokens_used: tokens,
+        });
+      },
       onToolCall: ({ tool_name, tool_input, preview }) => {
         this.stepNumber++;
         this.toolsUsed.add(tool_name);

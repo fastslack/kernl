@@ -833,6 +833,9 @@ export class AgentExecutor {
       // Clamp: a negative or absurd value from a hand-edited row must not
       // disable the loop's safety or trim the current turn.
       keepFullToolTurns: Math.min(Math.max(Math.trunc(agent.keep_full_tool_turns ?? 3), 0), 50),
+      // Off (0) unless set. A floor of 4000 so a typo cannot reset the
+      // context on every turn.
+      handoffAtTokens: (agent.handoff_at_tokens ?? 0) > 0 ? Math.max(Math.trunc(agent.handoff_at_tokens!), 4000) : 0,
       // Reasoning models (MiniMax, DeepSeek…) think before they answer; at the
       // adapter's 4096 default a long tool result can use it all up and the
       // turn comes back empty.

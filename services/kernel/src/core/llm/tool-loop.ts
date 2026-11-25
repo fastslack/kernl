@@ -27,6 +27,14 @@ export interface LlmLoopBudgets {
    * spend entirely on its hidden thinking and answer with nothing.
    */
   maxOutputTokens?: number;
+  /**
+   * End-of-conversation compaction (arXiv 2611.05306, "EoCC"): once a turn's
+   * context reaches this many tokens, the model writes a structured handoff
+   * and the loop starts over from the task plus that handoff, instead of
+   * re-sending a history that keeps growing. 0 or unset keeps the whole
+   * history, the old behaviour. See writeHandoff.
+   */
+  handoffAtTokens?: number;
 }
 
 /** A result longer than this is cut once it ages out; shorter ones stay. */
@@ -88,6 +96,8 @@ export interface LlmLoopHooks {
    * Called synchronously — serialize inside the hook, the arrays are live.
    */
   onCheckpoint?(checkpoint: LoopCheckpoint): void;
+  /** The history was replaced by the task plus a handoff (see `handoffAtTokens`). */
+  onHandoff?(payload: { handoff: string; contextTokens: number; tokens: number; messagesBefore: number }): void;
 }
 
 /** What a run needs to pick up where it stopped. */
@@ -132,6 +142,8 @@ export interface LlmLoopResult {
   /** Empty when status === "completed". */
   abortReason: string;
   hitMaxIterations: boolean;
+  /** Times the history was compacted into a handoff (0 when `handoffAtTokens` is off). */
+  handoffs: number;
 }
 
 /** Short, human-readable one-liner of tool args for log lines. */
@@ -237,6 +249,84 @@ export function prepareResumeMessages(input: ChatMessage[]): {
   return { messages, unknownToolCalls };
 }
 
+/** Opens every handoff the loop writes into the conversation. */
+export const HANDOFF_MARK = "[HANDOFF";
+
+/**
+ * Asked of the model, with tools off, when the context crosses
+ * `handoffAtTokens`. A brief of the work left, in fixed sections — not a
+ * narrative summary, which over-weights whatever repeated most (arXiv
+ * 2611.05306, appendix A). An earlier handoff in the conversation is merged
+ * in, so a second compaction keeps what the first one carried.
+ */
+const HANDOFF_INSTRUCTION =
+  "[CONTEXT HANDOFF] Your context is about to be reset. The next conversation will see only the original task and " +
+  "what you write now; tool results above will be gone (the environment — files, records, anything your tools changed — " +
+  "stays as it is). Write a handoff for yourself, with exactly these sections:\n" +
+  "## Goal — the task in one or two sentences, with any completion criteria.\n" +
+  "## Established facts — what you found that is still needed: exact values, ids, paths, names. Copy them verbatim.\n" +
+  "## Changes made — every action that changed state (writes, sends, creates), so none is repeated.\n" +
+  "## Verification — what you checked and its outcome.\n" +
+  "## Dead ends — approaches that failed and why, so they are not retried.\n" +
+  "## Remaining plan — the next concrete steps, in order.\n" +
+  "If an earlier handoff appears above, carry everything in it that still holds into this one. " +
+  "Do not call tools. Write only the handoff.";
+
+const HANDOFF_MAX_OUTPUT_TOKENS = 2048;
+
+function textOf(content: ChatMessage["content"]): string {
+  if (typeof content === "string") return content;
+  return (content as ContentBlock[])
+    .filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
+    .map((b) => b.text)
+    .join("\n");
+}
+
+/**
+ * The task the loop was given: the messages before the first assistant turn,
+ * without any handoff an earlier compaction appended to them. Copies, so the
+ * live history is never touched.
+ */
+export function taskMessages(messages: ChatMessage[]): ChatMessage[] {
+  const firstAssistant = messages.findIndex((m) => m.role === "assistant");
+  const lead = firstAssistant < 0 ? messages : messages.slice(0, firstAssistant);
+  const out: ChatMessage[] = [];
+  for (const m of lead) {
+    if (typeof m.content === "string") {
+      if (!m.content.startsWith(HANDOFF_MARK)) out.push({ ...m });
+      continue;
+    }
+    const blocks = (m.content as ContentBlock[]).filter(
+      (b) => !(b.type === "text" && b.text.startsWith(HANDOFF_MARK)),
+    );
+    if (blocks.length > 0) out.push({ ...m, content: blocks });
+  }
+  return out;
+}
+
+/**
+ * Task plus handoff, as the next conversation starts. The handoff rides on
+ * the task's last user turn when there is one, so roles keep alternating.
+ */
+export function buildHandoffConversation(task: ChatMessage[], handoff: string, n: number): ChatMessage[] {
+  const text =
+    `${HANDOFF_MARK} #${n}] The conversation was compacted to keep the context short. ` +
+    `This is your own handoff from before the reset; continue the task from its remaining plan.\n\n${handoff.trim()}`;
+  const out = task.slice();
+  const last = out[out.length - 1];
+  if (last?.role === "user") {
+    const blocks: ContentBlock[] =
+      typeof last.content === "string"
+        ? [{ type: "text", text: last.content }]
+        : (last.content as ContentBlock[]).slice();
+    blocks.push({ type: "text", text });
+    out[out.length - 1] = { ...last, content: blocks };
+  } else {
+    out.push({ role: "user", content: text });
+  }
+  return out;
+}
+
 /**
  * Provider-agnostic LLM tool-use loop with safety controls.
  *
@@ -274,6 +364,10 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
   const callKeyById = new Map<string, string>();
   /** Call keys whose result was cut from the history. */
   const trimmedKeys = new Set<string>();
+  const handoffAtTokens = budgets.handoffAtTokens && budgets.handoffAtTokens > 0 ? budgets.handoffAtTokens : 0;
+  let handoffs = 0;
+  /** Context size of the last call: its prompt when the provider splits usage, else its total. */
+  let lastContextTokens = 0;
 
   const priorElapsedMs = resumeFrom?.elapsedMs ?? 0;
   const startedAt = Date.now();
@@ -313,6 +407,66 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
       }
       if (consecutiveErrors >= maxErrors) { abortReason = `${maxErrors} consecutive tool errors`; break; }
 
+      // Compact before the call that would carry an over-threshold history.
+      // Only mid-task (last turn is tool results): a handoff with nothing done
+      // since the last reset would just restate it.
+      const tail = messages[messages.length - 1];
+      if (
+        handoffAtTokens > 0 &&
+        lastContextTokens >= handoffAtTokens &&
+        tail?.role === "user" &&
+        Array.isArray(tail.content) &&
+        (tail.content as ContentBlock[]).some((b) => b.type === "tool_result")
+      ) {
+        let handoff = "";
+        let handoffTokens = 0;
+        try {
+          // The instruction rides on the tool-result turn (a copy), so roles
+          // keep alternating for providers that insist on it.
+          const ask: ChatMessage = {
+            role: "user",
+            content: [...(tail.content as ContentBlock[]), { type: "text", text: HANDOFF_INSTRUCTION }],
+          };
+          const h = await provider.chatCompletion(
+            [...messages.slice(0, -1), ask],
+            {
+              model: model || undefined,
+              system: systemText,
+              tools: undefined,
+              max_tokens: HANDOFF_MAX_OUTPUT_TOKENS,
+              caller: caller ? `${caller}/handoff` : "handoff",
+            },
+          );
+          handoffTokens = h.tokens_used;
+          handoff = h.tool_calls && h.tool_calls.length > 0 ? "" : (h.content ?? "").trim();
+        } catch {
+          handoff = "";
+        }
+        totalTokens += handoffTokens;
+        if (handoff) {
+          handoffs++;
+          const messagesBefore = messages.length;
+          const contextTokens = lastContextTokens;
+          const next = buildHandoffConversation(taskMessages(messages), handoff, handoffs);
+          messages.splice(0, messages.length, ...next);
+          // The results these remember are gone from the history; a call
+          // after the reset reads the environment afresh.
+          toolCallCounts.clear();
+          toolResultCache.clear();
+          callKeyById.clear();
+          trimmedKeys.clear();
+          lastTurnTokens = 0;
+          lastContextTokens = 0;
+          hooks?.onHandoff?.({ handoff, contextTokens, tokens: handoffTokens, messagesBefore });
+          checkpoint();
+        } else {
+          // Failed or empty: carry on with the full history, try again next turn.
+          lastContextTokens = 0;
+        }
+        if (isCancelled?.()) { abortReason = "Cancelled by user"; break; }
+        if (totalTokens >= maxTokens) { abortReason = `Token budget exhausted (${totalTokens}/${maxTokens})`; break; }
+      }
+
       iterations++;
 
       const budgetWarning = formatBudgetWarning(iterations, maxIterations);
@@ -339,6 +493,11 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
       const completion = await provider.chatCompletion(messages, opts);
       totalTokens += completion.tokens_used;
       lastTurnTokens = completion.tokens_used;
+      // Anthropic counts cached prompt tokens apart from input_tokens.
+      lastContextTokens =
+        completion.input_tokens !== undefined
+          ? completion.input_tokens + (completion.cache_read_tokens ?? 0) + (completion.cache_write_tokens ?? 0)
+          : completion.tokens_used;
 
       if (isCancelled?.()) { abortReason = "Cancelled by user"; break; }
 
@@ -500,5 +659,6 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
     toolsUsed: [...toolsUsed],
     abortReason,
     hitMaxIterations,
+    handoffs,
   };
 }

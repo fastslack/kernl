@@ -1220,6 +1220,13 @@ export const agentsMigrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_trigger ON agent_runs(agent_id, trigger_type);
     `,
   },
+  {
+    // Per-agent end-of-conversation compaction in the native loop
+    // (tool-loop.ts handoffAtTokens): at this context size the model writes a
+    // handoff and the conversation restarts from the task plus it. 0 = off.
+    version: 68,
+    sql: `ALTER TABLE agents ADD COLUMN handoff_at_tokens INTEGER NOT NULL DEFAULT 0;`,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is
@@ -1228,5 +1235,5 @@ export const agentsMigrations: Migration[] = [
   //
   // NOTE: versions 61 and 62 are burned too. They belonged to a learning
   // import from other instances that was removed before any release; a dev
-  // DB may have recorded them. The next migration is 68.
+  // DB may have recorded them. The next migration is 69.
 ];

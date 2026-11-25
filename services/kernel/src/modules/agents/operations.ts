@@ -51,6 +51,7 @@ const AGENT_FIELDS = {
   max_tokens: "number",
   max_errors: "number",
   keep_full_tool_turns: "number",
+  handoff_at_tokens: "number",
   variables: "object",
   show_on_dashboard: "boolean",
   builtin_handler: "string",

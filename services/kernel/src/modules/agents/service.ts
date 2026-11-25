@@ -123,6 +123,7 @@ const AGENT_PATCH: Record<string, PatchColumn> = {
   max_tokens: "text",
   max_errors: "text",
   keep_full_tool_turns: "text",
+  handoff_at_tokens: "text",
   variables: "json",
   show_on_dashboard: "bool",
   builtin_handler: "text",
@@ -889,6 +890,7 @@ export class AgentService {
       max_tokens: number;
       max_errors: number;
       keep_full_tool_turns: number;
+      handoff_at_tokens: number;
       variables: Record<string, string>;
       show_on_dashboard: boolean;
       builtin_handler: string;
