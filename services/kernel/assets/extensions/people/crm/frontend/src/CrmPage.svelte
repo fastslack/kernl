@@ -224,16 +224,12 @@
       {#each contacts as c (c.id)}
         {@const col = REL_HEX[c.relationship] ?? '#94A3B8'}
         <button class="ct" class:selected={selectedId === c.id} style="--oc: {col}" on:click={() => loadDetail(c.id)} title={[c.name, c.company, c.email].filter(Boolean).join(' · ')}>
-          <span class="ct-r1">
-            <span class="ct-mark" aria-hidden="true">{initials(c.name)}</span>
-            <span class="ct-name">{c.name}</span>
-          </span>
-          <span class="ct-r2">
-            <span class="ct-st"><i aria-hidden="true"></i>{L.rel[c.relationship] ?? c.relationship}</span>
-            <span class="ct-time">{c.last_interaction ? timeAgo(c.last_interaction) : L.never}</span>
-          </span>
-          <span class="ct-meter" aria-hidden="true"><i style="width: {freshness(c.last_interaction) * 100}%"></i></span>
+          <span class="ct-mark" aria-hidden="true">{initials(c.name)}</span>
+          <span class="ct-name">{c.name}</span>
           <span class="ct-who">{[c.company, c.email].filter(Boolean).join(' · ')}</span>
+          <span class="ct-st"><i aria-hidden="true"></i>{L.rel[c.relationship] ?? c.relationship}</span>
+          <span class="ct-meter" aria-hidden="true"><i style="width: {freshness(c.last_interaction) * 100}%"></i></span>
+          <span class="ct-time">{c.last_interaction ? timeAgo(c.last_interaction) : L.never}</span>
         </button>
       {/each}
     {/if}
@@ -424,30 +420,35 @@
   .cl-pagination button:disabled { opacity: .35; cursor: default; }
   .cl-empty { grid-column: 1 / -1; padding: 32px; text-align: center; color: var(--text-2); font-size: 13px; }
 
-  /* Every contact is a tile; the grid is what scrolls. */
-  .crm-grid { min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(212px, 1fr)); grid-auto-rows: 92px; gap: 8px; align-content: start; scrollbar-width: thin; }
-  .ct { display: flex; flex-direction: column; gap: 5px; min-width: 0; padding: 10px 12px; border-radius: 12px; text-align: left; color: var(--text-1); cursor: pointer; overflow: hidden; font: inherit;
-    background: radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--oc) 16%, transparent), transparent 60%), linear-gradient(160deg, color-mix(in srgb, var(--oc) 8%, var(--surface-1)), var(--surface-1) 70%);
-    border: 1px solid color-mix(in srgb, var(--oc) 26%, var(--border)); transition: transform .15s, border-color .15s, box-shadow .15s; }
-  .ct:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--oc) 65%, transparent); box-shadow: 0 12px 26px -18px var(--oc); }
+  /* One contact per row; the list is what scrolls. */
+  .crm-grid { min-height: 0; overflow: auto; display: flex; flex-direction: column; padding: 4px; border-radius: 14px; border: 1px solid var(--border); background: var(--surface-1);
+    scrollbar-width: thin; container-type: inline-size; }
+  .ct { --oc: #94A3B8; flex: none; display: grid; grid-template-columns: 30px minmax(120px, 1.2fr) minmax(0, 1.6fr) 120px 90px 64px; align-items: center; column-gap: 14px;
+    min-width: 0; padding: 6px 12px 6px 8px; border: 1px solid transparent; border-radius: 10px; background: none; text-align: left; color: var(--text-1); cursor: pointer; font: inherit;
+    transition: background .15s, border-color .15s; }
+  .ct + .ct { box-shadow: 0 -1px 0 color-mix(in srgb, var(--border) 70%, transparent); }
+  .ct:hover { background: color-mix(in srgb, var(--oc) 8%, var(--surface-2)); box-shadow: none; }
+  .ct:hover + .ct, .ct.selected + .ct { box-shadow: none; }
   .ct:focus-visible, .cd-close:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
-  .ct.selected { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset, 0 12px 26px -18px var(--gold); }
-  .ct-r1 { display: flex; align-items: center; gap: 9px; min-width: 0; }
-  .ct-mark { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; font: 800 11px var(--font-display);
-    color: color-mix(in srgb, var(--oc) 60%, white); background: color-mix(in srgb, var(--oc) 22%, var(--surface-2)); box-shadow: 0 0 14px -4px var(--oc), inset 0 0 0 1px color-mix(in srgb, var(--oc) 40%, transparent); }
-  .ct-name { font: 700 14px/1.2 var(--font-display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .ct-r2 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .ct-st { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; color: color-mix(in srgb, var(--oc) 75%, white); text-transform: capitalize; }
-  .ct-st i { width: 7px; height: 7px; border-radius: 50%; background: var(--oc); box-shadow: 0 0 8px var(--oc); }
-  .ct-time { font-size: 11px; color: var(--text-3); white-space: nowrap; }
+  .ct.selected { border-color: var(--gold); box-shadow: none; background: linear-gradient(90deg, color-mix(in srgb, var(--gold) 14%, var(--surface-1)), var(--surface-1)); }
+  .ct-mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; font: 800 10.5px var(--font-display);
+    color: color-mix(in srgb, var(--oc) 60%, white); background: color-mix(in srgb, var(--oc) 22%, var(--surface-2)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--oc) 40%, transparent); }
+  .ct-name { font: 600 13.5px/1.2 var(--font-display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ct-who { font-size: 12px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ct-st { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: color-mix(in srgb, var(--oc) 75%, white); text-transform: capitalize; white-space: nowrap; }
+  .ct-st i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--oc); box-shadow: 0 0 8px var(--oc); }
   .ct-meter { height: 4px; border-radius: 3px; background: color-mix(in srgb, var(--oc) 12%, var(--surface-2)); overflow: hidden; }
   .ct-meter i { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #34D399, #22D3EE); box-shadow: 0 0 8px #34D399; }
-  .ct-who { font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ct-time { font-size: 11.5px; color: var(--text-3); white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+  /* Narrow (the detail pane is open): name, relationship and time are enough. */
+  @container (max-width: 620px) {
+    .ct { grid-template-columns: 28px minmax(0, 1fr) auto 56px; }
+    .ct-who, .ct-meter { display: none; }
+  }
 
   @media (max-height: 820px) {
     .crm-page { gap: 8px; padding: 10px 16px 12px; }
-    .crm-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); grid-auto-rows: 74px; gap: 6px; }
-    .ct { gap: 3px; padding: 7px 10px; } .ct-who { display: none; } .ct-mark { width: 24px; height: 24px; font-size: 9.5px; border-radius: 7px; } .ct-name { font-size: 12.5px; }
+    .ct { padding-top: 4px; padding-bottom: 4px; } .ct-mark { width: 24px; height: 24px; font-size: 9.5px; border-radius: 7px; } .ct-name { font-size: 12.5px; }
   }
   @media (max-width: 900px) { .crm-layout.open { grid-template-columns: 1fr; } .crm-layout.open .crm-grid { display: none; } }
   @media (prefers-reduced-motion: reduce) { .ct { transition: none; } }
