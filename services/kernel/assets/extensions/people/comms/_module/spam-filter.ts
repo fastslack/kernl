@@ -92,7 +92,10 @@ export class SpamFilter {
 
   setSettings(accountId: string, input: unknown): SpamSettings {
     const s = normalizeSpamSettings(input);
-    this.db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)").run(settingsKey(accountId), JSON.stringify(s));
+    // app_settings.updated_at is NOT NULL with no default.
+    this.db.prepare(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+      .run(settingsKey(accountId), JSON.stringify(s), isoNow());
     return s;
   }
 

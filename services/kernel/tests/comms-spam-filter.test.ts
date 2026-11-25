@@ -21,7 +21,8 @@ function makeTables(d: Database) {
     gmail_message_id TEXT DEFAULT '', gmail_thread_id TEXT DEFAULT '', thread_id TEXT DEFAULT '', in_reply_to TEXT DEFAULT '',
     metadata TEXT DEFAULT '{}', sent_at TEXT, created_at TEXT, updated_at TEXT
   )`);
-  d.run("CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT)");
+  // The real shape: updated_at is NOT NULL with no default.
+  d.run("CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL)");
   d.run(`CREATE TABLE google_emails (
     gmail_id TEXT PRIMARY KEY, thread_id TEXT, from_email TEXT, from_name TEXT, to_emails TEXT,
     subject TEXT, snippet TEXT, body_text TEXT, date TEXT, labels TEXT,
