@@ -47,7 +47,7 @@ import { initHttpAndMcp } from "./http.js";
 import { initMtw } from "./mtw.js";
 import { wireServicesLate } from "./services-late.js";
 import { installShutdownHandlers } from "./shutdown.js";
-import { startSidecars, resolveSidecarDirs } from "./sidecars.js";
+import { startSidecars, resolveSidecarDirs, SIDECAR_BROKER } from "./sidecars.js";
 import type { MeshModule } from "../types/extensions/index.js";
 
 export async function bootstrap(): Promise<void> {
@@ -183,6 +183,10 @@ export async function bootstrap(): Promise<void> {
     rustDelegates: bridges.rustDelegates,
     license,
   });
+
+  // A binary install has no nginx in front: the kernel serves the SPA and
+  // passes its live socket (/mtw) on to the broker it runs itself.
+  if (sidecars.length > 0) http.httpServer?.setLiveSocketUpstream({ ...SIDECAR_BROKER });
 
   // ── 10. mtwRequest publisher + RPC + ARCH beams ────
   const mtw = await initMtw({

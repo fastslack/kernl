@@ -13,6 +13,8 @@ import { parsePermission } from "./permissions.js";
 import { getPrincipal, getRequestContext, runWithContext } from "./request-context.js";
 import { assertScope, filterForScope } from "./scope.js";
 import { brokerSupportsPrincipals } from "./mtw/broker-features.js";
+import { proxyLiveSocket, type LiveSocketUpstream } from "./live-socket-proxy.js";
+import type { Duplex } from "node:stream";
 import { HttpError, isHttpError } from "../sdk/http-error.js";
 import type { Operation } from "../sdk/args.js";
 
@@ -133,6 +135,8 @@ export class KernelHttpServer {
   private onStaticChange: (() => void) | null = null;
   private htmlCache: string | null = null;
   private authToken: string;
+  /** The broker the live socket (/mtw) is proxied to; null leaves it to nginx. */
+  private liveSocketUpstream: LiveSocketUpstream | null = null;
   private corsOrigins: string[];
   private preconditions: Precondition[] = [];
   /**
@@ -424,9 +428,44 @@ export class KernelHttpServer {
     res.end(body);
   }
 
+  /**
+   * Who may open the event broker (/api/auth/broker, and the live socket a
+   * native install proxies itself): 204 the super admin, 200 a user when the
+   * broker holds users to their permissions, 403 another user, 401 no one.
+   * The token comes from the socket's original URI when there is one (a
+   * browser cannot set headers on a WebSocket), else from the request.
+   */
+  private brokerDecision(req: IncomingMessage, originalUri: string, queryToken: string | null): { status: 200 | 204 | 401 | 403; principal: Principal | null } {
+    if (!this.authToken) return { status: 204, principal: SUPER_ADMIN };
+    const qIdx = originalUri.indexOf("?");
+    const fromUri = qIdx >= 0 ? new URLSearchParams(originalUri.slice(qIdx + 1)).get("token") : null;
+    const principal = fromUri
+      ? resolveToken(fromUri, this.authToken)
+      : resolveRequestPrincipal(req, this.authToken) ?? resolveToken(queryToken, this.authToken);
+    if (principal?.kind === "user" && brokerSupportsPrincipals()) return { status: 200, principal };
+    return { status: principal?.kind === "super_admin" ? 204 : principal ? 403 : 401, principal };
+  }
+
+  /**
+   * Serve the dashboard's live socket (/mtw) by proxying it to the broker
+   * this kernel runs as a sidecar. Docker leaves it unset: nginx does it there.
+   */
+  setLiveSocketUpstream(upstream: LiveSocketUpstream | null): void {
+    this.liveSocketUpstream = upstream;
+  }
+
   async start(): Promise<boolean> {
     return new Promise((ok) => {
       this.server = createServer((req, res) => this.handleRequest(req, res));
+      this.server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+        const handled = proxyLiveSocket({
+          req, socket, head,
+          upstream: this.liveSocketUpstream,
+          decide: (r) => this.brokerDecision(r, r.url ?? "", null).status,
+        });
+        // Every other WebSocket lives on its own server; nothing upgrades here.
+        if (!handled) socket.destroy();
+      });
       // Node's default (300 s for the whole request body) kills a 100 MB chat
       // attachment uploaded over a slow tunnel halfway through.
       this.server.requestTimeout = 15 * 60 * 1000;
@@ -558,18 +597,8 @@ export class KernelHttpServer {
     // original URI, whose `?token=` carries the token (a browser cannot set
     // headers on a WebSocket).
     if (pathname === "/api/auth/broker") {
-      if (!this.authToken) { res.writeHead(204, SECURITY_HEADERS); res.end(); return; }
-      const original = String(req.headers["x-original-uri"] ?? "");
-      const qIdx = original.indexOf("?");
-      const fromUri = qIdx >= 0 ? new URLSearchParams(original.slice(qIdx + 1)).get("token") : null;
-      const principal = fromUri
-        ? resolveToken(fromUri, this.authToken)
-        : resolveRequestPrincipal(req, this.authToken) ?? resolveToken(url.searchParams.get("token"), this.authToken);
-      if (principal?.kind === "user" && brokerSupportsPrincipals()) {
-        this.json(res, 200, { kind: "user", id: principal.id }, req);
-        return;
-      }
-      const status = principal?.kind === "super_admin" ? 204 : principal ? 403 : 401;
+      const { status, principal } = this.brokerDecision(req, String(req.headers["x-original-uri"] ?? ""), url.searchParams.get("token"));
+      if (status === 200) { this.json(res, 200, { kind: "user", id: principal!.id }, req); return; }
       res.writeHead(status, SECURITY_HEADERS);
       res.end();
       return;

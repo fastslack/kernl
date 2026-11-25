@@ -72,6 +72,12 @@ export function sidecarEndpoints(
 /** TOML basic-string escaping. */
 const tomlString = (s: string): string => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 
+/**
+ * Where the bundled mtw-server listens (loopback only) and its WebSocket path
+ * (packaging/mtw.binary.toml). The kernel proxies the dashboard's /mtw there.
+ */
+export const SIDECAR_BROKER = { host: "127.0.0.1", port: 7741, path: "/ws" } as const;
+
 export async function startSidecars(opts: {
   appDir: string;
   dataDir: string;
@@ -178,8 +184,8 @@ export async function startSidecars(opts: {
     env: {
       MTW_EXIT_ON_STDIN_EOF: "1",
       // Pinned: an inherited MTW_HOST=0.0.0.0 would expose the bus on a desktop.
-      MTW_HOST: "127.0.0.1",
-      MTW_PORT: "7741",
+      MTW_HOST: SIDECAR_BROKER.host,
+      MTW_PORT: String(SIDECAR_BROKER.port),
       // mtw-server 0.5.0 checks every WebSocket handshake against the
       // kernel's /api/auth/broker and refuses them all (503) without this.
       // Loopback reaches the kernel whether it binds 0.0.0.0 or 127.0.0.1.
