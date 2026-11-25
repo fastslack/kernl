@@ -3,8 +3,7 @@
   // (Fase 2b). Talks IRCv3 directly over the kernel's /ws/irc WebSocket —
   // no kernel HTTP API involved; ctx is only used for the page contract.
   import { onDestroy } from 'svelte';
-  import ViewHeader from '$shared/components/ViewHeader.svelte';
-  import Panel from '$shared/components/Panel.svelte';
+  import DirectoryStrip, { type StripKpi } from '$shared/components/DirectoryStrip.svelte';
   import type { ExtPageContext } from '$shared/types';
   import { toast, confirm, ask, describeError } from '$shared/feedback';
 
@@ -15,7 +14,7 @@
   let nick = '';
   let account = '';
   let password = '';
-  let status = 'disconnected';
+  let status = 'desconectado';
   let connected = false;
 
   let ws: WebSocket | null = null;
@@ -278,7 +277,7 @@
       case '903': sys(current, 'SASL OK'); send('CAP END'); break;
       case '904': case '905': sys(current, 'SASL failed: ' + m.params.slice(1).join(' ')); send('CAP END'); break;
       case '001':
-        status = 'registered as ' + m.params[0];
+        status = 'en línea como ' + m.params[0];
         void loadNetworks();
         break;
       case 'JOIN': {
@@ -308,23 +307,23 @@
   }
 
   function connect() {
-    if (!nick.trim()) { status = 'enter a nick first'; return; }
+    if (!nick.trim()) { status = 'primero poné un nick'; return; }
     if (ws) { try { ws.close(); } catch { /* ignore */ } }
     buffers = { '*': [] };
     targets = ['*'];
     current = '*';
-    status = `connecting to ${url}…`;
+    status = `conectando a ${url}…`;
     try {
       ws = new WebSocket(url);
     } catch (e) {
-      status = 'bad URL: ' + (e instanceof Error ? e.message : String(e));
+      status = 'URL inválida: ' + (e instanceof Error ? e.message : String(e));
       return;
     }
     // If the socket never opens (e.g. the IRC extension is not active, so
     // /ws/irc has no upgrade handler and the request just hangs), surface it.
     connectTimer = setTimeout(() => {
       if (ws && ws.readyState !== 1) {
-        status = 'no response from /ws/irc — is the IRC extension activated and the kernel reloaded?';
+        status = 'sin respuesta de /ws/irc — ¿está activa la extensión IRC y se recargó el kernel?';
         try { ws.close(); } catch { /* ignore */ }
         ws = null;
       }
@@ -334,7 +333,7 @@
       openedOnce = true;
       if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
       connected = true;
-      status = 'registering…';
+      status = 'registrando…';
       send('CAP LS 302');
       send('NICK ' + nick);
       send(`USER ${nick} 0 * :Kernl dashboard`);
@@ -344,17 +343,17 @@
     };
     // Only show 'disconnected' if we had actually connected — otherwise keep
     // the timeout/error message that explains why it never opened.
-    ws.onclose = () => { connected = false; if (openedOnce) status = 'disconnected'; };
+    ws.onclose = () => { connected = false; if (openedOnce) status = 'desconectado'; };
     ws.onerror = () => {
       if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
-      status = 'connection error — check the URL and that /ws/irc is mounted';
+      status = 'error de conexión — revisá la URL y que /ws/irc esté montado';
     };
   }
 
   function disconnect() {
     if (ws) { send('QUIT :bye'); ws.close(); ws = null; }
     connected = false;
-    status = 'disconnected';
+    status = 'desconectado';
   }
 
   function onKey(e: KeyboardEvent) {
@@ -381,174 +380,226 @@
     }
   }
 
+  // ── the Oficinas strip ───────────────────────────────────────
+  $: netsUp = upstreams.filter((u) => u.state === 'connected').length;
+  $: chanCount = targets.filter((t) => t !== '*').length;
+  $: mirrored = upstreams.reduce((n, u) => n + u.channels.length, 0);
+  $: lineCount = Object.values(buffers).reduce((n, b) => n + b.length, 0);
+  $: stripKpis = [
+    { key: 'session', n: connected ? 'en línea' : 'fuera', label: 'sesión', color: connected ? '#4ADE80' : '#94A3B8', live: connected, title: status },
+    { key: 'nets', n: `${netsUp}/${upstreams.length}`, label: 'redes conectadas', color: '#22D3EE', live: netsUp > 0 },
+    { key: 'chans', n: chanCount, label: 'canales abiertos', color: '#A78BFA' },
+    { key: 'mirrored', n: mirrored, label: 'canales en redes', color: '#FBBF24' },
+    { key: 'lines', n: lineCount, label: 'líneas', color: '#F472B6' },
+  ] satisfies StripKpi[];
+
+  const HUES = ['#60A5FA', '#34D399', '#A78BFA', '#F472B6', '#FBBF24', '#22D3EE', '#FB923C', '#4ADE80'];
+  function hueOf(s: string): string {
+    let h = 0;
+    for (const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    return HUES[h % HUES.length];
+  }
+  function stateColor(st: string): string {
+    if (st === 'connected') return '#4ADE80';
+    if (st === 'error') return '#F87171';
+    if (/connecting|registering|reconnecting/.test(st)) return '#FBBF24';
+    return '#94A3B8';
+  }
+
   onDestroy(() => { if (ws) try { ws.close(); } catch { /* ignore */ } });
 </script>
 
-<ViewHeader title="IRC" sub="Kernl IRC network — IRCv3, TLS/SASL, E2E, bouncer">
-  <span class="status">{status}</span>
-</ViewHeader>
-
-<Panel title="Connection">
-  <div class="conn">
-    <select
-      class="inp"
-      bind:value={selectedProfile}
-      on:change={() => applyProfile(selectedProfile)}
-      title="Saved profiles"
-    >
-      <option value="">— profile —</option>
-      {#each profiles as p}
-        <option value={p.name}>{p.name}</option>
-      {/each}
-    </select>
-    <input class="inp grow" bind:value={url} placeholder="wss://host/ws/irc" />
-    <input class="inp" bind:value={nick} on:change={loadNetworks} placeholder="nick" />
-    <input class="inp" bind:value={account} on:change={loadNetworks} placeholder="SASL account (optional)" />
-    <input class="inp" type="password" bind:value={password} placeholder="SASL password" />
-    <button class="btn ghost" on:click={saveProfile} title="Save these settings as a profile">Save</button>
-    {#if selectedProfile}
-      <button class="btn ghost" on:click={deleteProfile} title="Delete the selected profile">✕</button>
-    {/if}
+<div class="irc-page">
+<DirectoryStrip eyebrow="Social · IRC" title="¿En qué canal estás?" kpis={stripKpis} interactive={false}>
+  <svelte:fragment slot="aside">
+    <span class="pill" class:on={connected} title={status}><i></i>{status}</span>
     {#if connected}
-      <button class="btn danger" on:click={disconnect}>Disconnect</button>
+      <button class="btn danger" on:click={disconnect}>Desconectar</button>
     {:else}
-      <button class="btn" on:click={connect}>Connect</button>
+      <button class="btn" on:click={connect}>Conectar</button>
     {/if}
-  </div>
-  <p class="hint">Passwords are never saved in a profile.</p>
-</Panel>
+  </svelte:fragment>
+  <svelte:fragment slot="tools">
+    <div class="conn">
+      <select class="inp" bind:value={selectedProfile} on:change={() => applyProfile(selectedProfile)} title="Perfiles guardados (sin contraseñas)">
+        <option value="">— perfil —</option>
+        {#each profiles as p}<option value={p.name}>{p.name}</option>{/each}
+      </select>
+      <input class="inp grow" bind:value={url} placeholder="wss://host/ws/irc" aria-label="URL" />
+      <input class="inp" bind:value={nick} on:change={loadNetworks} placeholder="nick" aria-label="nick" />
+      <input class="inp" bind:value={account} on:change={loadNetworks} placeholder="cuenta SASL (opcional)" aria-label="cuenta SASL" />
+      <input class="inp" type="password" bind:value={password} placeholder="contraseña SASL" aria-label="contraseña SASL" />
+      <button class="btn ghost" on:click={saveProfile} title="Guardar como perfil; la contraseña nunca se guarda">Guardar</button>
+      {#if selectedProfile}<button class="btn ghost" on:click={deleteProfile} title="Borrar el perfil" aria-label="Borrar el perfil">✕</button>{/if}
+    </div>
+  </svelte:fragment>
+</DirectoryStrip>
 
-<Panel title="Networks">
-  {#if !owner}
-    <p class="hint">Enter a nick above to manage the networks this kernel stays connected to for you.</p>
-  {:else}
-    {#if netError}<p class="err">{netError}</p>{/if}
-    <div class="nets">
-      {#each upstreams as u}
-        <div class="net">
-          <div class="net-main">
-            <span class="dot {u.state}"></span>
-            <strong>{u.label || u.network}</strong>
-            <span class="muted">{u.host}:{u.port}</span>
-            <span class="muted">as {u.currentNick || u.nick}</span>
-            <span class="state">{u.state}</span>
-          </div>
-          {#if u.lastError}<div class="net-err">{u.lastError}</div>{/if}
-          {#if u.channels.length}
-            <div class="net-chans">
-              {#each u.channels as ch}
-                <button class="chip" on:click={() => openUpstreamChannel(u, ch)} disabled={!connected}>
-                  {ch}
-                </button>
-              {/each}
-            </div>
-          {/if}
-          <div class="net-actions">
-            {#if u.enabled}
-              <button class="btn ghost" on:click={() => disconnectNetwork(u)} disabled={netBusy}>Disconnect</button>
-            {:else}
-              <button class="btn ghost" on:click={() => connectNetwork(u)} disabled={netBusy}>Connect</button>
-            {/if}
-            <button class="btn ghost danger-text" on:click={() => removeNetwork(u)} disabled={netBusy}>Remove</button>
-          </div>
-        </div>
+<div class="irc-body">
+  <section class="col nets-col">
+    <header class="col-h"><span>Redes</span>
+      {#if owner && !showAdd}<button class="lnk" on:click={() => { showAdd = true; void loadNetworks(); }}>+ Red</button>{/if}
+    </header>
+    <div class="col-scroll">
+      {#if !owner}
+        <p class="hint">Poné un nick arriba para manejar las redes a las que este kernel queda conectado por vos.</p>
       {:else}
-        <p class="hint">No networks yet. Add DALnet, QuakeNet, Libera or any other host.</p>
+        {#if netError}<p class="err">{netError}</p>{/if}
+        {#if showAdd}
+          <div class="add">
+            <select class="inp" bind:value={form.network} on:change={onPresetPick}>
+              <option value="">— red —</option>
+              {#each presets as p}<option value={p.slug} title={p.note}>{p.name}</option>{/each}
+            </select>
+            <input class="inp" bind:value={form.host} placeholder="host" />
+            <div class="row">
+              <input class="inp port" type="number" bind:value={form.port} placeholder="puerto" />
+              <label class="tls"><input type="checkbox" bind:checked={form.tls} /> TLS</label>
+            </div>
+            <input class="inp" bind:value={form.nick} placeholder="nick en esa red" />
+            <input class="inp" bind:value={form.sasl_account} placeholder="cuenta (opcional)" />
+            <input class="inp" type="password" bind:value={form.password} placeholder="contraseña (opcional)" />
+            <div class="row">
+              <button class="btn" on:click={addNetwork} disabled={netBusy}>Agregar</button>
+              <button class="btn ghost" on:click={() => (showAdd = false)}>Cancelar</button>
+            </div>
+          </div>
+        {/if}
+        {#each upstreams as u (u.id)}
+          <article class="net" style="--oc: {hueOf(u.network)}; --sc: {stateColor(u.state)}">
+            <div class="net-main">
+              <span class="mark">{(u.label || u.network).slice(0, 2).toUpperCase()}</span>
+              <div class="net-id">
+                <strong>{u.label || u.network}</strong>
+                <small>{u.host}:{u.port} · {u.currentNick || u.nick}</small>
+              </div>
+              <span class="sdot" title={u.state}></span>
+            </div>
+            {#if u.lastError}<div class="net-err">{u.lastError}</div>{/if}
+            {#if u.channels.length}
+              <div class="net-chans">
+                {#each u.channels as ch}
+                  <button class="chip" on:click={() => openUpstreamChannel(u, ch)} disabled={!connected}>{ch}</button>
+                {/each}
+              </div>
+            {/if}
+            <div class="net-actions">
+              <span class="state">{u.state}</span>
+              {#if u.enabled}
+                <button class="lnk" on:click={() => disconnectNetwork(u)} disabled={netBusy}>Desconectar</button>
+              {:else}
+                <button class="lnk" on:click={() => connectNetwork(u)} disabled={netBusy}>Conectar</button>
+              {/if}
+              <button class="lnk danger-text" on:click={() => removeNetwork(u)} disabled={netBusy}>Quitar</button>
+            </div>
+          </article>
+        {:else}
+          {#if !showAdd}<p class="hint">Todavía no hay redes. Sumá Libera, DALnet, QuakeNet o cualquier otro host.</p>{/if}
+        {/each}
+      {/if}
+    </div>
+  </section>
+
+  <section class="col chans">
+    <header class="col-h"><span>Canales</span></header>
+    <div class="col-scroll">
+      {#each targets as t}
+        {@const parts = bufferParts(t)}
+        <button class="chan" class:active={t === current} on:click={() => select(t)} title={t} style="--oc: {hueOf(parts.base)}">
+          <span class="cmark">{t === '*' ? '*' : parts.base.startsWith('#') ? '#' : parts.base.slice(0, 1).toUpperCase()}</span>
+          <span class="cname">{t === '*' ? 'servidor' : parts.base.replace(/^#/, '')}</span>
+          {#if parts.network}<span class="netbadge">{parts.network}</span>{/if}
+        </button>
       {/each}
     </div>
+  </section>
 
-    {#if showAdd}
-      <div class="add">
-        <select class="inp" bind:value={form.network} on:change={onPresetPick}>
-          <option value="">— network —</option>
-          {#each presets as p}
-            <option value={p.slug} title={p.note}>{p.name}</option>
-          {/each}
-        </select>
-        <input class="inp grow" bind:value={form.host} placeholder="host" />
-        <input class="inp port" type="number" bind:value={form.port} placeholder="port" />
-        <label class="tls"><input type="checkbox" bind:checked={form.tls} /> TLS</label>
-        <input class="inp" bind:value={form.nick} placeholder="nick on that network" />
-        <input class="inp" bind:value={form.sasl_account} placeholder="account (optional)" />
-        <input class="inp" type="password" bind:value={form.password} placeholder="password (optional)" />
-        <button class="btn" on:click={addNetwork} disabled={netBusy}>Add</button>
-        <button class="btn ghost" on:click={() => (showAdd = false)}>Cancel</button>
-      </div>
-    {:else}
-      <button class="btn ghost" on:click={() => { showAdd = true; void loadNetworks(); }}>+ Add network</button>
-    {/if}
-  {/if}
-</Panel>
-
-<div class="irc">
-  <div class="chans">
-    {#each targets as t}
-      {@const parts = bufferParts(t)}
-      <button class="chan" class:active={t === current} on:click={() => select(t)} title={t}>
-        {parts.base}{#if parts.network}<span class="netbadge">{parts.network}</span>{/if}
-      </button>
-    {/each}
-  </div>
-  <div class="conv">
+  <section class="col conv">
+    <header class="col-h"><span>{current === '*' ? 'Servidor' : current}</span><small>{(buffers[current] || []).length} líneas</small></header>
     <div class="log" bind:this={logEl}>
       {#each buffers[current] || [] as line}
         <div class="line">{@html line}</div>
+      {:else}
+        <p class="hint">{connected ? 'Nada todavía en este canal.' : 'Conectate para empezar: /join #canal, /msg nick texto, /list, /history #canal 50.'}</p>
       {/each}
     </div>
-    <input
-      class="msg"
-      bind:value={draft}
-      on:keydown={onKey}
-      placeholder="Message — /join #channel, /msg nick text, /list, /history #ch 50"
-      disabled={!connected}
-    />
-  </div>
+    <input class="msg" bind:value={draft} on:keydown={onKey}
+      placeholder="Mensaje — /join #canal, /msg nick texto, /list, /history #canal 50" disabled={!connected} />
+  </section>
+</div>
 </div>
 
 <style>
-  .status { color: var(--muted, #7d8590); font-size: 13px; }
-  .conn { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  .inp { background: var(--bg, #0d1117); border: 1px solid var(--line, #222a35); color: var(--fg, #c9d1d9); padding: 6px 8px; border-radius: 6px; font: inherit; }
-  .inp.grow { flex: 1; min-width: 220px; }
-  .btn { background: var(--accent, #3fb950); color: #06250f; border: 0; padding: 7px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; }
-  .btn.danger { background: #f85149; color: #2b0a08; }
-  .btn.ghost { background: none; border: 1px solid var(--line, #222a35); color: var(--fg, #c9d1d9); font-weight: 500; }
-  .btn.ghost:disabled { opacity: 0.5; cursor: default; }
-  .btn.danger-text { color: #f85149; }
-  .hint { color: var(--muted, #7d8590); font-size: 12px; margin: 8px 0 0; }
-  .err { color: #f85149; font-size: 13px; margin: 0 0 8px; }
+  .irc-page { display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 0; padding: 14px 20px 16px; box-sizing: border-box; overflow: hidden; background: var(--bg); }
+  .pill { display: inline-flex; align-items: center; gap: 7px; max-width: 280px; padding: 5px 11px; border-radius: 999px; font-size: 12px; color: var(--text-2);
+    border: 1px solid var(--border); background: var(--surface-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pill i { width: 7px; height: 7px; border-radius: 50%; background: #94A3B8; flex: none; }
+  .pill.on { color: #BBF7D0; border-color: color-mix(in srgb, #4ADE80 40%, var(--border)); }
+  .pill.on i { background: #4ADE80; box-shadow: 0 0 8px #4ADE80; }
+  .conn { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; width: 100%; }
+  .inp { background: var(--surface-1); border: 1px solid var(--border); color: var(--text-1); padding: 0 10px; height: 34px; box-sizing: border-box; border-radius: 10px; font: inherit; font-size: 13px; min-width: 0; }
+  .inp:focus { outline: none; border-color: var(--gold); }
+  .inp.grow { flex: 1; min-width: 200px; }
+  .btn { background: linear-gradient(135deg, #FBBF24, #F59E0B); color: #1a1205; border: 0; height: 34px; padding: 0 16px; border-radius: 10px; cursor: pointer; font: inherit; font-size: 13px; font-weight: 700; }
+  .btn.danger { background: #F87171; color: #2b0a08; }
+  .btn.ghost { background: var(--surface-1); border: 1px solid var(--border); color: var(--text-1); font-weight: 500; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .lnk { background: none; border: 0; padding: 0; color: var(--gold); font: inherit; font-size: 12px; cursor: pointer; }
+  .lnk:disabled { opacity: .5; cursor: default; }
+  .danger-text { color: #F87171; }
+  .hint { color: var(--text-3); font-size: 12px; margin: 4px 2px; line-height: 1.5; }
+  .err { color: #F87171; font-size: 12px; margin: 0 0 8px; }
 
-  /* Networks panel */
-  .nets { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
-  .net { border: 1px solid var(--line, #222a35); border-radius: 8px; padding: 10px 12px; }
-  .net-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .net-err { color: #f85149; font-size: 12px; margin-top: 4px; }
-  .net-chans { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-  .net-actions { display: flex; gap: 6px; margin-top: 8px; }
-  .muted { color: var(--muted, #7d8590); font-size: 12px; }
-  .state { margin-left: auto; color: var(--muted, #7d8590); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted, #7d8590); flex: none; }
-  .dot.connected { background: #3fb950; }
-  .dot.connecting, .dot.registering, .dot.reconnecting { background: #d29922; }
-  .dot.error { background: #f85149; }
-  .chip { background: var(--bg, #0d1117); border: 1px solid var(--line, #222a35); color: var(--fg, #c9d1d9); border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; }
-  .chip:disabled { opacity: 0.5; cursor: default; }
-  .add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .irc-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px 200px minmax(0, 1fr); gap: 12px; }
+  .col { display: flex; flex-direction: column; min-height: 0; border-radius: 14px; border: 1px solid var(--border); background: var(--surface-1); overflow: hidden; }
+  .col-h { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border);
+    font: 700 10px/1.4 var(--font-body); letter-spacing: .14em; text-transform: uppercase; color: var(--gold); }
+  .col-h small { font: 500 11px var(--font-body); letter-spacing: 0; text-transform: none; color: var(--text-3); }
+  .col-scroll { flex: 1; min-height: 0; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+
+  .net { --oc: #60A5FA; --sc: #94A3B8; border-radius: 12px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--oc) 28%, var(--border));
+    background: radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--oc) 16%, transparent), transparent 70%), var(--surface-2, var(--surface-1)); }
+  .net-main { display: flex; align-items: center; gap: 10px; }
+  .mark { flex: none; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; font: 800 11px var(--font-body);
+    color: color-mix(in srgb, var(--oc) 80%, white); background: color-mix(in srgb, var(--oc) 22%, var(--surface-1)); border: 1px solid color-mix(in srgb, var(--oc) 40%, transparent); }
+  .net-id { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+  .net-id strong { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .net-id small { font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sdot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--sc); box-shadow: 0 0 9px var(--sc); }
+  .net-err { color: #F87171; font-size: 11.5px; margin-top: 6px; }
+  .net-chans { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 8px; }
+  .chip { background: color-mix(in srgb, var(--oc) 12%, var(--surface-1)); border: 1px solid color-mix(in srgb, var(--oc) 30%, var(--border)); color: var(--text-1);
+    border-radius: 999px; padding: 2px 9px; font: inherit; font-size: 11.5px; cursor: pointer; }
+  .chip:disabled { opacity: .5; cursor: default; }
+  .net-actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+  .state { margin-right: auto; color: color-mix(in srgb, var(--sc) 70%, var(--text-2)); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; }
+  .add { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 12px; border: 1px dashed color-mix(in srgb, var(--gold) 45%, var(--border)); }
+  .row { display: flex; gap: 6px; align-items: center; }
   .inp.port { width: 90px; }
-  .tls { color: var(--muted, #7d8590); font-size: 13px; display: flex; align-items: center; gap: 4px; }
-  .netbadge { color: var(--muted, #7d8590); font-size: 11px; margin-left: 6px; }
-  .irc { display: flex; gap: 12px; margin-top: 12px; height: 60vh; min-height: 360px; }
-  .chans { width: 180px; overflow: auto; background: var(--panel, #161b22); border: 1px solid var(--line, #222a35); border-radius: 8px; padding: 6px; }
-  .chan { display: block; width: 100%; text-align: left; background: none; border: 0; color: var(--muted, #7d8590); padding: 6px 8px; border-radius: 6px; cursor: pointer; font: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .chan.active { background: var(--bg, #0d1117); color: var(--fg, #c9d1d9); }
-  .conv { flex: 1; display: flex; flex-direction: column; background: var(--panel, #161b22); border: 1px solid var(--line, #222a35); border-radius: 8px; min-width: 0; }
-  .log { flex: 1; overflow: auto; padding: 10px 12px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.5; }
+  .tls { color: var(--text-2); font-size: 12px; display: flex; align-items: center; gap: 4px; }
+
+  .chans .col-scroll { gap: 2px; padding: 6px; }
+  .chan { --oc: #60A5FA; display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none; border: 1px solid transparent; color: var(--text-2);
+    padding: 5px 8px; border-radius: 9px; cursor: pointer; font: inherit; font-size: 13px; }
+  .chan:hover { background: color-mix(in srgb, var(--oc) 8%, transparent); color: var(--text-1); }
+  .chan.active { color: var(--text-1); border-color: color-mix(in srgb, var(--oc) 40%, var(--border)); background: color-mix(in srgb, var(--oc) 14%, var(--surface-1)); }
+  .cmark { flex: none; width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; font: 800 11px var(--font-body);
+    color: color-mix(in srgb, var(--oc) 80%, white); background: color-mix(in srgb, var(--oc) 20%, var(--surface-1)); }
+  .cname { min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .netbadge { flex: none; color: var(--text-3); font-size: 10.5px; }
+
+  .log { flex: 1; min-height: 0; overflow: auto; padding: 10px 14px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.55; }
   .line { white-space: pre-wrap; word-break: break-word; }
-  .msg { border: 0; border-top: 1px solid var(--line, #222a35); background: var(--bg, #0d1117); color: var(--fg, #c9d1d9); padding: 10px 12px; font: inherit; }
-  .msg:focus { outline: none; }
-  :global(.log .ts) { color: var(--muted, #7d8590); }
-  :global(.log .nk) { color: #58a6ff; }
-  :global(.log .nk.me) { color: #3fb950; }
-  :global(.log .sys) { color: var(--muted, #7d8590); font-style: italic; }
-  :global(.log .enc) { color: #d29922; }
+  .msg { flex: none; border: 0; border-top: 1px solid var(--border); background: var(--surface-2, var(--surface-1)); color: var(--text-1); padding: 12px 14px; font: inherit; font-size: 13px; }
+  .msg:focus { outline: none; box-shadow: inset 0 2px 0 var(--gold); }
+  .msg:disabled { opacity: .6; }
+  :global(.log .ts) { color: var(--text-3); }
+  :global(.log .nk) { color: #60A5FA; }
+  :global(.log .nk.me) { color: #4ADE80; }
+  :global(.log .sys) { color: var(--text-3); font-style: italic; }
+  :global(.log .enc) { color: #FBBF24; }
+
+  @media (max-height: 820px) { .irc-page { gap: 10px; } .inp, .btn { height: 30px; } }
+  @media (max-width: 1100px) { .irc-page { height: auto; } .irc-body { grid-template-columns: 1fr 1fr; } .conv { grid-column: 1 / -1; height: 60vh; } }
+  @media (max-width: 700px) { .irc-body { grid-template-columns: 1fr; } }
 </style>
