@@ -203,3 +203,25 @@ describe('splitSystemGroup', () => {
 		expect(splitSystemGroup([])).toEqual({ system: null, top: [] });
 	});
 });
+
+describe('buildNav — the Social tabs', () => {
+  const social = (modules: string[]) => buildNav({
+    modules,
+    navItems: [
+      { id: 'crm', group: 'people', label: 'Overview', icon: '', order: 20 },
+      { id: 'mail', group: 'people', label: 'Mail', icon: '', order: 10 },
+      { id: 'people', group: 'people', label: 'People', icon: '', order: 30 },
+      { id: 'social', group: 'people', label: 'Forum', icon: '', order: 50, module: 'social' },
+    ],
+  } as never).navGroups.find((g) => g.id === 'people')!.views.map((v) => v.id);
+
+  it('mail, overview, contacts, share, IRC, forum', () => {
+    expect(social(['ext:irc', 'social'])).toEqual(['mail', 'crm', 'people', 'share', 'irc', 'social']);
+  });
+  it('drops IRC while its extension is off', () => {
+    expect(social(['social'])).toEqual(['mail', 'crm', 'people', 'share', 'social']);
+  });
+  it('keeps IRC when the manifest lists no modules (older kernel)', () => {
+    expect(social([])).toContain('irc');
+  });
+});

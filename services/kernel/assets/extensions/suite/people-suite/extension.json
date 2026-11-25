@@ -3,7 +3,7 @@
   "id": "com.kernl.people-suite",
   "slug": "people-suite",
   "name": "People Suite",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "suite",
   "built_in": true,
   "description": "CRM, contacts, mail, comms, network graph, Twitter/X.",
@@ -17,14 +17,14 @@
         "group": "people",
         "label": "Overview",
         "icon": "👥",
-        "order": 10
+        "order": 20
       },
       {
         "id": "mail",
         "group": "people",
         "label": "Mail",
         "icon": "📬",
-        "order": 20
+        "order": 10
       },
       {
         "id": "people",

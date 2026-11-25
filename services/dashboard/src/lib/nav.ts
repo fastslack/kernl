@@ -64,9 +64,13 @@ export function buildNav(m: NavManifest, base: NavGroup[] = NAV_GROUPS): BuiltNa
 	// shows unless it explicitly declares a `requires` module that's absent.
 	const installedModules = new Set<string>(Array.isArray(m.modules) ? m.modules : []);
 
+	// A built-in view tied to an extension goes away with it. Fail open when
+	// the manifest lists no modules at all (an older kernel): hiding IRC there
+	// would be a guess.
+	const baseVisible = (v: NavView) => !v.requires || installedModules.size === 0 || installedModules.has(v.requires);
 	let nextGroups: NavGroup[] = base.map(g => ({
 		...g,
-		views: [...g.views],
+		views: g.views.filter(baseVisible),
 	}));
 	const viewPaths: Record<string, string> = {};
 

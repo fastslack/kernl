@@ -50,6 +50,11 @@ export interface NavView {
 	 * get the entry; see filterNavForSession in nav.ts.
 	 */
 	modules?: string[];
+	/**
+	 * A built-in view that belongs to an extension's page ("ext:irc"): it shows
+	 * only while that module is active, like a manifest item's `requires`.
+	 */
+	requires?: string;
 }
 
 export interface NavGroup {
@@ -87,8 +92,9 @@ export const NAV_GROUPS: NavGroup[] = [
 		views: [
 			// Explicit order — items without one sort to 999 and land after
 			// every manifest-contributed tab regardless of intent.
-			{ id: 'share', label: 'Share', icon: '📤', order: 5 },
-			{ id: 'irc', label: 'IRC', icon: '📡', order: 40 }
+			// Mail 10, Overview 20, Contacts 30 (people-suite), Forum 50 (social).
+			{ id: 'share', label: 'Share', icon: '📤', order: 35 },
+			{ id: 'irc', label: 'IRC', icon: '📡', order: 45, requires: 'ext:irc' }
 		]
 	},
 	{
