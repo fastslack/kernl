@@ -3,7 +3,7 @@
   "id": "com.kernl.crm",
   "slug": "crm",
   "name": "CRM",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "type": "module",
   "description": "Contacts, companies, leads — the people graph.",
   "author": "Kernl",
@@ -33,12 +33,14 @@
       {
         "view": "crm",
         "entry": "frontend/entry.js",
-        "title": "CRM"
+        "title": "CRM",
+        "fullBleed": true
       },
       {
         "view": "people",
         "entry": "frontend/entry.js",
-        "title": "People"
+        "title": "People",
+        "fullBleed": true
       }
     ]
   }

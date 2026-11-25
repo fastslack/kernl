@@ -29,7 +29,12 @@
 </script>
 
 {#if sub === 'leads'}
-  <LeadsPage {ctx} />
+  <!-- The view is full-bleed for the Resumen; Leads keeps the shell's margin. -->
+  <div class="leads-pad"><LeadsPage {ctx} /></div>
 {:else}
   <SocialOverview {ctx} />
 {/if}
+
+<style>
+  .leads-pad { padding: 24px; box-sizing: border-box; height: 100%; overflow: auto; }
+</style>
