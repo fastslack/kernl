@@ -13,7 +13,7 @@
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import Icon from '$shared/components/Icon.svelte';
+  import DirectoryStrip from '$shared/components/DirectoryStrip.svelte';
   import { timeAgo } from '$shared/utils';
   import type { ExtPageContext } from '$shared/types';
 
@@ -22,7 +22,7 @@
   const es = (ctx.locale || 'es').startsWith('es');
   const T = es
     ? {
-        title: 'Social', sub: 'Lo que necesita tu atención en correo, contactos e IRC',
+        title: '¿Qué te espera hoy?', eyebrow: 'Social · correo, contactos e IRC',
         mailNeeds: 'mails piden atención', critical: 'críticos', high: 'altos',
         drafts: 'respuestas listas', draftsSub: 'borradores para revisar',
         quiet: 'contactos para retomar', quietSub: 'sin noticias hace +30 días',
@@ -35,10 +35,10 @@
         interactions: 'interacciones',
         irc: 'IRC · últimos mensajes', openIrc: 'Abrir IRC', noIrc: 'No hay mensajes en los canales.',
         accounts: 'Cuentas', unavailable: 'No disponible', retry: 'Reintentar', actions: 'Acciones',
-        syncOk: 'sincronizada', syncGoogle: 'vía Google', syncErr: 'con error', syncNever: 'sin sincronizar',
+        accOk: (n: number, t: number) => `${n} de ${t} al día`, syncOk: 'sincronizada', syncGoogle: 'vía Google', syncErr: 'con error', syncNever: 'sin sincronizar',
       }
     : {
-        title: 'Social', sub: 'What needs you across mail, contacts and IRC',
+        title: 'What is waiting for you?', eyebrow: 'Social · mail, contacts and IRC',
         mailNeeds: 'emails need attention', critical: 'critical', high: 'high',
         drafts: 'replies ready', draftsSub: 'drafts to review',
         quiet: 'contacts to follow up', quietSub: 'quiet for 30+ days',
@@ -51,7 +51,7 @@
         interactions: 'interactions',
         irc: 'IRC · latest messages', openIrc: 'Open IRC', noIrc: 'No messages in the channels.',
         accounts: 'Accounts', unavailable: 'Unavailable', retry: 'Retry', actions: 'Actions',
-        syncOk: 'synced', syncGoogle: 'via Google', syncErr: 'failing', syncNever: 'never synced',
+        accOk: (n: number, t: number) => `${n} of ${t} up to date`, syncOk: 'synced', syncGoogle: 'via Google', syncErr: 'failing', syncNever: 'never synced',
       };
 
   // ── Data, one block per source ─────────────────────────────────
@@ -145,54 +145,31 @@
   }
 
   const go = (path: string) => ctx.navigate(path);
+  const KPI_PATH: Record<string, string> = { mail: '/mail?folder=attention', drafts: '/mail?folder=attention', quiet: '/people', irc: '/irc' };
+  $: kpis = [
+    { key: 'mail', n: attention.state === 'error' ? '—' : attentionTotal, color: attentionTotal ? '#FB923C' : '#34D399', live: (triage.data?.critical ?? 0) > 0,
+      label: triage.data ? `${T.mailNeeds} · ${triage.data.critical} ${T.critical}` : T.mailNeeds },
+    { key: 'drafts', n: triage.data?.drafts_pending ?? '—', color: '#A78BFA', label: T.drafts },
+    { key: 'quiet', n: followUp.data?.count ?? '—', color: '#22D3EE', label: T.quiet },
+    { key: 'irc', n: irc.data ? irc.data.today : '—', color: '#34D399', live: (irc.data?.today ?? 0) > 0,
+      label: irc.state === 'error' ? T.unavailable : irc.data ? `${ircLine} · ${netsUp}/${irc.data.networks.length} ${T.networks}` : T.ircToday },
+  ];
+  /** Initials and a stable hue per name, like the office marks. */
+  const initials = (n: string) => (n.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('') || '?').toUpperCase();
+  const hue = (n: string) => { let h = 0; for (const ch of n) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; };
   const sender = (r: Attention) => r.from_name || r.from_email;
 </script>
 
 <svelte:window on:click={onWindowClick} on:keydown={onKey} />
 
 <div class="so">
-  <header class="so-head">
-    <h1>{T.title}</h1>
-    <span>{T.sub}</span>
-  </header>
-
-  <!-- ── What to do, in numbers ── -->
-  <div class="so-tiles">
-    <button class="so-tile" class:hot={attentionTotal > 0} on:click={() => go('/mail?folder=attention')}>
-      <Icon name="mail" size={18} />
-      <span class="so-tile-n">{attention.state === 'error' ? '—' : attentionTotal}</span>
-      <span class="so-tile-l">{T.mailNeeds}</span>
-      <span class="so-tile-s">
-        {#if triage.data}{triage.data.critical} {T.critical} · {triage.data.high} {T.high}{:else}&nbsp;{/if}
-      </span>
-    </button>
-    <button class="so-tile" on:click={() => go('/mail?folder=attention')}>
-      <Icon name="reply" size={18} />
-      <span class="so-tile-n">{triage.data?.drafts_pending ?? '—'}</span>
-      <span class="so-tile-l">{T.drafts}</span>
-      <span class="so-tile-s">{T.draftsSub}</span>
-    </button>
-    <button class="so-tile" on:click={() => go('/people')}>
-      <Icon name="users" size={18} />
-      <span class="so-tile-n">{followUp.data?.count ?? '—'}</span>
-      <span class="so-tile-l">{T.quiet}</span>
-      <span class="so-tile-s">{T.quietSub}</span>
-    </button>
-    <button class="so-tile" on:click={() => go('/irc')}>
-      <Icon name="hash" size={18} />
-      <span class="so-tile-n">{irc.data ? irc.data.today : '—'}</span>
-      <span class="so-tile-l">{irc.state === 'error' ? T.unavailable : ircLine}</span>
-      <span class="so-tile-s">
-        {#if irc.data}{irc.data.channels} {T.channels} · {netsUp}/{irc.data.networks.length} {T.networks}{:else}&nbsp;{/if}
-      </span>
-    </button>
-  </div>
+  <DirectoryStrip eyebrow={T.eyebrow} title={T.title} kpis={kpis} on:pick={(e) => go(KPI_PATH[e.detail.key])} />
 
   <div class="so-grid">
     <!-- ── To answer ── -->
-    <section class="so-card so-main" aria-labelledby="so-answer">
+    <section class="so-card so-main" style="--oc: #FB923C" aria-labelledby="so-answer">
       <div class="so-card-h">
-        <h2 id="so-answer">{T.toAnswer}</h2>
+        <h2 id="so-answer"><i class="so-dot"></i>{T.toAnswer}{#if attentionTotal}<span class="so-n">{attentionTotal}</span>{/if}</h2>
         <button class="so-link" on:click={() => go('/mail?folder=attention')}>{T.allMail}</button>
       </div>
       {#if attention.state === 'loading'}
@@ -206,12 +183,12 @@
           {#each rows as r (r.gmail_id)}
             <li class="so-row" class:busy={busy === r.gmail_id}>
               <button class="so-row-main" on:click={() => go('/mail?folder=attention')}>
-                <span class="so-urg {r.urgency}">{r.urgency}</span>
+                <span class="so-mark" style="--h: {hue(sender(r))}" aria-hidden="true">{initials(sender(r))}</span>
                 <span class="so-row-text">
                   <span class="so-row-top"><strong>{sender(r)}</strong> · {r.subject}</span>
                   <span class="so-row-sub">{r.ai_summary}</span>
                 </span>
-                <span class="so-time">{timeAgo(r.date)}</span>
+                <span class="so-meta"><span class="so-urg {r.urgency}">{r.urgency}</span><span class="so-time">{timeAgo(r.date)}</span></span>
               </button>
               <div class="so-menu-wrap">
                 <button class="so-dots" aria-label={T.actions} aria-haspopup="menu" aria-expanded={menuFor === r.gmail_id}
@@ -232,9 +209,9 @@
 
     <div class="so-side">
       <!-- ── People gone quiet ── -->
-      <section class="so-card" aria-labelledby="so-follow">
+      <section class="so-card" style="--oc: #22D3EE" aria-labelledby="so-follow">
         <div class="so-card-h">
-          <h2 id="so-follow">{T.followUp}</h2>
+          <h2 id="so-follow"><i class="so-dot"></i>{T.followUp}{#if followUp.data?.count}<span class="so-n">{followUp.data.count}</span>{/if}</h2>
           <button class="so-link" on:click={() => go('/people')}>{T.allContacts}</button>
         </div>
         {#if followUp.state === 'loading'}
@@ -248,6 +225,7 @@
             {#each followUp.data.items as c (c.id)}
               <li class="so-row">
                 <button class="so-row-main" on:click={() => go('/people')}>
+                  <span class="so-mark" style="--h: {hue(c.name)}" aria-hidden="true">{initials(c.name)}</span>
                   <span class="so-row-text">
                     <span class="so-row-top"><strong>{c.name}</strong>{c.company ? ` · ${c.company}` : ''}</span>
                     <span class="so-row-sub">{c.interactions} {T.interactions}</span>
@@ -261,9 +239,9 @@
       </section>
 
       <!-- ── IRC ── -->
-      <section class="so-card" aria-labelledby="so-irc">
+      <section class="so-card" style="--oc: #34D399" aria-labelledby="so-irc">
         <div class="so-card-h">
-          <h2 id="so-irc">{T.irc}</h2>
+          <h2 id="so-irc"><i class="so-dot"></i>{T.irc}</h2>
           <button class="so-link" on:click={() => go('/irc')}>{T.openIrc}</button>
         </div>
         {#if irc.state === 'loading'}
@@ -293,8 +271,10 @@
   <footer class="so-foot">
     <span class="so-foot-l">{T.accounts}</span>
     {#if accounts.data}
-      {#each accounts.data as a (a.account_id)}
-        {@const st = accountState(a)}
+      {@const states = accounts.data.map((a) => ({ a, st: accountState(a) }))}
+      {@const ok = states.filter((x) => x.st.cls === 'ok')}
+      <span class="so-acc ok" title={ok.map((x) => x.a.email).join('\n')}><i></i>{T.accOk(ok.length, states.length)}</span>
+      {#each states.filter((x) => x.st.cls !== 'ok') as { a, st } (a.account_id)}
         <span class="so-acc {st.cls}" title="{a.label} — {st.text}"><i></i>{a.email}</span>
       {/each}
     {/if}
@@ -307,33 +287,20 @@
 </div>
 
 <style>
-  .so { display: flex; flex-direction: column; gap: 14px; height: 100%; min-height: 0; padding: 18px 22px; box-sizing: border-box; overflow: hidden; }
-  .so-head { display: flex; align-items: baseline; gap: 10px; }
-  .so-head h1 { margin: 0; font: 700 18px var(--font-display); color: var(--text-1); }
-  .so-head span { font-size: 12px; color: var(--text-3); }
-
-  .so-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-  .so-tile {
-    display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto auto; column-gap: 10px; align-items: center;
-    padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface);
-    color: var(--text-2); text-align: left; cursor: pointer; font-family: var(--font-body);
-    transition: border-color .15s ease, background .15s ease;
-  }
-  .so-tile:hover { border-color: var(--teal); background: var(--surface-2); }
-  .so-tile:focus-visible, .so-row-main:focus-visible, .so-link:focus-visible, .so-dots:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
-  .so-tile :global(svg) { grid-row: 1 / span 3; color: var(--text-3); }
-  .so-tile.hot :global(svg) { color: var(--orange); }
-  .so-tile-n { font: 700 22px var(--font-mono); color: var(--text-1); line-height: 1.1; font-variant-numeric: tabular-nums; }
-  .so-tile.hot .so-tile-n { color: var(--orange); }
-  .so-tile-l { font-size: 12px; color: var(--text-1); }
-  .so-tile-s { font-size: 11px; color: var(--text-3); }
+  .so { display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 0; padding: 14px 20px 16px; box-sizing: border-box; overflow: hidden; background: var(--bg); }
+  .so-row-main:focus-visible, .so-link:focus-visible, .so-dots:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 
   .so-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 12px; }
   .so-side { display: grid; grid-template-rows: 1fr 1fr; gap: 12px; min-height: 0; }
-  .so-card { display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); padding: 10px 12px; }
+  /* Cards are office tiles: a colour of their own, a soft glow from the corner. */
+  .so-card { display: flex; flex-direction: column; min-height: 0; border-radius: 12px; padding: 10px 12px;
+    background: radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--oc) 12%, transparent), transparent 55%), linear-gradient(160deg, color-mix(in srgb, var(--oc) 6%, var(--surface-1)), var(--surface-1) 70%);
+    border: 1px solid color-mix(in srgb, var(--oc) 24%, var(--border)); }
   .so-card-h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-  .so-card-h h2 { margin: 0; font: 700 11px var(--font-mono); text-transform: uppercase; letter-spacing: .8px; color: var(--text-2); }
-  .so-link { border: none; background: none; padding: 2px 4px; color: var(--teal); font-size: 11px; cursor: pointer; font-family: var(--font-body); }
+  .so-card-h h2 { display: flex; align-items: center; gap: 8px; margin: 0; font: 700 14px/1.2 var(--font-display); color: var(--text-1); }
+  .so-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--oc); box-shadow: 0 0 8px var(--oc); }
+  .so-n { padding: 1px 7px; border-radius: 999px; font: 800 11px var(--font-body); color: color-mix(in srgb, var(--oc) 75%, white); background: color-mix(in srgb, var(--oc) 18%, transparent); font-variant-numeric: tabular-nums; }
+  .so-link { border: none; background: none; padding: 2px 4px; color: color-mix(in srgb, var(--oc) 70%, white); font-size: 11.5px; cursor: pointer; font-family: var(--font-body); }
   .so-link:hover { text-decoration: underline; }
   .so-empty { margin: 8px 2px; font-size: 12px; color: var(--text-3); line-height: 1.5; }
 
@@ -345,18 +312,21 @@
     flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 4px 6px;
     border: none; background: none; text-align: left; cursor: pointer; color: var(--text-2); font-family: var(--font-body); border-radius: 6px;
   }
-  .so-row-main:hover { background: var(--surface-2); }
+  .so-row-main:hover { background: color-mix(in srgb, var(--oc) 8%, var(--surface-2)); }
+  .so-mark { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; font: 800 10.5px var(--font-display);
+    color: hsl(var(--h) 80% 78%); background: hsl(var(--h) 45% 22% / .7); box-shadow: inset 0 0 0 1px hsl(var(--h) 60% 50% / .35); }
+  .so-meta { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
   .so-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
   .so-row-top, .so-row-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .so-row-top { font-size: 12px; color: var(--text-2); }
   .so-row-top strong { color: var(--text-1); font-weight: 600; }
   .so-row-sub { font-size: 11px; color: var(--text-3); }
   .so-time { flex-shrink: 0; font: 400 10px var(--font-mono); color: var(--text-3); }
-  .so-chan { flex-shrink: 0; max-width: 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 10px var(--font-mono); color: var(--teal); }
+  .so-chan { flex-shrink: 0; max-width: 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 7px; border-radius: 6px; font: 600 10px var(--font-mono); color: #6ee7b7; background: rgba(52, 211, 153, .12); }
 
   /* Urgency carries a word, not just a colour. */
-  .so-urg { flex-shrink: 0; width: 52px; text-align: center; padding: 2px 0; border-radius: 999px; font: 600 9px var(--font-mono); text-transform: uppercase; letter-spacing: .4px; background: var(--surface-2); color: var(--text-3); }
-  .so-urg.critical { background: rgba(239, 68, 68, .14); color: #f87171; }
+  .so-urg { flex-shrink: 0; width: 56px; text-align: center; padding: 2px 0; border-radius: 999px; font: 600 9px var(--font-mono); text-transform: uppercase; letter-spacing: .4px; background: var(--surface-2); color: var(--text-3); }
+  .so-urg.critical { background: rgba(239, 68, 68, .16); color: #f87171; box-shadow: 0 0 10px -4px #ef4444; }
   .so-urg.high { background: rgba(249, 115, 22, .14); color: #fb923c; }
 
   .so-menu-wrap { position: relative; flex-shrink: 0; }
@@ -364,7 +334,7 @@
   .so-dots:hover { background: var(--surface-2); color: var(--text-1); }
   .so-menu {
     position: absolute; right: 0; top: 34px; z-index: 20; min-width: 170px; display: flex; flex-direction: column; padding: 4px;
-    border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+    border: 1px solid var(--border-h, var(--border)); border-radius: 10px; background: var(--surface-1); box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
   }
   .so-menu button { padding: 7px 10px; border: none; background: none; text-align: left; font-size: 12px; color: var(--text-1); cursor: pointer; border-radius: 5px; font-family: var(--font-body); }
   .so-menu button:hover, .so-menu button:focus-visible { background: var(--surface-2); outline: none; }
@@ -372,19 +342,18 @@
   .so-skel { height: 40px; margin: 4px 0; border-radius: 6px; background: var(--surface-2); animation: so-pulse 1.2s ease-in-out infinite; }
   .so-skel.short { height: 30px; }
   @keyframes so-pulse { 50% { opacity: .5; } }
-  @media (prefers-reduced-motion: reduce) { .so-skel { animation: none; } .so-tile, .so-row-main { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { .so-skel { animation: none; } .so-row-main { transition: none; } }
 
-  .so-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 11px; color: var(--text-3); }
+  .so-foot { flex: none; max-height: 40px; overflow: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 11px; color: var(--text-3); }
   .so-foot-l { font: 600 10px var(--font-mono); text-transform: uppercase; letter-spacing: .8px; }
   .so-acc { display: inline-flex; align-items: center; gap: 5px; color: var(--text-2); }
   .so-acc i { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
-  .so-acc.ok i { background: #22c55e; }
+  .so-acc.ok i { background: #34D399; box-shadow: 0 0 6px #34D399; }
   .so-acc.bad { color: #f87171; }
   .so-acc.bad i { background: #ef4444; }
 
   @media (max-width: 900px) {
     .so { overflow: auto; }
-    .so-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .so-grid { grid-template-columns: 1fr; }
   }
 </style>

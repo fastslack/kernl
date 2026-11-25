@@ -5,9 +5,9 @@
 	  went below. Polls /api/transfers while something is moving.
 	*/
 	import { onMount, onDestroy } from 'svelte';
-	import { t } from '$lib/i18n';
+	import { t, locale } from '$lib/i18n';
 	import { apiFetchRaw } from '$lib/api.js';
-	import ViewHeader from '$shared/components/ViewHeader.svelte';
+	import DirectoryStrip from '$shared/components/DirectoryStrip.svelte';
 	import FriendColumn from '$lib/components/share/FriendColumn.svelte';
 	import Composer from '$lib/components/share/Composer.svelte';
 	import ActivityRow from '$lib/components/share/ActivityRow.svelte';
@@ -100,12 +100,27 @@
 		await act(() => resumeUpload(tr, Array.from(list)));
 	}
 
+	// The Oficinas strip: who you can reach, what is moving, what came and went.
+	$: es = $locale === 'es';
+	$: moving = transfers.filter((x) => ['staging', 'pending', 'accepted', 'sending'].includes(x.state)).length;
+	$: kpis = [
+		{ key: 'friends', n: trusted.length, label: es ? 'amigos de confianza' : 'trusted friends', color: '#22D3EE' },
+		{ key: 'moving', n: moving, label: es ? 'en camino ahora' : 'moving now', color: '#34D399', live: moving > 0 },
+		{ key: 'in', n: transfers.filter((x) => x.direction === 'in').length, label: es ? 'recibidos' : 'received', color: '#A78BFA', on: filter === 'in' },
+		{ key: 'out', n: transfers.filter((x) => x.direction === 'out').length, label: es ? 'enviados' : 'sent', color: '#FBBF24', on: filter === 'out' },
+	];
+	function pick(key: string) {
+		if (key === 'in' || key === 'out') filter = filter === key ? 'all' : key;
+		else filter = 'all';
+	}
+
 	onMount(async () => { await loadFriends(); await refresh(); });
 	onDestroy(() => { destroyed = true; clearTimeout(timer); });
 </script>
 
 <div class="S">
-	<div class="S-head"><ViewHeader title={$t('share.title')} sub={$t('share.sub')} /></div>
+	<DirectoryStrip eyebrow={es ? 'Social · compartir' : 'Social · share'} title={es ? '¿Qué le mandás a quién?' : 'What are you sending, and to whom?'} {kpis} on:pick={(e) => pick(e.detail.key)} />
+	<p class="S-sub">{$t('share.sub')}</p>
 	{#if error}<div class="S-err" role="alert">{error}</div>{/if}
 	<div class="S-body">
 		<FriendColumn friends={trusted} {selected} on:select={(e) => (selected = e.detail)} />
@@ -141,16 +156,19 @@
 </div>
 
 <style>
-	.S { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
-	.S-head { padding: 12px 24px 0; }
-	.S-err { margin: 8px 24px 0; padding: 8px 12px; border-radius: 6px; background: color-mix(in srgb, var(--red) 12%, transparent); color: var(--red); font-size: 12.5px; }
-	.S-body { flex: 1; min-height: 0; display: flex; border-top: 1px solid var(--border); margin-top: 10px; }
-	.S-main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+	.S { display: flex; flex-direction: column; gap: 10px; flex: 1; height: 100%; min-height: 0; overflow: hidden; padding: 14px 20px 16px; box-sizing: border-box; background: var(--bg); }
+	.S-sub { margin: -4px 0 0; font-size: 12px; color: var(--text-3); }
+	.S-err { margin: 0; padding: 8px 12px; border-radius: 6px; background: color-mix(in srgb, var(--red) 12%, transparent); color: var(--red); font-size: 12.5px; }
+	.S-body { flex: 1; min-height: 0; display: flex; gap: 10px; }
+	.S-body > :global(.col) { border: 1px solid color-mix(in srgb, #22D3EE 24%, var(--border)); border-radius: 12px;
+		background: radial-gradient(120% 80% at 0% 0%, color-mix(in srgb, #22D3EE 10%, transparent), transparent 55%), var(--surface-1); }
+	.S-main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-1); overflow: hidden; }
 	.S-pick { padding: 18px 20px; color: var(--text-2); font-size: 13px; border-bottom: 1px solid var(--border); margin: 0; }
 	.S-acts { display: flex; gap: 6px; align-items: center; padding: 10px 20px 6px; }
 	.S-acts-title { font-size: 11px; font-weight: 800; letter-spacing: 1px; color: var(--text-3); text-transform: uppercase; margin-right: 8px; }
 	.pill { padding: 4px 11px; border-radius: 999px; border: 1px solid var(--border); background: none; color: var(--text-2); font-size: 12px; cursor: pointer; }
-	.pill.on { background: var(--teal); border-color: var(--teal); color: var(--bg); }
+	.pill.on { background: color-mix(in srgb, var(--gold) 18%, transparent); border-color: var(--gold); color: var(--gold); font-weight: 700; }
+	.pill:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 	.S-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 20px 16px; }
 	.S-empty { color: var(--text-3); font-size: 13px; }
 	@media (max-width: 800px) { .S-body { flex-direction: column; } }

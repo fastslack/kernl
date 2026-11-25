@@ -37,14 +37,14 @@
 </aside>
 
 <style>
-	.col { width: 260px; flex-shrink: 0; border-right: 1px solid var(--border); padding: 14px 12px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
+	.col { width: 260px; flex-shrink: 0; padding: 14px 12px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
 	.col-title { font-size: 11px; font-weight: 800; letter-spacing: 1px; color: var(--text-3); text-transform: uppercase; padding: 0 6px 4px; }
 	ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 	.friend { width: 100%; display: grid; grid-template-columns: 10px 1fr; grid-template-rows: auto auto; column-gap: 10px; align-items: center; text-align: left; background: none; border: 1px solid transparent; border-radius: 8px; padding: 8px 10px; cursor: pointer; color: var(--text-1); }
 	.friend:hover { background: var(--surface-2); }
-	.friend.on { border-color: var(--teal); background: color-mix(in srgb, var(--teal) 8%, transparent); }
+	.friend.on { border-color: var(--gold); background: linear-gradient(160deg, color-mix(in srgb, var(--gold) 14%, var(--surface-1)), var(--surface-1)); }
 	.dot { grid-row: 1 / 3; width: 9px; height: 9px; border-radius: 50%; background: var(--text-3); }
-	.dot.lan { background: var(--green); } .dot.direct { background: var(--blue); } .dot.onion { background: var(--purple); }
+	.dot.lan { background: #34D399; box-shadow: 0 0 8px #34D399; } .dot.direct { background: #60A5FA; box-shadow: 0 0 8px #60A5FA; } .dot.onion { background: #A78BFA; box-shadow: 0 0 8px #A78BFA; }
 	.name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 	.reach { font-size: 11.5px; color: var(--text-3); }
 	.empty { font-size: 12.5px; color: var(--text-2); line-height: 1.5; margin: 4px 6px; }

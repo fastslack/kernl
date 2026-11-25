@@ -12,6 +12,7 @@
   import { ask, undoable } from '$shared/feedback';
   import Skeleton from '$shared/components/Skeleton.svelte';
   import ErrorState from '$shared/components/ErrorState.svelte';
+  import DirectoryStrip from '$shared/components/DirectoryStrip.svelte';
 
   // ── Types ────────────────────────────────────────
   interface EmailListItem {
@@ -510,22 +511,44 @@
     if (syncTimer) clearTimeout(syncTimer);
   });
 
-  // Folders config
-  const FOLDERS: Array<{ id: Folder; label: string; icon: string; countKey?: keyof Counts }> = [
-    { id: 'inbox', label: 'Inbox', icon: '📥', countKey: 'unread' },
-    { id: 'attention', label: 'Attention', icon: '🔔', countKey: 'attention' },
-    { id: 'starred', label: 'Starred', icon: '⭐', countKey: 'starred' },
-    { id: 'snoozed', label: 'Snoozed', icon: '⏰', countKey: 'snoozed' },
-    { id: 'sent', label: 'Sent', icon: '📤' },
-    { id: 'drafts', label: 'Drafts', icon: '📝', countKey: 'drafts' },
-    { id: 'important', label: 'Important', icon: '🔖', countKey: 'important' },
+  // Folders config — each folder has a colour of its own, like an office.
+  const FOLDERS: Array<{ id: Folder; label: string; color: string; countKey?: keyof Counts }> = [
+    { id: 'inbox', label: 'Bandeja', color: '#22D3EE', countKey: 'unread' },
+    { id: 'attention', label: 'Atención', color: '#FB923C', countKey: 'attention' },
+    { id: 'starred', label: 'Destacados', color: '#FBBF24', countKey: 'starred' },
+    { id: 'snoozed', label: 'Pospuestos', color: '#60A5FA', countKey: 'snoozed' },
+    { id: 'sent', label: 'Enviados', color: '#34D399' },
+    { id: 'drafts', label: 'Borradores', color: '#A78BFA', countKey: 'drafts' },
+    { id: 'important', label: 'Importantes', color: '#F472B6', countKey: 'important' },
   ];
-  const FOLDERS2: Array<{ id: Folder; label: string; icon: string; countKey?: keyof Counts }> = [
-    { id: 'archived', label: 'Archive', icon: '📦', countKey: 'archived' },
-    { id: 'trash', label: 'Trash', icon: '🗑️', countKey: 'trash' },
-    { id: 'all', label: 'All Mail', icon: '📋' },
+  const FOLDERS2: Array<{ id: Folder; label: string; color: string; countKey?: keyof Counts }> = [
+    { id: 'archived', label: 'Archivo', color: '#94A3B8', countKey: 'archived' },
+    { id: 'trash', label: 'Papelera', color: '#64748B', countKey: 'trash' },
+    { id: 'all', label: 'Todo el correo', color: '#94A3B8' },
   ];
+  $: folderColor = [...FOLDERS, ...FOLDERS2].find((f) => f.id === folder)?.color ?? '#22D3EE';
+  $: folderLabel = [...FOLDERS, ...FOLDERS2].find((f) => f.id === folder)?.label ?? folder;
+
+  // ── The Oficinas strip: what to open first ──
+  $: kpis = [
+    { key: 'inbox', n: counts.unread, label: 'sin leer en la bandeja', color: '#22D3EE', on: folder === 'inbox' },
+    { key: 'attention', n: counts.attention, label: 'piden respuesta', color: counts.attention ? '#FB923C' : '#34D399', live: counts.attention > 0, on: folder === 'attention' },
+    { key: 'suggestions', n: suggestionsPending, label: 'sugerencias de la IA', color: '#A78BFA' },
+    { key: 'drafts', n: counts.drafts, label: 'borradores', color: '#FBBF24', on: folder === 'drafts' },
+    { key: 'starred', n: counts.starred, label: 'destacados', color: '#60A5FA', on: folder === 'starred' },
+  ];
+  function pickKpi(key: string) {
+    if (key === 'suggestions') goto('/mail/suggestions');
+    else selectFolder(key as Folder);
+  }
+  /** Initials and a stable hue for a sender, like the office marks. */
+  const hue = (n: string) => { let h = 0; for (const ch of n ?? '') h = (h * 31 + ch.charCodeAt(0)) % 360; return h; };
 </script>
+
+<div class="mail-page">
+<DirectoryStrip eyebrow="Social · correo" title="¿Qué correo respondés primero?" {kpis} on:pick={(e) => pickKpi(e.detail.key)}>
+  <button slot="aside" class="k-btn k-btn--primary compose-btn" on:click={() => goto('/comms/compose')}><span aria-hidden="true">+</span> Redactar</button>
+</DirectoryStrip>
 
 {#if googleSync?.needsReauth}
   <div class="gmail-reauth-banner">
@@ -539,19 +562,17 @@
 <div class="mail-shell">
   <!-- ── Sidebar ──────────────────────── -->
   <aside class="mail-sidebar">
-    <button class="compose-btn" on:click={() => goto('/comms/compose')}>+ Compose</button>
-
-    <button class="folder-item suggestions-link" on:click={() => goto('/mail/suggestions')}>
-      <span class="folder-icon">✨</span>
-      <span class="folder-label">AI Suggestions</span>
+    <button class="folder-item suggestions-link" style="--fc: #A78BFA" on:click={() => goto('/mail/suggestions')}>
+      <span class="folder-icon" aria-hidden="true"></span>
+      <span class="folder-label">Sugerencias IA</span>
       {#if suggestionsPending > 0}
         <span class="folder-count attention-badge">{suggestionsPending}</span>
       {/if}
     </button>
 
     {#each FOLDERS as f}
-      <button class="folder-item" class:active={folder === f.id} on:click={() => selectFolder(f.id)}>
-        <span class="folder-icon">{f.icon}</span>
+      <button class="folder-item" class:active={folder === f.id} style="--fc: {f.color}" on:click={() => selectFolder(f.id)}>
+        <span class="folder-icon" aria-hidden="true"></span>
         <span class="folder-label">{f.label}</span>
         {#if f.countKey && counts[f.countKey]}
           <span class="folder-count">{counts[f.countKey]}</span>
@@ -562,8 +583,8 @@
     <div class="folder-sep"></div>
 
     {#each FOLDERS2 as f}
-      <button class="folder-item" class:active={folder === f.id} on:click={() => selectFolder(f.id)}>
-        <span class="folder-icon">{f.icon}</span>
+      <button class="folder-item" class:active={folder === f.id} style="--fc: {f.color}" on:click={() => selectFolder(f.id)}>
+        <span class="folder-icon" aria-hidden="true"></span>
         <span class="folder-label">{f.label}</span>
         {#if f.countKey && counts[f.countKey]}
           <span class="folder-count">{counts[f.countKey]}</span>
@@ -573,7 +594,7 @@
 
     {#if labels.length}
       <div class="folder-sep"></div>
-      <div class="labels-header">Labels</div>
+      <div class="labels-header">Etiquetas</div>
       {#each labels as lb}
         <button class="folder-item" on:click={() => selectFolder('all')}>
           <span class="label-dot" style="background:{lb.color}"></span>
@@ -587,8 +608,7 @@
   <div class="mail-list">
     <div class="mail-search">
       <AccountSwitcher bind:value={selectedAccountId} bind:accounts={mailAccounts} onChange={onAccountChange} />
-      <input type="text" placeholder="Search emails..." bind:value={query} on:keydown={(e) => e.key === 'Enter' && doSearch()} />
-      <button on:click={doSearch}>Search</button>
+      <label class="mail-q"><span aria-hidden="true">⌕</span><input type="search" placeholder="Buscar correo" aria-label="Buscar correo" bind:value={query} on:keydown={(e) => e.key === 'Enter' && doSearch()} /></label>
       <MailFetchButton onTick={loadSyncStatus} />
     </div>
 
@@ -614,7 +634,7 @@
 
     <div class="mail-list-header">
       <span class="folder-title">
-        {folder.charAt(0).toUpperCase() + folder.slice(1)} ({folder === 'attention' ? attentionItems.length : total})
+        <i class="folder-dot" style="--fc: {folderColor}" aria-hidden="true"></i>{folderLabel} <b class="folder-n">{folder === 'attention' ? attentionItems.length : total}</b>
         <span class="folder-scope" title={currentAccount ? currentAccount.label : 'Mezcla el correo de todas las cuentas; cada mensaje dice de cuál es'}>
           {#if currentAccount}en {currentAccount.email}{:else}en todas las cuentas{/if}
         </span>
@@ -642,9 +662,7 @@
               class:selected={selectedId === item.gmail_id}
               on:click={() => selectEmail(item.gmail_id)}
             >
-              {#if item.urgency}
-                <span class="urgency-dot" style="background:{urgencyColor(item.urgency)}" title={item.urgency}></span>
-              {/if}
+              <span class="mail-mark" style="--h: {hue(item.from_name || item.from_email)}; --u: {item.urgency ? urgencyColor(item.urgency) : 'transparent'}" title={item.urgency || ''} aria-hidden="true">{initials(item.from_name || item.from_email)}</span>
               <div class="mail-row-content">
                 <div class="mail-row-top">
                   <span class="mail-from">{item.from_name || item.from_email || 'Unknown'}</span>
@@ -698,9 +716,7 @@
             <span class="star" class:starred={em.is_starred} on:click|stopPropagation={() => toggleStar(em.gmail_id)}>
               {em.is_starred ? '★' : '☆'}
             </span>
-            {#if em.urgency && em.urgency !== ''}
-              <span class="urgency-dot" style="background:{urgencyColor(em.urgency)}" title={em.urgency}></span>
-            {/if}
+            <span class="mail-mark" style="--h: {hue(em.contact_name || em.from_name || em.from_email)}; --u: {em.urgency ? urgencyColor(em.urgency) : 'transparent'}" title={em.urgency || ''} aria-hidden="true">{initials(em.contact_name || em.from_name || em.from_email)}</span>
             <div class="mail-row-content">
               <div class="mail-row-top">
                 <span class="mail-from">{em.contact_name || em.from_name || em.from_email || 'Unknown'}</span>
@@ -764,7 +780,7 @@
       <div class="detail-header">
         <h2 class="detail-subject">{selectedEmail.subject || '(no subject)'}</h2>
         <div class="detail-from-row">
-          <div class="avatar">{initials(selectedEmail.from_name || selectedEmail.from_email)}</div>
+          <div class="avatar" style="--h: {hue(selectedEmail.from_name || selectedEmail.from_email)}">{initials(selectedEmail.from_name || selectedEmail.from_email)}</div>
           <div class="from-info">
             <div class="from-name">{selectedEmail.from_name || selectedEmail.from_email}</div>
             <div class="from-meta">{selectedEmail.from_email} · {fmtDate(selectedEmail.date)}</div>
@@ -896,6 +912,7 @@
     {/if}
   </div>
 </div>
+</div>
 
 <style>
   /* ── Gmail reconnect banner (shown when the sync token is dead) ── */
@@ -924,56 +941,44 @@
   }
   .gmail-reauth-btn:hover { filter: brightness(1.1); }
 
-  /* ── Shell: 3-column Gmail layout ── */
-  .mail-shell {
-    display: flex;
-    height: 100%;
-    overflow: hidden;
-    background: var(--bg);
-  }
+  /* ── Page: the Oficinas strip on top, three panels that share the rest ── */
+  .mail-page { display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 0; padding: 14px 20px 16px; box-sizing: border-box; overflow: hidden; background: var(--bg); }
+  .compose-btn { display: inline-flex; align-items: center; gap: 6px; }
+  .mail-shell { flex: 1; min-height: 0; display: flex; gap: 10px; overflow: hidden; }
+  .mail-sidebar, .mail-list, .mail-detail { border: 1px solid var(--border); border-radius: 12px; background: var(--surface-1); }
 
   /* ── Sidebar ── */
   .mail-sidebar {
-    width: 210px;
-    min-width: 210px;
-    border-right: 1px solid var(--border);
-    padding: 10px 0;
+    width: 196px;
+    min-width: 196px;
+    padding: 8px 6px;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
+    gap: 1px;
   }
-  .compose-btn {
-    margin: 0 12px 10px;
-    padding: 8px;
-    border-radius: 20px;
-    background: var(--primary);
-    color: #fff;
-    border: none;
-    font-weight: 600;
-    cursor: pointer;
-    font-size: 13px;
-  }
-  .compose-btn:hover { filter: brightness(1.1); }
   .folder-item {
     display: flex;
     align-items: center;
-    padding: 5px 14px;
+    padding: 6px 10px;
     cursor: pointer;
-    border: none;
+    border: 1px solid transparent;
     background: transparent;
     color: var(--text-2);
     font-size: 13px;
-    border-radius: 0 20px 20px 0;
-    margin-right: 10px;
+    border-radius: 9px;
     text-align: left;
-    width: calc(100% - 10px);
+    width: 100%;
+    transition: background .15s, border-color .15s;
   }
-  .folder-item:hover { background: var(--surface-hover, var(--surface)); }
-  .folder-item.active { background: var(--surface); color: var(--text); font-weight: 600; }
-  .folder-icon { margin-right: 10px; font-size: 14px; flex-shrink: 0; }
+  .folder-item:hover { background: color-mix(in srgb, var(--fc, var(--gold)) 8%, transparent); color: var(--text-1); }
+  .folder-item.active { color: var(--text-1); font-weight: 700;
+    background: linear-gradient(160deg, color-mix(in srgb, var(--fc) 18%, var(--surface-1)), var(--surface-1) 80%); border-color: color-mix(in srgb, var(--fc) 40%, var(--border)); }
+  .folder-item:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
+  .folder-icon { width: 8px; height: 8px; margin-right: 10px; border-radius: 50%; flex-shrink: 0; background: var(--fc, var(--text-3)); box-shadow: 0 0 8px var(--fc, transparent); }
   .folder-label { flex: 1; }
-  .folder-count { font-size: 11px; font-weight: 600; color: var(--text-3); }
-  .folder-sep { border-top: 1px solid var(--border); margin: 6px 14px; }
+  .folder-count { font-size: 11px; font-weight: 800; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--fc, var(--text-2)) 70%, white); }
+  .folder-sep { border-top: 1px solid var(--border); margin: 6px 8px; }
   .labels-header { padding: 4px 14px; font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.5px; }
   .label-dot { width: 8px; height: 8px; border-radius: 50%; margin-right: 10px; flex-shrink: 0; }
 
@@ -981,7 +986,6 @@
   .mail-list {
     flex: 1;
     min-width: 260px;
-    border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -990,8 +994,18 @@
     padding: 8px 10px;
     border-bottom: 1px solid var(--border);
     display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     gap: 6px;
   }
+  .mail-q { flex: 1 1 160px; min-width: 140px; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; box-sizing: border-box;
+    border: 1px solid var(--border-h, var(--border)); border-radius: 10px; background: var(--bg); }
+  .mail-q:focus-within { border-color: var(--gold); }
+  .mail-q span { font-size: 18px; color: var(--text-2); }
+  .mail-q input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text-1); font: inherit; font-size: 13px; padding: 0; }
+  .mail-q input:focus { outline: none; }
+  .folder-dot { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: var(--fc); box-shadow: 0 0 8px var(--fc); vertical-align: middle; }
+  .folder-n { margin-left: 4px; padding: 0 7px; border-radius: 999px; font-size: 11px; color: color-mix(in srgb, var(--fc, #22D3EE) 75%, white); background: color-mix(in srgb, var(--fc, #22D3EE) 16%, transparent); }
   .mail-search input {
     flex: 1;
     background: var(--surface);
@@ -1075,9 +1089,14 @@
     border-top: none;
     color: var(--text);
   }
-  .mail-row:hover { background: var(--surface-hover, var(--surface)); }
-  .mail-row.selected { background: var(--surface); }
-  .mail-row.unread { border-left-color: var(--primary); }
+  .mail-row:hover { background: color-mix(in srgb, #22D3EE 5%, var(--surface-2)); }
+  .mail-row.selected { background: linear-gradient(90deg, color-mix(in srgb, var(--gold) 12%, var(--surface-1)), var(--surface-1)); border-left-color: var(--gold); }
+  .mail-row.unread { border-left-color: #22D3EE; }
+  .mail-row.unread.selected { border-left-color: var(--gold); }
+  .mail-mark { position: relative; flex: none; display: grid; place-items: center; width: 30px; height: 30px; margin-right: 9px; border-radius: 9px; font: 800 10.5px var(--font-display);
+    color: hsl(var(--h) 80% 78%); background: hsl(var(--h) 45% 22% / .75); box-shadow: inset 0 0 0 1px hsl(var(--h) 60% 50% / .35); }
+  /* urgency rides on the mark as a glowing corner dot */
+  .mail-mark::after { content: ''; position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 50%; background: var(--u); box-shadow: 0 0 6px var(--u); }
   .star { cursor: pointer; margin-right: 6px; margin-top: 2px; color: var(--text-3); font-size: 14px; flex-shrink: 0; background: none; border: none; padding: 0; }
   .star.starred { color: var(--gold, #e8b931); }
   .mail-row-content { flex: 1; min-width: 0; }
@@ -1093,7 +1112,8 @@
 
   /* ── Detail Pane ── */
   .mail-detail {
-    width: 40%;
+    width: min(40%, 620px);
+    background: var(--surface-1);
     min-width: 300px;
     display: flex;
     flex-direction: column;
@@ -1150,10 +1170,11 @@
   .detail-subject { font-size: 16px; font-weight: 700; color: var(--text); margin: 0 0 10px; }
   .detail-from-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
   .avatar {
-    width: 34px; height: 34px; border-radius: 50%;
-    background: var(--primary); color: #fff;
+    width: 36px; height: 36px; border-radius: 10px;
+    color: hsl(var(--h, 200) 80% 78%); background: hsl(var(--h, 200) 45% 22% / .8);
+    box-shadow: 0 0 16px -5px hsl(var(--h, 200) 70% 55%), inset 0 0 0 1px hsl(var(--h, 200) 60% 50% / .4);
     display: flex; align-items: center; justify-content: center;
-    font-size: 13px; font-weight: 600; flex-shrink: 0;
+    font: 800 12.5px var(--font-display); flex-shrink: 0;
   }
   .from-info { flex: 1; }
   .from-name { font-size: 13px; font-weight: 600; color: var(--text); }

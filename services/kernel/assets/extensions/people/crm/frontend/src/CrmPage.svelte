@@ -5,6 +5,8 @@
   // semantics preserved).
   import { onMount } from 'svelte';
   import Badge from '$shared/components/Badge.svelte';
+  import DirectoryStrip from '$shared/components/DirectoryStrip.svelte';
+  import SearchBox from '$shared/components/SearchBox.svelte';
   import { timeAgo } from '$shared/utils';
   import type { ExtPageContext } from '$shared/types';
 
@@ -42,7 +44,6 @@
   $: a = ($analytics as any);
   $: cm = ($comms as any);
   $: crm = d?.crm ?? {};
-  $: contactInsights = a?.contactInsights ?? {};
 
   // ── Contacts list ──
   let contacts: any[] = [];
@@ -164,81 +165,84 @@
   // ── Stats ──
   $: totalContacts = crm.total ?? total;
   $: byRel = crm.byRelationship ?? {};
-  $: recentIx = (crm.recentInteractions ?? []) as any[];
-  $: stale = (crm.staleContacts ?? []) as any[];
-  $: emailPct = contactInsights.emailPct ?? 0;
-  $: phonePct = contactInsights.phonePct ?? 0;
-  $: companyPct = contactInsights.companyPct ?? 0;
 
   $: pages = Math.ceil(total / 50);
+
+  // ── Directory look (the Oficinas pattern) ──
+  const es = (ctx.locale || 'es').startsWith('es');
+  const L = es
+    ? { eyebrow: 'Social · contactos', title: '¿Con quién querés hablar?', all: 'contactos', search: 'Buscar por nombre, email o empresa',
+        shown: (n: number) => `${n} ${n === 1 ? 'contacto' : 'contactos'}`, add: 'Contacto', clear: 'Ver todos', close: 'Cerrar',
+        rel: { personal: 'personales', professional: 'profesionales', family: 'familia', acquaintance: 'conocidos' } as Record<string, string>,
+        never: 'sin trato', loading: 'Cargando…', none: 'No hay contactos con ese filtro.' }
+    : { eyebrow: 'Social · contacts', title: 'Who do you want to talk to?', all: 'contacts', search: 'Search name, email or company',
+        shown: (n: number) => `${n} ${n === 1 ? 'contact' : 'contacts'}`, add: 'Contact', clear: 'Show all', close: 'Close',
+        rel: { personal: 'personal', professional: 'professional', family: 'family', acquaintance: 'acquaintances' } as Record<string, string>,
+        never: 'no contact yet', loading: 'Loading…', none: 'No contacts match.' };
+  const REL_HEX: Record<string, string> = { personal: '#60A5FA', professional: '#34D399', family: '#A78BFA', acquaintance: '#94A3B8' };
+  $: kpis = [
+    { key: '', n: totalContacts, label: L.all, color: '#22D3EE', on: !relFilter },
+    ...RELATIONSHIPS.map((r) => ({ key: r, n: byRel[r] ?? 0, label: L.rel[r], color: REL_HEX[r], on: relFilter === r })),
+  ];
+  function pickRel(r: string) { relFilter = relFilter === r ? '' : r; doSearch(); }
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  function onSearchInput() { clearTimeout(searchTimer); searchTimer = setTimeout(doSearch, 250); }
+  const initials = (n: string) => ((n ?? '').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('') || '?').toUpperCase();
+  /** 1 = talked today, 0 = 90+ days ago or never. */
+  const freshness = (iso?: string) => { if (!iso) return 0; const d = (Date.now() - Date.parse(iso)) / 86_400_000; return Number.isFinite(d) ? Math.max(0, Math.min(1, 1 - d / 90)) : 0; };
+  $: open = showNew || !!detail;
+  function closePane() { showNew = false; selectedId = null; detail = null; editMode = false; }
 </script>
 
-<div class="crm-layout">
-  <!-- ═══ LEFT: LIST ═══ -->
-  <div class="crm-list">
-    <!-- Header -->
-    <div class="cl-header">
-      <div class="cl-title-row">
-        <h1 class="cl-title">People</h1>
-        <span class="cl-count">{total}</span>
-      </div>
-      <button class="cl-add" on:click={() => { showNew = !showNew; selectedId = null; detail = null; }}>
-        {showNew ? '✕' : '+'}
-      </button>
-    </div>
-
-    <!-- Search + filter -->
-    <div class="cl-search">
-      <input type="text" placeholder="Search name, email, company..."
-        bind:value={search} on:keydown={e => e.key === 'Enter' && doSearch()} />
-    </div>
-    <div class="cl-filters">
-      <button class="cf-pill" class:active={!relFilter} on:click={() => { relFilter = ''; doSearch(); }}>All</button>
-      {#each RELATIONSHIPS as r}
-        <button class="cf-pill" class:active={relFilter === r} style="--accent:{REL_COLORS[r]}"
-          on:click={() => { relFilter = relFilter === r ? '' : r; doSearch(); }}>{r}</button>
-      {/each}
-    </div>
-
-    <!-- Contact rows -->
-    <div class="cl-rows">
-      {#if loading}
-        <div class="cl-empty">Loading...</div>
-      {:else if !contacts.length}
-        <div class="cl-empty">No contacts found</div>
-      {:else}
-        {#each contacts as c (c.id)}
-          <button class="contact-row" class:selected={selectedId === c.id} on:click={() => loadDetail(c.id)}>
-            <div class="cr-avatar" style="background:{REL_COLORS[c.relationship] ?? 'var(--text-3)'}">
-              {(c.name ?? '?').charAt(0).toUpperCase()}
-            </div>
-            <div class="cr-body">
-              <div class="cr-name">{c.name}</div>
-              <div class="cr-meta">
-                {#if c.company}<span>{c.company}</span>{/if}
-                {#if c.email}<span>{c.email}</span>{/if}
-              </div>
-            </div>
-            {#if c.last_interaction}
-              <span class="cr-time">{timeAgo(c.last_interaction)}</span>
-            {/if}
-          </button>
-        {/each}
+<div class="crm-page">
+  <DirectoryStrip eyebrow={L.eyebrow} title={L.title} {kpis} on:pick={(e) => pickRel(e.detail.key)}>
+    <button slot="aside" class="k-btn k-btn--primary cl-add" on:click={() => { showNew = !showNew; selectedId = null; detail = null; }}>
+      <span aria-hidden="true">{showNew ? '✕' : '+'}</span> {L.add}
+    </button>
+    <svelte:fragment slot="tools">
+      <SearchBox bind:value={search} placeholder={L.search} on:input={onSearchInput} on:keydown={(e) => e.key === 'Enter' && doSearch()} />
+      <span class="cl-count">{L.shown(total)}</span>
+      {#if relFilter || search}<button class="cl-clear" on:click={() => { relFilter = ''; search = ''; doSearch(); }}>{L.clear}</button>{/if}
+      {#if pages > 1}
+        <span class="cl-pagination">
+          <button disabled={page <= 1} on:click={prevPage} aria-label="‹">‹</button>
+          <span>{page} / {pages}</span>
+          <button disabled={page >= pages} on:click={nextPage} aria-label="›">›</button>
+        </span>
       {/if}
-    </div>
+    </svelte:fragment>
+  </DirectoryStrip>
 
-    <!-- Pagination -->
-    {#if pages > 1}
-      <div class="cl-pagination">
-        <button disabled={page <= 1} on:click={prevPage}>◀</button>
-        <span>{page} / {pages}</span>
-        <button disabled={page >= pages} on:click={nextPage}>▶</button>
-      </div>
+<div class="crm-layout" class:open>
+  <!-- ═══ LEFT: THE DIRECTORY ═══ -->
+  <div class="crm-grid" aria-busy={loading}>
+    {#if loading && !contacts.length}
+      <p class="cl-empty">{L.loading}</p>
+    {:else if !contacts.length}
+      <p class="cl-empty">{L.none}</p>
+    {:else}
+      {#each contacts as c (c.id)}
+        {@const col = REL_HEX[c.relationship] ?? '#94A3B8'}
+        <button class="ct" class:selected={selectedId === c.id} style="--oc: {col}" on:click={() => loadDetail(c.id)} title={[c.name, c.company, c.email].filter(Boolean).join(' · ')}>
+          <span class="ct-r1">
+            <span class="ct-mark" aria-hidden="true">{initials(c.name)}</span>
+            <span class="ct-name">{c.name}</span>
+          </span>
+          <span class="ct-r2">
+            <span class="ct-st"><i aria-hidden="true"></i>{L.rel[c.relationship] ?? c.relationship}</span>
+            <span class="ct-time">{c.last_interaction ? timeAgo(c.last_interaction) : L.never}</span>
+          </span>
+          <span class="ct-meter" aria-hidden="true"><i style="width: {freshness(c.last_interaction) * 100}%"></i></span>
+          <span class="ct-who">{[c.company, c.email].filter(Boolean).join(' · ')}</span>
+        </button>
+      {/each}
     {/if}
   </div>
 
   <!-- ═══ RIGHT: DETAIL / NEW FORM ═══ -->
+  {#if open}
   <div class="crm-detail">
+    <button class="cd-close" on:click={closePane} aria-label={L.close} title={L.close}>✕</button>
     <!-- New contact form -->
     {#if showNew}
       <div class="cd-section">
@@ -283,9 +287,7 @@
     <!-- Contact detail -->
     {:else if detail}
       <div class="cd-header">
-        <div class="cd-avatar" style="background:{REL_COLORS[detail.relationship] ?? 'var(--text-3)'}">
-          {(detail.name ?? '?').charAt(0).toUpperCase()}
-        </div>
+        <div class="cd-avatar" style="--oc: {REL_HEX[detail.relationship] ?? '#94A3B8'}">{initials(detail.name)}</div>
         <div class="cd-header-info">
           {#if editMode}
             <input class="cd-name-edit" bind:value={editData.name} />
@@ -403,226 +405,70 @@
         </div>
       {/if}
 
-    <!-- Empty state -->
-    {:else}
-      <div class="cd-empty-state">
-        <div class="cd-empty-icon">👥</div>
-        <h3>Select a contact</h3>
-        <p>Choose someone from the list or create a new contact</p>
-
-        <!-- Quick stats -->
-        <div class="qs-grid">
-          <div class="qs-card">
-            <span class="qs-val">{totalContacts}</span>
-            <span class="qs-label">Contacts</span>
-          </div>
-          {#if emailPct}
-            <div class="qs-card">
-              <span class="qs-val">{emailPct}%</span>
-              <span class="qs-label">With email</span>
-            </div>
-          {/if}
-          {#if phonePct}
-            <div class="qs-card">
-              <span class="qs-val">{phonePct}%</span>
-              <span class="qs-label">With phone</span>
-            </div>
-          {/if}
-          {#each Object.entries(byRel) as [rel, count]}
-            <div class="qs-card">
-              <span class="qs-val" style="color:{REL_COLORS[rel] ?? 'var(--text-1)'}">{count}</span>
-              <span class="qs-label">{rel}</span>
-            </div>
-          {/each}
-        </div>
-
-        <!-- Recent interactions -->
-        {#if recentIx.length}
-          <div class="qs-section">
-            <h4 class="qs-section-title">Recent Interactions</h4>
-            {#each recentIx.slice(0, 6) as ix}
-              <div class="qs-row">
-                <span class="qs-row-name">{ix.contact_name}</span>
-                <Badge text={ix.type} />
-                <span class="qs-row-date">{timeAgo(ix.date)}</span>
-              </div>
-            {/each}
-          </div>
-        {/if}
-
-        <!-- Stale contacts -->
-        {#if stale.length}
-          <div class="qs-section">
-            <h4 class="qs-section-title">Needs Follow-up ({stale.length})</h4>
-            {#each stale.slice(0, 5) as c}
-              <button class="qs-row clickable" on:click={() => loadDetail(c.id)}>
-                <span class="qs-row-name">{c.name}</span>
-                <span class="qs-row-date">{c.last_interaction ? timeAgo(c.last_interaction) : 'never'}</span>
-              </button>
-            {/each}
-          </div>
-        {/if}
-      </div>
     {/if}
   </div>
+  {/if}
+</div>
 </div>
 
 <style>
-  /* ── Layout ──────────────────────────────────── */
-  .crm-layout {
-    display: flex;
-    height: 100%;
-    overflow: hidden;
-  }
+  /* ── Page: the Oficinas directory pattern ── */
+  .crm-page { display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 0; padding: 14px 20px 16px; box-sizing: border-box; overflow: hidden; background: var(--bg); }
+  .crm-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .crm-layout.open { grid-template-columns: minmax(0, 1fr) minmax(360px, 440px); }
+  .cl-add { display: inline-flex; align-items: center; gap: 6px; }
+  .cl-count { color: var(--text-2); font-size: 12.5px; white-space: nowrap; }
+  .cl-clear { background: none; border: 0; color: #93c5fd; font-size: 12px; cursor: pointer; text-decoration: underline; }
+  .cl-pagination { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+  .cl-pagination button { width: 26px; height: 26px; border-radius: 8px; border: 1px solid var(--border-h, var(--border)); background: var(--surface-1); color: var(--text-1); cursor: pointer; }
+  .cl-pagination button:disabled { opacity: .35; cursor: default; }
+  .cl-empty { grid-column: 1 / -1; padding: 32px; text-align: center; color: var(--text-2); font-size: 13px; }
 
-  /* ── Left: Contact List ──────────────────────── */
-  .crm-list {
-    width: 360px;
-    min-width: 300px;
-    border-right: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-  .cl-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 14px 16px 8px;
-  }
-  .cl-title-row { display: flex; align-items: baseline; gap: 8px; }
-  .cl-title {
-    font-family: var(--font-display);
-    font-size: 22px;
-    font-weight: 700;
-    color: var(--text-1);
-  }
-  .cl-count {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    color: var(--text-3);
-    background: var(--surface-2);
-    padding: 2px 8px;
-    border-radius: 10px;
-  }
-  .cl-add {
-    width: 32px; height: 32px;
-    border-radius: 50%;
-    border: none;
-    background: var(--gold);
-    color: var(--bg);
-    font-size: 16px;
-    font-weight: 700;
-    cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    transition: opacity 0.15s;
-  }
-  .cl-add:hover { opacity: 0.85; }
+  /* Every contact is a tile; the grid is what scrolls. */
+  .crm-grid { min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(212px, 1fr)); grid-auto-rows: 92px; gap: 8px; align-content: start; scrollbar-width: thin; }
+  .ct { display: flex; flex-direction: column; gap: 5px; min-width: 0; padding: 10px 12px; border-radius: 12px; text-align: left; color: var(--text-1); cursor: pointer; overflow: hidden; font: inherit;
+    background: radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--oc) 16%, transparent), transparent 60%), linear-gradient(160deg, color-mix(in srgb, var(--oc) 8%, var(--surface-1)), var(--surface-1) 70%);
+    border: 1px solid color-mix(in srgb, var(--oc) 26%, var(--border)); transition: transform .15s, border-color .15s, box-shadow .15s; }
+  .ct:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--oc) 65%, transparent); box-shadow: 0 12px 26px -18px var(--oc); }
+  .ct:focus-visible, .cd-close:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  .ct.selected { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset, 0 12px 26px -18px var(--gold); }
+  .ct-r1 { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .ct-mark { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; font: 800 11px var(--font-display);
+    color: color-mix(in srgb, var(--oc) 60%, white); background: color-mix(in srgb, var(--oc) 22%, var(--surface-2)); box-shadow: 0 0 14px -4px var(--oc), inset 0 0 0 1px color-mix(in srgb, var(--oc) 40%, transparent); }
+  .ct-name { font: 700 14px/1.2 var(--font-display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ct-r2 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .ct-st { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; color: color-mix(in srgb, var(--oc) 75%, white); text-transform: capitalize; }
+  .ct-st i { width: 7px; height: 7px; border-radius: 50%; background: var(--oc); box-shadow: 0 0 8px var(--oc); }
+  .ct-time { font-size: 11px; color: var(--text-3); white-space: nowrap; }
+  .ct-meter { height: 4px; border-radius: 3px; background: color-mix(in srgb, var(--oc) 12%, var(--surface-2)); overflow: hidden; }
+  .ct-meter i { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #34D399, #22D3EE); box-shadow: 0 0 8px #34D399; }
+  .ct-who { font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-  .cl-search {
-    padding: 0 16px 8px;
+  @media (max-height: 820px) {
+    .crm-page { gap: 8px; padding: 10px 16px 12px; }
+    .crm-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); grid-auto-rows: 74px; gap: 6px; }
+    .ct { gap: 3px; padding: 7px 10px; } .ct-who { display: none; } .ct-mark { width: 24px; height: 24px; font-size: 9.5px; border-radius: 7px; } .ct-name { font-size: 12.5px; }
   }
-  .cl-search input {
-    width: 100%;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--text-1);
-    font-size: 12px;
-    font-family: var(--font-body);
-    padding: 7px 12px;
-    outline: none;
-  }
-  .cl-search input:focus { border-color: var(--gold); }
-
-  .cl-filters {
-    display: flex;
-    gap: 4px;
-    padding: 0 16px 10px;
-    flex-wrap: wrap;
-  }
-  .cf-pill {
-    padding: 3px 10px;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    background: none;
-    color: var(--text-3);
-    font-size: 10px;
-    font-family: var(--font-body);
-    cursor: pointer;
-    text-transform: capitalize;
-    transition: all 0.15s;
-  }
-  .cf-pill:hover { border-color: var(--border-h); color: var(--text-2); }
-  .cf-pill.active {
-    background: color-mix(in srgb, var(--accent, var(--gold)) 12%, transparent);
-    border-color: var(--accent, var(--gold));
-    color: var(--accent, var(--gold));
-  }
-
-  .cl-rows {
-    flex: 1;
-    overflow-y: auto;
-    scrollbar-width: thin;
-    scrollbar-color: var(--border) transparent;
-  }
-  .cl-empty { text-align: center; color: var(--text-3); padding: 30px 0; font-size: 12px; }
-
-  .contact-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 16px;
-    border: none;
-    background: none;
-    width: 100%;
-    text-align: left;
-    cursor: pointer;
-    border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
-    transition: background 0.15s;
-    font-family: var(--font-body);
-  }
-  .contact-row:hover { background: var(--surface-2); }
-  .contact-row.selected { background: color-mix(in srgb, var(--gold) 8%, transparent); border-left: 3px solid var(--gold); }
-
-  .cr-avatar {
-    width: 34px; height: 34px;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 14px; font-weight: 700;
-    color: var(--bg);
-    flex-shrink: 0;
-  }
-  .cr-body { flex: 1; min-width: 0; }
-  .cr-name { font-size: 13px; font-weight: 500; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .cr-meta { font-size: 10px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; gap: 6px; }
-  .cr-time { font-size: 10px; color: var(--text-3); font-family: var(--font-mono); flex-shrink: 0; }
-
-  .cl-pagination {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    padding: 8px;
-    border-top: 1px solid var(--border);
-    font-size: 11px;
-    color: var(--text-3);
-  }
-  .cl-pagination button {
-    background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px;
-    color: var(--text-2); font-size: 10px; padding: 3px 8px; cursor: pointer;
-  }
-  .cl-pagination button:disabled { opacity: 0.3; cursor: default; }
+  @media (max-width: 900px) { .crm-layout.open { grid-template-columns: 1fr; } .crm-layout.open .crm-grid { display: none; } }
+  @media (prefers-reduced-motion: reduce) { .ct { transition: none; } }
 
   /* ── Right: Detail ───────────────────────────── */
   .crm-detail {
-    flex: 1;
+    position: relative;
+    min-height: 0;
+    border-radius: 12px;
+    border: 1px solid var(--border-h, var(--border));
+    background: var(--surface-1);
     overflow-y: auto;
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
   }
 
+  .cd-close { position: absolute; top: 10px; right: 10px; z-index: 1; width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--border-h, var(--border)); background: var(--surface-2); color: var(--text-2); cursor: pointer; font-size: 11px; }
+  .cd-close:hover { color: var(--text-1); }
   .cd-header {
+    flex-wrap: wrap;
+    padding-right: 44px !important;
     display: flex;
     align-items: center;
     gap: 14px;
@@ -630,17 +476,16 @@
     border-bottom: 1px solid var(--border);
   }
   .cd-avatar {
-    width: 48px; height: 48px;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 20px; font-weight: 700;
-    color: var(--bg);
-    flex-shrink: 0;
+    width: 44px; height: 44px; border-radius: 12px; flex-shrink: 0;
+    display: grid; place-items: center; font: 800 15px var(--font-display);
+    color: color-mix(in srgb, var(--oc) 60%, white); background: color-mix(in srgb, var(--oc) 22%, var(--surface-2));
+    box-shadow: 0 0 18px -4px var(--oc), inset 0 0 0 1px color-mix(in srgb, var(--oc) 40%, transparent);
   }
   .cd-header-info { flex: 1; min-width: 0; }
   .cd-name {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     font-family: var(--font-display);
-    font-size: 20px;
+    font-size: 18px;
     font-weight: 700;
     color: var(--text-1);
     margin: 0;
@@ -662,8 +507,8 @@
     background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px;
     color: var(--text-1); font-size: 12px; padding: 3px 8px; outline: none;
   }
-  .cd-last-ix { font-size: 11px; color: var(--text-3); }
-  .cd-header-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .cd-last-ix { font-size: 11px; color: var(--text-3); white-space: nowrap; }
+  .cd-header-actions { display: flex; gap: 6px; flex-basis: 100%; }
 
   .cd-btn {
     padding: 6px 14px;
@@ -742,39 +587,4 @@
   .cd-delete:disabled { opacity: 0.4; cursor: default; }
   .cd-empty { color: var(--text-3); font-size: 12px; text-align: center; padding: 16px 0; }
 
-  /* ── Empty state ─────────────────────────────── */
-  .cd-empty-state {
-    padding: 40px 30px;
-    text-align: center;
-  }
-  .cd-empty-icon { font-size: 48px; margin-bottom: 12px; }
-  .cd-empty-state h3 { font-family: var(--font-display); font-size: 18px; color: var(--text-1); margin-bottom: 4px; }
-  .cd-empty-state p { font-size: 13px; color: var(--text-3); margin-bottom: 24px; }
-
-  .qs-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
-    gap: 8px;
-    margin-bottom: 24px;
-    text-align: center;
-  }
-  .qs-card {
-    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
-    padding: 10px 6px;
-  }
-  .qs-val { display: block; font-family: var(--font-display); font-size: 18px; font-weight: 700; color: var(--text-1); }
-  .qs-label { font-size: 9px; color: var(--text-3); text-transform: uppercase; }
-
-  .qs-section { text-align: left; margin-bottom: 20px; }
-  .qs-section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-3); margin-bottom: 8px; }
-  .qs-row {
-    display: flex; align-items: center; gap: 8px; padding: 5px 0;
-    border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
-    font-size: 12px;
-  }
-  .qs-row:last-child { border-bottom: none; }
-  .qs-row.clickable { cursor: pointer; border: none; background: none; width: 100%; text-align: left; font-family: var(--font-body); padding: 5px 0; }
-  .qs-row.clickable:hover { color: var(--gold); }
-  .qs-row-name { flex: 1; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .qs-row-date { font-size: 10px; color: var(--text-3); font-family: var(--font-mono); flex-shrink: 0; }
 </style>
