@@ -18,7 +18,7 @@
 	async function copy() { await navigator.clipboard.writeText(tr.text); copied = true; setTimeout(() => (copied = false), 1500); }
 </script>
 
-<article class="row" class:pending={incomingPending}>
+<article class="row {tr.direction}" class:pending={incomingPending}>
 	<button class="main" on:click={() => (open = !open)} aria-expanded={open}>
 		<span class="dir" aria-hidden="true">{tr.direction === 'in' ? '↓' : '↑'}</span>
 		<span class="what">
@@ -73,20 +73,24 @@
 </article>
 
 <style>
-	.row { position: relative; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); padding: 8px 44px 8px 12px; margin-bottom: 5px; }
-	.row.pending { border-color: var(--teal); }
+	.row { --c: #FBBF24; position: relative; border: 1px solid color-mix(in srgb, var(--c) 22%, var(--border)); border-radius: 12px; padding: 9px 44px 9px 10px; margin-bottom: 6px;
+		background: radial-gradient(110% 120% at 0% 0%, color-mix(in srgb, var(--c) 10%, transparent), transparent 60%), var(--surface-2, var(--surface-1)); }
+	.row.in { --c: #A78BFA; }
+	.row.pending { border-color: #22D3EE; box-shadow: 0 0 0 1px #22D3EE inset, 0 10px 24px -18px #22D3EE; }
 	.main { width: 100%; display: flex; gap: 10px; align-items: center; background: none; border: 0; color: var(--text-1); cursor: pointer; text-align: left; padding: 0; font: inherit; }
-	.dir { font-size: 14px; color: var(--text-3); width: 14px; }
+	.dir { flex: none; width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; font-size: 14px; font-weight: 800;
+		color: color-mix(in srgb, var(--c) 80%, white); background: color-mix(in srgb, var(--c) 20%, var(--surface-1)); border: 1px solid color-mix(in srgb, var(--c) 38%, transparent); }
 	.what { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.rate { font-size: 11.5px; color: var(--text-2); font-family: var(--font-mono); white-space: nowrap; }
-	.state { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
-	.state.done { color: var(--green); } .state.failed, .state.rejected { color: var(--red); } .state.pending { color: var(--orange); }
-	.bar { height: 4px; background: var(--surface-3); border-radius: 2px; margin-top: 6px; overflow: hidden; }
-	.bar span { display: block; height: 100%; background: var(--teal); transition: width 0.3s ease; }
+	.state { --s: #94A3B8; font-size: 11px; font-weight: 600; white-space: nowrap; padding: 2px 9px; border-radius: 999px; color: color-mix(in srgb, var(--s) 80%, white);
+		background: color-mix(in srgb, var(--s) 14%, transparent); border: 1px solid color-mix(in srgb, var(--s) 35%, transparent); }
+	.state.done { --s: #4ADE80; } .state.failed, .state.rejected { --s: #F87171; } .state.pending { --s: #FB923C; } .state.sending, .state.accepted, .state.staging { --s: #22D3EE; }
+	.bar { height: 4px; background: var(--surface-3); border-radius: 2px; margin: 8px 0 0 38px; overflow: hidden; }
+	.bar span { display: block; height: 100%; background: linear-gradient(90deg, #22D3EE, var(--c)); box-shadow: 0 0 8px var(--c); transition: width 0.3s ease; }
 	.err { margin: 6px 0 0; font-size: 12px; color: var(--orange); }
-	.decide { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+	.decide { display: flex; gap: 8px; align-items: center; margin: 8px 0 0 38px; }
 	.always { font-size: 12px; color: var(--text-2); display: flex; gap: 6px; align-items: center; }
-	.btn { background: var(--teal); color: var(--bg); border: 0; border-radius: 6px; padding: 6px 14px; font-weight: 700; font-size: 12.5px; cursor: pointer; }
+	.btn { background: linear-gradient(135deg, #FBBF24, #F59E0B); color: #1a1205; border: 0; border-radius: 8px; padding: 6px 14px; font-weight: 700; font-size: 12.5px; cursor: pointer; }
 	.btn.ghost { background: none; border: 1px solid var(--border); color: var(--text-2); font-weight: 500; }
 	.more { position: absolute; top: 6px; right: 6px; }
 	.dots { width: 30px; height: 30px; border-radius: 6px; border: 1px solid transparent; background: none; color: var(--text-2); cursor: pointer; font-size: 16px; }
@@ -94,10 +98,10 @@
 	.menu { position: absolute; right: 0; top: 32px; z-index: 20; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 4px; display: flex; flex-direction: column; min-width: 160px; }
 	.menu button { background: none; border: 0; color: var(--text-1); text-align: left; padding: 7px 10px; border-radius: 6px; cursor: pointer; font-size: 12.5px; }
 	.menu button:hover { background: var(--surface-3); }
-	.detail { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+	.detail { margin: 8px 0 0 38px; display: flex; flex-direction: column; gap: 4px; }
 	.text { white-space: pre-wrap; font-size: 13px; color: var(--text-1); margin: 0 0 4px; }
 	.file { display: flex; gap: 10px; font-size: 12.5px; align-items: center; }
 	.fname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.fsize { color: var(--text-3); font-family: var(--font-mono); font-size: 11.5px; }
-	.file a { color: var(--teal); }
+	.file a { color: var(--gold); }
 </style>

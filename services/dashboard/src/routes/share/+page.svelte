@@ -119,8 +119,10 @@
 </script>
 
 <div class="S">
-	<DirectoryStrip eyebrow={es ? 'Social · compartir' : 'Social · share'} title={es ? '¿Qué le mandás a quién?' : 'What are you sending, and to whom?'} {kpis} on:pick={(e) => pick(e.detail.key)} />
-	<p class="S-sub">{$t('share.sub')}</p>
+	<DirectoryStrip eyebrow={es ? 'Social · compartir' : 'Social · share'} title={es ? '¿Qué le mandás a quién?' : 'What are you sending, and to whom?'} {kpis} on:pick={(e) => pick(e.detail.key)}>
+		<a slot="aside" class="S-add" href="/friends">+ {es ? 'Amigo' : 'Friend'}</a>
+		<p slot="tools" class="S-sub">{$t('share.sub')}</p>
+	</DirectoryStrip>
 	{#if error}<div class="S-err" role="alert">{error}</div>{/if}
 	<div class="S-body">
 		<FriendColumn friends={trusted} {selected} on:select={(e) => (selected = e.detail)} />
@@ -128,7 +130,13 @@
 			{#if friend}
 				<Composer bind:this={composer} friendName={friend.petname || friend.npub.slice(0, 14)} offline={!!friend.last_error || !friend.last_reach} {busy} {progress} on:send={send} />
 			{:else}
-				<p class="S-pick">{$t('share.pick_friend')}</p>
+				<div class="S-pick">
+					<span class="S-pick-mark" aria-hidden="true">↗</span>
+					<div>
+						<b>{trusted.length ? $t('share.pick_friend') : (es ? 'Sumá un amigo para empezar' : 'Add a friend to start')}</b>
+						<small>{es ? 'Texto y archivos de punta a punta, sin pasar por la nube.' : 'Text and files end to end, never through a cloud.'}</small>
+					</div>
+				</div>
 			{/if}
 			<div class="S-acts">
 				<span class="S-acts-title">{$t('share.activity')}</span>
@@ -138,7 +146,7 @@
 			</div>
 			<div class="S-list">
 				{#if shown.length === 0}
-					<p class="S-empty">{$t('share.activity_empty')}</p>
+					<div class="S-empty"><span aria-hidden="true">⇅</span>{$t('share.activity_empty')}</div>
 				{:else}
 					{#each shown as tr (tr.id)}
 						<ActivityRow {tr} speed={speeds[tr.id]?.bps ?? 0}
@@ -157,19 +165,28 @@
 
 <style>
 	.S { display: flex; flex-direction: column; gap: 10px; flex: 1; height: 100%; min-height: 0; overflow: hidden; padding: 14px 20px 16px; box-sizing: border-box; background: var(--bg); }
-	.S-sub { margin: -4px 0 0; font-size: 12px; color: var(--text-3); }
+	.S-sub { margin: 0; font-size: 12px; color: var(--text-3); }
+	.S-add { height: 34px; display: inline-flex; align-items: center; padding: 0 16px; border-radius: 10px; background: linear-gradient(135deg, #FBBF24, #F59E0B); color: #1a1205; font-weight: 700; font-size: 13px; text-decoration: none; }
+	.S-add:hover { filter: brightness(1.08); }
+	.S-add:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 	.S-err { margin: 0; padding: 8px 12px; border-radius: 6px; background: color-mix(in srgb, var(--red) 12%, transparent); color: var(--red); font-size: 12.5px; }
 	.S-body { flex: 1; min-height: 0; display: flex; gap: 10px; }
 	.S-body > :global(.col) { border: 1px solid color-mix(in srgb, #22D3EE 24%, var(--border)); border-radius: 12px;
 		background: radial-gradient(120% 80% at 0% 0%, color-mix(in srgb, #22D3EE 10%, transparent), transparent 55%), var(--surface-1); }
-	.S-main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-1); overflow: hidden; }
-	.S-pick { padding: 18px 20px; color: var(--text-2); font-size: 13px; border-bottom: 1px solid var(--border); margin: 0; }
-	.S-acts { display: flex; gap: 6px; align-items: center; padding: 10px 20px 6px; }
-	.S-acts-title { font-size: 11px; font-weight: 800; letter-spacing: 1px; color: var(--text-3); text-transform: uppercase; margin-right: 8px; }
+	.S-main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-1); overflow: hidden; }
+	.S-pick { display: flex; align-items: center; gap: 14px; padding: 16px 18px; border-bottom: 1px solid var(--border);
+		background: radial-gradient(120% 100% at 0% 0%, color-mix(in srgb, var(--gold) 9%, transparent), transparent 60%); }
+	.S-pick b { display: block; font-size: 14px; color: var(--text-1); }
+	.S-pick small { font-size: 12px; color: var(--text-3); }
+	.S-pick-mark { flex: none; width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; font-size: 18px; font-weight: 800; color: #FDE68A;
+		background: color-mix(in srgb, var(--gold) 18%, var(--surface-1)); border: 1px solid color-mix(in srgb, var(--gold) 40%, transparent); box-shadow: 0 10px 24px -14px var(--gold); }
+	.S-acts { display: flex; gap: 6px; align-items: center; padding: 12px 18px 8px; }
+	.S-acts-title { font: 700 10px/1.4 var(--font-body); letter-spacing: .14em; color: var(--gold); text-transform: uppercase; margin-right: 8px; }
 	.pill { padding: 4px 11px; border-radius: 999px; border: 1px solid var(--border); background: none; color: var(--text-2); font-size: 12px; cursor: pointer; }
 	.pill.on { background: color-mix(in srgb, var(--gold) 18%, transparent); border-color: var(--gold); color: var(--gold); font-weight: 700; }
 	.pill:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
-	.S-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 20px 16px; }
-	.S-empty { color: var(--text-3); font-size: 13px; }
+	.S-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 18px 16px; }
+	.S-empty { height: 100%; min-height: 160px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-3); font-size: 13px; }
+	.S-empty span { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; font-size: 20px; color: #C4B5FD; background: color-mix(in srgb, #A78BFA 14%, var(--surface-1)); border: 1px solid color-mix(in srgb, #A78BFA 35%, transparent); }
 	@media (max-width: 800px) { .S-body { flex-direction: column; } }
 </style>

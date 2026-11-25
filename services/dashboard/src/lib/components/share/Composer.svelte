@@ -53,12 +53,14 @@
 </section>
 
 <style>
-	.composer { border-bottom: 1px solid var(--border); padding: 14px 20px; display: flex; flex-direction: column; gap: 8px; }
-	.head { font-size: 15px; font-weight: 700; color: var(--text-1); }
-	textarea { resize: none; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; color: var(--text-1); padding: 9px 12px; font: inherit; font-size: 13px; }
-	textarea:focus { outline: none; border-color: var(--teal); }
-	.drop { border: 1.5px dashed var(--border-h); border-radius: 8px; padding: 14px; text-align: center; font-size: 13px; color: var(--text-2); cursor: pointer; }
-	.drop.dragging, .drop:hover { border-color: var(--teal); color: var(--teal); }
+	.composer { border-bottom: 1px solid var(--border); padding: 14px 18px;
+		background: radial-gradient(120% 100% at 0% 0%, color-mix(in srgb, var(--gold) 8%, transparent), transparent 60%); display: flex; flex-direction: column; gap: 8px; }
+	.head { font: 700 15px/1.3 var(--font-display, inherit); color: var(--text-1); }
+	textarea { resize: none; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; color: var(--text-1); padding: 9px 12px; font: inherit; font-size: 13px; }
+	textarea:focus { outline: none; border-color: var(--gold); }
+	.drop { border: 1.5px dashed color-mix(in srgb, var(--gold) 35%, var(--border-h)); border-radius: 10px; padding: 14px; text-align: center; font-size: 13px; color: var(--text-2); cursor: pointer; }
+	.drop.dragging, .drop:hover { border-color: var(--gold); color: var(--gold); background: color-mix(in srgb, var(--gold) 6%, transparent); }
+	.drop:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 	.files { list-style: none; margin: 0; padding: 0; max-height: 96px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 	.files li { display: flex; gap: 10px; align-items: center; font-size: 12.5px; }
 	.fname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -67,6 +69,6 @@
 	.foot { display: flex; align-items: center; gap: 12px; }
 	.sum { flex: 1; font-size: 12.5px; color: var(--text-2); display: flex; gap: 12px; }
 	.note { color: var(--orange); }
-	.btn { background: var(--teal); color: var(--bg); border: 0; border-radius: 6px; padding: 8px 18px; font-weight: 700; font-size: 13px; cursor: pointer; }
+	.btn { background: linear-gradient(135deg, #FBBF24, #F59E0B); color: #1a1205; border: 0; border-radius: 10px; padding: 8px 18px; font-weight: 700; font-size: 13px; cursor: pointer; }
 	.btn:disabled { opacity: 0.45; cursor: default; }
 </style>
