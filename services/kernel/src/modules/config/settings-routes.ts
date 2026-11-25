@@ -109,6 +109,31 @@ export function registerSettingsRoutes(
     return { settings: core, extensionSections };
   });
 
+  // ── First-run wizard, once per install ────────────────────
+  // The dashboard used to remember a finished setup only in the browser's
+  // localStorage, so every new browser (or a cleared one) walked into the
+  // wizard again on a kernel that was set up long ago. The kernel keeps it
+  // now. An install that predates the flag counts as set up once any agent
+  // has run: the wizard is for an empty kernel, not for a new browser.
+  const SETUP_KEY = "ui.setup_complete";
+  const setupDone = (): boolean => {
+    const row = deps.sqlite.prepare("SELECT value FROM app_settings WHERE key = ?").get(SETUP_KEY) as { value: string } | undefined;
+    if (row?.value) return true;
+    try {
+      return !!deps.sqlite.prepare("SELECT 1 FROM agent_runs LIMIT 1").get();
+    } catch {
+      return false; // no agents module: nothing says this kernel was ever used
+    }
+  };
+  server.route("GET", "/api/setup/state", () => ({ complete: setupDone() }));
+  server.route("POST", "/api/setup/complete", () => {
+    deps.sqlite
+      .prepare(`INSERT INTO app_settings (key, value, label, category, readonly, updated_at) VALUES (?, ?, 'First-run setup finished', 'general', 1, ?)
+                ON CONFLICT(key) DO NOTHING`)
+      .run(SETUP_KEY, new Date().toISOString(), new Date().toISOString());
+    return { complete: true };
+  });
+
   // ── PUT /api/settings ─────────────────────────────────────
   // Malformed JSON is the helper's 400 "Invalid JSON body".
   server.route<{ entries?: Record<string, unknown> }>("PUT", "/api/settings", ({ body }) => {

@@ -21,18 +21,39 @@ export function needsSetupRedirect(setupDone: string | null, welcomeSeen: string
  * NOT early-return on it: the layout still needs to fetch the manifest, set
  * up the clock, and open the WebSocket so when the user dismisses the wizard
  * (or lands on it directly) the rest of the dashboard is fully initialized.
+ *
+ * The wizard runs once per install, not once per browser: the kernel keeps
+ * whether setup is done (`/api/setup/state`). The localStorage flags are only
+ * a cache of that answer, so a new browser on a kernel that was set up long
+ * ago goes straight to the dashboard. A browser that holds the flag reports
+ * it, which records setup on installs that predate the kernel-side flag.
  */
-export function redirectFirstRun(goto: Goto) {
+export async function redirectFirstRun(goto: Goto, fetchFn: typeof fetch = fetch): Promise<void> {
+	let setupDone: string | null = null;
+	let welcomeSeen: string | null = null;
 	try {
-		const setupDone   = localStorage.getItem('kernl.setupComplete');
-		const welcomeSeen = localStorage.getItem('kernl.welcomeSeen');
-		if (needsSetupRedirect(setupDone, welcomeSeen, window.location.pathname)) {
-			goto('/setup', { replaceState: true });
-		}
+		setupDone = localStorage.getItem('kernl.setupComplete');
+		welcomeSeen = localStorage.getItem('kernl.welcomeSeen');
 	} catch {
-		/* localStorage disabled (privacy mode, sandboxed iframe) — skip the
-		   redirect rather than block the dashboard. */
+		/* localStorage disabled (privacy mode, sandboxed iframe) — the kernel decides. */
 	}
+	if (setupDone || welcomeSeen) {
+		void fetchFn('/api/setup/complete', { method: 'POST' }).catch(() => {});
+		return;
+	}
+	if (!needsSetupRedirect(null, null, window.location.pathname)) return;
+	let complete = false;
+	try {
+		const r = await fetchFn('/api/setup/state');
+		if (r.ok) complete = !!(await r.json())?.complete;
+	} catch {
+		/* kernel unreachable: same as before, the wizard is where a new install starts */
+	}
+	if (complete) {
+		try { localStorage.setItem('kernl.setupComplete', '1'); } catch { /* private browsing */ }
+		return;
+	}
+	goto('/setup', { replaceState: true });
 }
 
 export interface BannerMessage { text: string; bg: string; col: string }

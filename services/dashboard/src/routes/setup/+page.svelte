@@ -129,6 +129,8 @@
       // Mirror the legacy welcomeSeen flag so /welcome doesn't re-trigger.
       localStorage.setItem('kernl.welcomeSeen', '1');
     } catch { /* private browsing */ }
+    // The kernel remembers it too, so no other browser walks into the wizard.
+    void fetch('/api/setup/complete', { method: 'POST', keepalive: true }).catch(() => {});
     // Hard navigation, like /login does on success — not goto(). The wizard
     // runs in the shell-less layout, and a full load guarantees the dashboard
     // comes up against the post-setup server state instead of whatever the
