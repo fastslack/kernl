@@ -8,7 +8,7 @@ import { Database } from "bun:sqlite";
 import { runMigrations } from "../src/sdk/migrations.js";
 import { generateKey } from "../src/sdk/crypto.js";
 import { projectsMigrations } from "../src/modules/projects/migrations.js";
-import { ProjectAccountsService, projectOfRepo, signedCallerIdentity, deployEnvForRepo } from "../src/modules/projects/accounts.js";
+import { ProjectAccountsService, projectOfRepo, signedCallerIdentity, deployEnvForRepo, metaAdAccounts } from "../src/modules/projects/accounts.js";
 
 const key = generateKey();
 const CF_ACCOUNT = "0123456789abcdef0123456789abcdef";
@@ -264,6 +264,46 @@ describe("Google linked by consent", () => {
 });
 
 /** 05/11: the Acme office deployed with whatever wrangler session the machine had, not the project's account. */
+describe("Meta account", () => {
+  /** Graph API fake: the token "bad" is refused; act_999 is an account the token cannot see. */
+  const graph = (async (url: string, init: RequestInit) => {
+    calls.push({ url, init });
+    const tok = ((init.headers ?? {}) as Record<string, string>).Authorization;
+    if (tok === "Bearer bad") return Response.json({ error: { message: "Invalid OAuth access token." } }, { status: 401 });
+    const path = new URL(url).pathname.replace(/^\/v[\d.]+\//, "");
+    if (path === "me") return Response.json({ id: "1", name: "Northwind System User" });
+    if (path === "act_123") return Response.json({ id: "act_123", name: "Northwind Ads", account_status: 1, currency: "USD" });
+    if (path === "555") return Response.json({ id: "555", name: "Northwind Pixel" });
+    if (path === "777") return Response.json({ id: "777", username: "northwind" });
+    return Response.json({ error: { message: "Unsupported get request." } }, { status: 400 });
+  }) as unknown as typeof fetch;
+
+  it("spells ad accounts the way the API wants them", () => {
+    expect(metaAdAccounts("123, act_456 ;123\n789")).toEqual(["act_123", "act_456", "act_789"]);
+    expect(metaAdAccounts("")).toEqual([]);
+  });
+
+  it("tests the token, the ad account, the Pixel and Instagram, and never puts them in a deploy", async () => {
+    const svc = new ProjectAccountsService(db, key, graph);
+    const a = await svc.set("northwind", "meta", { access_token: "EAAG-secret-token", ad_account_ids: "123", pixel_id: "555", instagram_id: "777" });
+    expect(a.identity).toBe("Northwind System User · Ads Northwind Ads (USD) · Pixel Northwind Pixel · Instagram @northwind");
+    expect(a.config.ad_account_ids).toBe("act_123");
+    expect(a.secrets.access_token).toBe("…oken");
+    expect(svc.get("northwind", "meta")!.secrets.access_token).toBe("EAAG-secret-token");
+    expect(svc.env("northwind")).toEqual({});
+  });
+
+  it("refuses a bad token, an ad account the token cannot see, and ids that are not numbers", async () => {
+    const svc = new ProjectAccountsService(db, key, graph);
+    await expect(svc.set("northwind", "meta", { access_token: "bad" })).rejects.toThrow(/Meta no aceptó el token/);
+    await expect(svc.set("northwind", "meta", { access_token: "ok-token", ad_account_ids: "999" })).rejects.toThrow(/no ve la cuenta publicitaria act_999/);
+    calls = [];
+    await expect(svc.set("northwind", "meta", { access_token: "ok-token", pixel_id: "G-ABC" })).rejects.toThrow(/pixel_id/);
+    expect(calls).toHaveLength(0);
+    expect(svc.get("northwind", "meta")).toBeNull();
+  });
+});
+
 describe("deploy environment for a repo (tools outside Kernl)", () => {
   beforeEach(() => {
     db.exec("CREATE TABLE repos (id TEXT PRIMARY KEY, path TEXT NOT NULL DEFAULT '', remote_url TEXT NOT NULL DEFAULT '', deleted_at TEXT)");

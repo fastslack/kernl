@@ -1,7 +1,7 @@
 /**
  * A project's own accounts on the services it deploys to and reads from:
  * Cloudflare, Datadog, AWS, Google (Analytics and Search Console, linked by
- * consent in google-link.ts), and the git identity its commits and pushes go out
+ * consent in google-link.ts), Meta (ad spend, Pixel, Instagram), and the git identity its commits and pushes go out
  * as. One per service and project; an account belongs to its project only, so
  * a deploy or a read for one project never goes out as another (03/11: the
  * Kernl site's wrangler deploy kept landing in the wrong Cloudflare account).
@@ -17,7 +17,7 @@ import { newId, isoNow } from "../../core/helpers.js";
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import { googleAccessToken } from "./google-link.js";
 
-export const ACCOUNT_PROVIDERS = ["cloudflare", "datadog", "aws", "git", "env", "google"] as const;
+export const ACCOUNT_PROVIDERS = ["cloudflare", "datadog", "aws", "git", "env", "google", "meta"] as const;
 export type AccountProvider = (typeof ACCOUNT_PROVIDERS)[number];
 
 export interface AccountValues {
@@ -127,6 +127,15 @@ export function signedCallerIdentity(accessKeyId: string, secret: string, region
 }
 
 const TIMEOUT = 15_000;
+
+/** Meta's Graph API, the version every Meta read in Kernl speaks. */
+export const META_GRAPH = "https://graph.facebook.com/v21.0";
+
+/** `123, act_456 ;789` → ["act_123", "act_456", "act_789"]: Ads Manager shows the bare number, the API wants act_. */
+export function metaAdAccounts(raw: string): string[] {
+  const ids = raw.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean).map((x) => (/^\d+$/.test(x) ? `act_${x}` : x));
+  return [...new Set(ids)];
+}
 
 export const PROVIDERS: Record<AccountProvider, ProviderSpec> = {
   cloudflare: {
@@ -322,6 +331,72 @@ export const PROVIDERS: Record<AccountProvider, ProviderSpec> = {
         if (!res.ok) throw new Error(`${who} no tiene acceso a ${site} en Search Console (HTTP ${res.status})`);
       }
       if (sites.length) parts.push(`Search Console: ${sites.length === 1 ? sites[0] : `${sites.length} sitios`}`);
+      return parts.join(" · ");
+    },
+    // Reads only: nothing of it goes into a deploy's environment.
+    env: () => ({}),
+  },
+  meta: {
+    // A Business Manager system-user token (never expires), plus what of it this project is:
+    // its ad account(s), its Pixel and its Instagram account. Growth reads them; nothing is written.
+    fields: [
+      { key: "access_token", secret: true, required: true },
+      { key: "ad_account_ids", secret: false, required: false },
+      { key: "pixel_id", secret: false, required: false },
+      { key: "instagram_id", secret: false, required: false },
+    ],
+    normalize: (v) => {
+      const config = { ...v.config };
+      const ids = metaAdAccounts(config.ad_account_ids ?? "");
+      if (ids.length) config.ad_account_ids = ids.join(","); else delete config.ad_account_ids;
+      return { ...v, config };
+    },
+    validate: (v) => {
+      for (const id of metaAdAccounts(v.config.ad_account_ids ?? "")) {
+        if (!/^act_\d+$/.test(id)) return `ad_account_ids: "${id}" no es una cuenta publicitaria (es un número, con o sin act_ adelante)`;
+      }
+      if (v.config.pixel_id && !/^\d+$/.test(v.config.pixel_id)) return `pixel_id: "${v.config.pixel_id}" no es un Pixel (es un número, Administrador de eventos → Configuración)`;
+      if (v.config.instagram_id && !/^\d+$/.test(v.config.instagram_id)) return `instagram_id: "${v.config.instagram_id}" no es un ID de cuenta de Instagram profesional (es un número)`;
+      return null;
+    },
+    test: async (v, fetchFn) => {
+      const get = async (path: string, fields: string): Promise<Record<string, unknown>> => {
+        const res = await fetchFn(`${META_GRAPH}/${path}?fields=${fields}`, {
+          headers: { Authorization: `Bearer ${v.secrets.access_token}` }, signal: AbortSignal.timeout(TIMEOUT),
+        });
+        const body = await json(res);
+        if (!res.ok) {
+          const msg = String((body.error as { message?: unknown } | undefined)?.message ?? `HTTP ${res.status}`);
+          throw Object.assign(new Error(msg), { status: res.status });
+        }
+        return body;
+      };
+      let me: Record<string, unknown>;
+      try { me = await get("me", "id,name"); } catch (e) {
+        throw new Error(`Meta no aceptó el token (${(e as Error).message}): usá el de un usuario del sistema de Business Manager, copiado entero`);
+      }
+      const parts = [String(me.name ?? me.id ?? "usuario de Meta")];
+      for (const id of metaAdAccounts(v.config.ad_account_ids ?? "")) {
+        let acc: Record<string, unknown>;
+        try { acc = await get(id, "name,account_status,currency"); } catch (e) {
+          throw new Error(`El token no ve la cuenta publicitaria ${id} (${(e as Error).message}): asignásela al usuario del sistema en Business Manager con permiso ads_read`);
+        }
+        parts.push(`Ads ${acc.name ?? id}${acc.currency ? ` (${acc.currency})` : ""}${Number(acc.account_status) !== 1 ? " · desactivada" : ""}`);
+      }
+      if (v.config.pixel_id) {
+        let px: Record<string, unknown>;
+        try { px = await get(v.config.pixel_id, "name"); } catch (e) {
+          throw new Error(`El token no ve el Pixel ${v.config.pixel_id} (${(e as Error).message}): asignale el Pixel al usuario del sistema`);
+        }
+        parts.push(`Pixel ${px.name ?? v.config.pixel_id}`);
+      }
+      if (v.config.instagram_id) {
+        let ig: Record<string, unknown>;
+        try { ig = await get(v.config.instagram_id, "username"); } catch (e) {
+          throw new Error(`El token no ve la cuenta de Instagram ${v.config.instagram_id} (${(e as Error).message}): sumale instagram_basic e instagram_manage_insights`);
+        }
+        parts.push(`Instagram @${ig.username ?? v.config.instagram_id}`);
+      }
       return parts.join(" · ");
     },
     // Reads only: nothing of it goes into a deploy's environment.

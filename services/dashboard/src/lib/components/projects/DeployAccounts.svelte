@@ -1,7 +1,7 @@
 <script lang="ts">
   /*
-    The project's own accounts for deploys and reads: Cloudflare, Datadog, AWS
-    and the git identity. One row per service; the form opens in place. Kernl
+    The project's own accounts for deploys and reads: Cloudflare, Datadog, AWS,
+    Google, Meta and the git identity. One row per service; the form opens in place. Kernl
     tests an account against its service before saving it, and keeps the
     secrets sealed: the row only shows who it authenticated as and the last
     four characters of each secret.
@@ -33,6 +33,12 @@
     { id: 'datadog', label: 'Datadog', help: 'La API key para mandar datos; la application key solo si algo tiene que leer (la Plaza de Growth).',
       fields: [{ key: 'site', label: 'Región', optional: true, placeholder: 'datadoghq.com' }, { key: 'api_key', label: 'API key', secret: true }, { key: 'app_key', label: 'Application key', secret: true, optional: true }] },
     { id: 'google', label: 'Google', help: '', fields: [] },
+    { id: 'meta', label: 'Meta',
+      help: 'Un token de un usuario del sistema de Business Manager (Configuración del negocio → Usuarios del sistema → Generar token, con ads_read; instagram_basic e instagram_manage_insights si cargás Instagram). Asignale al usuario la cuenta publicitaria, el Pixel y la cuenta de Instagram del proyecto. Growth lee de acá el gasto de Meta Ads; Kernl nunca cambia nada en Meta.',
+      fields: [{ key: 'access_token', label: 'Token de acceso', secret: true, placeholder: 'EAAG…' },
+        { key: 'ad_account_ids', label: 'Cuentas publicitarias', optional: true, placeholder: 'act_123…, separadas por coma' },
+        { key: 'pixel_id', label: 'Pixel', optional: true, placeholder: 'ID del Pixel / dataset' },
+        { key: 'instagram_id', label: 'Instagram', optional: true, placeholder: 'ID de la cuenta profesional' }] },
     { id: 'aws', label: 'AWS', help: 'Un usuario IAM propio de este proyecto, con solo los permisos de su deploy. Nunca la clave de la cuenta raíz.',
       fields: [{ key: 'region', label: 'Región', placeholder: 'eu-west-1' }, { key: 'access_key_id', label: 'Access key ID', placeholder: 'AKIA…' }, { key: 'secret_access_key', label: 'Secret access key', secret: true }] },
     { id: 'git', label: 'Autor y SSH', help: 'El autor de los commits y, si hace falta, una clave SSH de deploy sin passphrase: agregá su parte pública como Deploy key con escritura en los repos del proyecto.',
@@ -108,7 +114,9 @@
   }, 'Cuenta quitada');
 
   function status(a: Account | undefined, id = ''): { cls: string; text: string } {
-    if (!a) return { cls: 'off', text: id === 'google' ? 'Sin conectar: Growth usa la cuenta de Google general de Kernl' : 'Sin cuenta: los deploys no reciben credenciales de este servicio' };
+    if (!a) return { cls: 'off', text: id === 'google' ? 'Sin conectar: Growth usa la cuenta de Google general de Kernl'
+      : id === 'meta' ? 'Sin conectar: Growth no lee el gasto de Meta Ads de este proyecto (salvo por la extensión Ads)'
+      : 'Sin cuenta: los deploys no reciben credenciales de este servicio' };
     if (a.last_test_ok === false) return { cls: 'bad', text: `Falló la última prueba: ${a.last_test_error}` };
     const secrets = Object.entries(a.secrets).map(([k, v]) => `${k} ${v}`).join(' · ');
     return { cls: 'ok', text: [a.identity, secrets].filter(Boolean).join(' · ') };
@@ -135,7 +143,7 @@
               <button class="btn sm" disabled={busy === p.id} on:click={() => edit(p.id)}>Cambiar</button>
               <button class="btn sm" disabled={busy === p.id} aria-label="Quitar la cuenta de {p.label}" on:click={() => remove(p.id)}>Quitar</button>
             {:else}
-              <button class="btn sm" disabled={busy === p.id} on:click={() => edit(p.id)}>{p.id === 'datadog' || p.id === 'google' || p.id === 'cloudflare' ? 'Conectar' : 'Cargar'}</button>
+              <button class="btn sm" disabled={busy === p.id} on:click={() => edit(p.id)}>{['datadog', 'google', 'cloudflare', 'meta'].includes(p.id) ? 'Conectar' : 'Cargar'}</button>
             {/if}
           </span>
         </div>

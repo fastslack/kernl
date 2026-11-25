@@ -285,4 +285,27 @@ export const projectsMigrations: Migration[] = [
       ALTER TABLE project_accounts_v13 RENAME TO project_accounts;
     `,
   },
+  {
+    // A project's own Meta account (ad spend, Pixel, Instagram) for Growth.
+    version: 14,
+    sql: `
+      CREATE TABLE project_accounts_v14 (
+        id              TEXT PRIMARY KEY,
+        project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        provider        TEXT NOT NULL CHECK(provider IN ('cloudflare','datadog','aws','git','env','google','meta')),
+        config          TEXT NOT NULL DEFAULT '{}',
+        secrets         TEXT NOT NULL DEFAULT '',
+        identity        TEXT NOT NULL DEFAULT '',
+        last_test_at    TEXT,
+        last_test_ok    INTEGER,
+        last_test_error TEXT NOT NULL DEFAULT '',
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        UNIQUE(project_id, provider)
+      );
+      INSERT INTO project_accounts_v14 SELECT * FROM project_accounts;
+      DROP TABLE project_accounts;
+      ALTER TABLE project_accounts_v14 RENAME TO project_accounts;
+    `,
+  },
 ];

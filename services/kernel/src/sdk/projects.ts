@@ -55,7 +55,7 @@ export interface ProjectsHost {
   completeGoogleLink?(state: string | null, code: string): Promise<{ ok: boolean; error?: string }>;
 }
 
-export type ProjectAccountProvider = "cloudflare" | "datadog" | "aws" | "git" | "env" | "google";
+export type ProjectAccountProvider = "cloudflare" | "datadog" | "aws" | "git" | "env" | "google" | "meta";
 
 function host(): ProjectsHost {
   const h = getHost().projects?.();
