@@ -24,6 +24,8 @@
   import { fetchCatalog, type CatalogResponse, type ProbeResult } from '$lib/llm-connect.js';
   import EditionStep from '$lib/components/setup/EditionStep.svelte';
   import { fetchEdition, type EditionMode } from '$lib/edition.js';
+  import { session, loadSession } from '$lib/session.js';
+  import { SETUP_STEPS, visibleSetupSteps, canDoSetupStep, canSeeSetupChecklist } from '$lib/setup-steps.js';
 
   // ── Wizard state ──────────────────────────────────────────────
   // 7 steps: language -> edition -> provider -> hire a team -> mail -> WhatsApp
@@ -31,7 +33,6 @@
   // is the worst first impression this product can make.
   // Named steps: inserting one used to mean hunting every numeric literal.
   const S = { lang: 0, edition: 1, llm: 2, team: 3, mail: 4, whatsapp: 5, done: 6 } as const;
-  const TOTAL = 7;
   let edition: EditionMode = 'personal';
   let step = 0;
 
@@ -99,17 +100,46 @@
     }
   }
 
-  // ── Step transitions ──────────────────────────────────────────
-  function next(): void {
-    if (step < TOTAL - 1) step++;
+  // ── Who is walking the wizard ─────────────────────────────────
+  // /setup runs without the shell, so nothing else loads the session here.
+  // Most steps configure the install (edition, AI, mail, WhatsApp) and a user
+  // without those grants would only reach a 403; they are left out of the
+  // walk instead (lib/setup-steps.ts). The kernel still refuses on its own.
+  let llmReady: boolean | null = null;
+  let whoReady: Promise<unknown> = Promise.resolve();
+
+  async function loadLlmReady(): Promise<void> {
+    try {
+      const r = await fetch('/api/llm/readiness');
+      if (!r.ok) return;
+      const v = await r.json();
+      if (v && typeof v.ok === 'boolean') llmReady = v.ok;
+    } catch { /* unknown stays unknown */ }
+  }
+
+  $: visible = visibleSetupSteps($session, { aiSkipped, llmReady });
+  $: position = Math.max(0, visible.indexOf(SETUP_STEPS[step])) + 1;
+  $: total = visible.length;
+  $: canConfigureAi = canDoSetupStep($session, 'llm');
+
+  function scrollTop(): void {
     if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
   }
+
+  // ── Step transitions ──────────────────────────────────────────
+  // Steps move over the visible list only, so a skipped step is never landed
+  // on going forward or back. A skipped AI step also drops the team step
+  // (see setup-steps.ts), so back from mail lands on the AI step again.
+  async function next(): Promise<void> {
+    await whoReady;
+    const later = SETUP_STEPS.slice(step + 1).find((id) => visible.includes(id));
+    if (later) step = SETUP_STEPS.indexOf(later);
+    scrollTop();
+  }
   function back(): void {
-    // A skipped AI step also skipped the team step, so going back from mail
-    // lands on the AI step again instead of a team that cannot be hired.
-    if (step === S.mail && aiSkipped) step = S.llm;
-    else if (step > 0) step--;
-    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+    const earlier = SETUP_STEPS.slice(0, step).reverse().find((id) => visible.includes(id));
+    if (earlier) step = SETUP_STEPS.indexOf(earlier);
+    scrollTop();
   }
 
   /**
@@ -119,8 +149,7 @@
   function skipAi(): void {
     aiSkipped = true;
     chosenSlug = '';
-    step = S.mail;
-    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+    void next();
   }
 
   function finish(dest = '/settings?welcome=1'): void {
@@ -140,7 +169,10 @@
 
   onMount(() => {
     chosenLang = $locale === 'en' ? 'en' : 'es';
-    void loadCatalog();
+    whoReady = Promise.all([loadSession(), loadLlmReady()]);
+    // The provider catalog is a system read; only load it for whoever may
+    // configure the AI (a null session is the pre-users install: everyone).
+    void whoReady.then(() => { if (canDoSetupStep($session, 'llm')) void loadCatalog(); });
     // A repeated setup starts from the edition already chosen.
     fetchEdition().then((s) => { if (s.mode) edition = s.mode; }).catch(() => {});
   });
@@ -218,10 +250,10 @@
   <div class="progress-shell">
     <div class="progress-meta">
       <span class="step-label">{stepLabel}</span>
-      <span class="step-count">{$t('setup.progress', { current: step + 1, total: TOTAL })}</span>
+      <span class="step-count">{$t('setup.progress', { current: position, total })}</span>
     </div>
     <div class="progress-bar">
-      <div class="progress-fill" style="width: {((step + 1) / TOTAL) * 100}%"></div>
+      <div class="progress-fill" style="width: {(position / total) * 100}%"></div>
     </div>
   </div>
 
@@ -353,16 +385,18 @@
             <span class="summary-k">{$t('setup.done_lang')}</span>
             <span class="summary-v">{chosenLangLabel}</span>
           </div>
-          <div class="summary-row">
-            <span class="summary-k">{$t('setup.done_llm')}</span>
-            <span class="summary-v">{connectedName || $t('setup.done_llm_skipped')}</span>
-          </div>
+          {#if canConfigureAi}
+            <div class="summary-row">
+              <span class="summary-k">{$t('setup.done_llm')}</span>
+              <span class="summary-v">{connectedName || $t('setup.done_llm_skipped')}</span>
+            </div>
+          {/if}
         </div>
 
-        <SetupChecklist />
+        {#if canSeeSetupChecklist($session)}<SetupChecklist />{/if}
 
         <div class="step-nav center">
-          {#if aiSkipped}
+          {#if aiSkipped && canConfigureAi}
             <button class="btn-primary big" on:click={() => finish('/settings?section=ai&card=providers')}>{$t('setup.done_cta_connect_ai')}</button>
           {:else}
             <button class="btn-primary big" on:click={() => finish('/agents-flow')}>{$t('setup.done_cta_office')}</button>
