@@ -4,8 +4,12 @@
   // channel + `dashboard.calendar` RPC that hydrate the planner store. All
   // mutations preserve the shell's rpcOrCall / WS-only semantics via ctx.rpc.
   import { onMount } from 'svelte';
-  import ViewHeader from '$shared/components/ViewHeader.svelte';
-  import Panel from '$shared/components/Panel.svelte';
+  import PageShell from '$shared/components/page/PageShell.svelte';
+  import StatTile from '$shared/components/page/StatTile.svelte';
+  import Card from '$shared/components/page/Card.svelte';
+  import Chip from '$shared/components/page/Chip.svelte';
+  import Btn from '$shared/components/page/Btn.svelte';
+  import { PALETTE } from '$shared/components/page/palette';
   import Empty from '$shared/components/Empty.svelte';
   import DayModal from '$shared/components/DayModal.svelte';
   import { TL_COLORS, TL_MONTHS } from './constants';
@@ -348,148 +352,154 @@
     selectedDay = date;
     modalOpen = true;
   }
+
+  // ── Header band: one-line summary + KPI tiles, all from data already loaded ──
+  const TYPE_TILE: Record<string, string> = { task: 'Tareas', reminder: 'Avisos', event: 'Eventos' };
+  $: rangeTotal = summary ? GROUP_ORDER.reduce((s, t) => s + (summary?.counts[t] ?? 0), 0) : 0;
+  $: subLine = !cal
+    ? 'Cargando la agenda…'
+    : [
+        `${rangeTotal} en el calendario`,
+        plan?.counts ? `${plan.counts.dueToday} para hoy` : '',
+        summary?.next ? `próximo: ${summary.next.ev.title} (${summary.countdown})` : '',
+      ].filter(Boolean).join(' · ');
+  // Compact board fits one screen; the titled board is taller, so the page flows.
+  $: bodyRows = !cal || !gridData ? 'auto minmax(0, 1fr)' : expanded ? 'auto 360px' : 'auto minmax(0, 1fr)';
 </script>
 
-<div class="pl-page">
-<ViewHeader title="Agenda" sub="Tu calendario arriba; abajo, lo de hoy, lo que viene y lo importante" />
+<PageShell title="Agenda" sub={subLine} cols="repeat(3, minmax(0, 1fr))" rows={bodyRows} flow={expanded}>
+  <svelte:fragment slot="tiles">
+    {#each GROUP_ORDER as t}
+      <StatTile color={TL_COLORS[t]} value={summary ? summary.counts[t] ?? 0 : '—'} label={TYPE_TILE[t]} title={TYPE_LABEL[t]} />
+    {/each}
+    <StatTile color={PALETTE.rose} value={plan?.counts ? plan.counts.overdue : '—'} label="Vencidas" />
+    <StatTile color={PALETTE.cyan} value={cal ? upcoming.length : '—'} label="7 días" title="Próximos 7 días" />
+    <StatTile clickable on={importantOnly} color={PALETTE.gold} value={cal ? importantList.length : '—'} label="Importantes"
+      title="Solo tareas importantes (alta o urgente)" on:click={() => (importantOnly = !importantOnly)} />
+  </svelte:fragment>
+  <svelte:fragment slot="actions">
+    <Btn title="Compacto o con títulos" on:click={() => (expanded = !expanded)}>{expanded ? '▤ Ampliado' : '▦ Compacto'}</Btn>
+    <Btn variant="primary" disabled={!cal} on:click={() => openDayModal(todayStr)}>+ Hoy</Btn>
+  </svelte:fragment>
 
-{#if !cal}
-  <div class="pl-loading" role="status" aria-live="polite">
-    <span class="pl-spin" aria-hidden="true"></span><span>Cargando la agenda…</span>
-  </div>
-  <div class="pl-skel-board" aria-hidden="true">
-    {#each Array(7) as _, r}
-      <div class="pl-skel-row">{#each Array(26) as _, c}<span class="pl-skel-cell" style="--i:{(r + c) % 12}"></span>{/each}</div>
-    {/each}
-  </div>
-  <div class="pl-lists" aria-hidden="true">
-    {#each Array(3) as _}
-      <div class="pl-list">{#each Array(6) as _, i}<span class="pl-skel-line" style="--i:{i}; width:{90 - (i % 3) * 18}%"></span>{/each}</div>
-    {/each}
-  </div>
-{:else if !gridData}
-  <Panel cls="anim"><Empty message="Timeline data not available." /></Panel>
-{:else}
-  <!-- One bar: what the range holds (the counters double as the legend), the next item, the view toggles -->
-  <div class="pl-bar">
-    <div class="pl-legend">
-      {#each GROUP_ORDER as t}
-        <div class="pl-sum-item" title={TYPE_LABEL[t]}>
-          <span class="pl-ic" style="color:{TL_COLORS[t]}">{@html ICON[t]}</span>
-          <span class="pl-sum-n">{summary?.counts[t] ?? 0}</span>
-          <span class="pl-sum-l">{TYPE_ES[t]}</span>
-        </div>
-      {/each}
-      <div class="pl-legend-item"><span class="pl-star">★</span> Importante</div>
-    </div>
-    {#if summary?.next}
-      <div class="pl-sum-next">
-        <span class="pl-sum-next-lbl">Próximo</span>
-        <span class="pl-ic" style="color:{summary.next.ev.color ?? TL_COLORS[summary.next.ev.type]}">{@html ICON[summary.next.ev.type]}</span>
-        <span class="pl-sum-next-title">{summary.next.ev.title}</span>
-        <span class="pl-sum-next-cd">{summary.countdown}</span>
+  {#if !cal}
+    <Card title="Calendario" scroll={false} style="grid-column: 1 / -1">
+      <div class="pl-loading" role="status" aria-live="polite">
+        <span class="pl-spin" aria-hidden="true"></span><span>Cargando la agenda…</span>
       </div>
-    {/if}
-    <div class="pl-actions">
-      <button class="pl-filter {expanded ? 'active' : ''}" on:click={() => (expanded = !expanded)} title="Compacto o con títulos">
-        {expanded ? '▤ Ampliado' : '▦ Compacto'}
-      </button>
-      <button class="pl-filter {importantOnly ? 'active' : ''}" on:click={() => (importantOnly = !importantOnly)} title="Solo tareas importantes (alta o urgente)">
-        <span class="pl-filter-star">{importantOnly ? '★' : '☆'}</span> Solo importantes
-      </button>
-    </div>
-  </div>
-
-  <!-- Calendar board -->
-  <div class="pl-board {expanded ? 'expanded' : ''}">
-    <div class="pl-layout">
-      <!-- Row labels Mon-Sun -->
-      <div class="pl-rowlabels">
-        <div class="pl-monthbar"></div>
-        {#each ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'] as d, i}
-          <div class="pl-rowlbl {i >= 5 ? 'weekend' : ''}">{d}</div>
+      <div class="pl-skel-board" aria-hidden="true">
+        {#each Array(7) as _, r}
+          <div class="pl-skel-row">{#each Array(26) as _, c}<span class="pl-skel-cell" style="--i:{(r + c) % 12}"></span>{/each}</div>
         {/each}
       </div>
-      <!-- Scrollable grid -->
-      <div class="pl-scroll" use:centerToday>
-        <!-- Month headers -->
-        <div class="pl-monthrow">
-          {#each gridData.months as m}
-            <div class="pl-monthlbl" style="width:calc(var(--cw) * {m.weeks})">{m.label}</div>
+    </Card>
+    {#each Array(3) as _}
+      <Card>
+        <div aria-hidden="true">{#each Array(6) as _, i}<span class="pl-skel-line" style="--i:{i}; width:{90 - (i % 3) * 18}%"></span>{/each}</div>
+      </Card>
+    {/each}
+  {:else if !gridData}
+    <Card scroll={false} style="grid-column: 1 / -1"><Empty message="Timeline data not available." /></Card>
+  {:else}
+    <!-- Calendar board: the legend and the importance filter sit in the card heading -->
+    <Card title="Calendario" scroll={false} style="grid-column: 1 / -1; max-height: none">
+      <svelte:fragment slot="head">
+        <div class="pl-legend">
+          {#each GROUP_ORDER as t}
+            <span class="pl-legend-item" title={TYPE_LABEL[t]}><span class="pl-ic" style="color:{TL_COLORS[t]}">{@html ICON[t]}</span>{TYPE_ES[t]}</span>
           {/each}
+          <span class="pl-legend-item"><span class="pl-star">★</span> Importante</span>
         </div>
-        <!-- Day grid -->
-        <div class="pl-grid">
-          {#each gridData.dates as dd, i}
-            {@const events = visibleEvents(cal.days?.[dd.date] ?? [], importantOnly)}
-            {@const groups = groupByType(events)}
-            {@const isToday = dd.date === todayStr}
-            {@const cls = ['pl-cell', dd.outside ? 'outside' : '', isToday ? 'today' : '', events.length ? 'has' : '', (dd.dow === 0 || dd.dow === 6) ? 'weekend' : '', dragOverDay === dd.date ? 'dragover' : '', (weekOfToday >= 0 && Math.floor(i / 7) === weekOfToday) ? 'thisweek' : ''].filter(Boolean).join(' ')}
-            <div
-              class={cls}
-              style="--d:{Math.floor(i / 7) * 4}ms"
-              title={events.length ? dayTooltip(events) : ''}
-              on:click={() => !dd.outside && openDayModal(dd.date)}
-              role="button"
-              tabindex={dd.outside ? -1 : 0}
-              on:keypress={e => e.key === 'Enter' && !dd.outside && openDayModal(dd.date)}
-              on:dragover={e => { if (!dd.outside) { e.preventDefault(); dragOverDay = dd.date; } }}
-              on:dragleave={() => { if (dragOverDay === dd.date) dragOverDay = ''; }}
-              on:drop={e => { if (!dd.outside) { e.preventDefault(); onCellDrop(dd.date); } }}
-            >
-              <div class="pl-cell-card">
-                <div class="pl-cell-top">
-                  <span class="pl-num">{dd.day}</span>
-                  {#if isToday}<span class="pl-today-tag">HOY</span>{/if}
-                </div>
-                {#if events.length}
-                  {#if expanded}
-                    <div class="pl-rows">
-                      {#each events.slice(0, 3) as ev}
-                        <div
-                          class="pl-row {isImportant(ev) ? 'imp' : ''}"
-                          style="--c:{ev.color ?? TL_COLORS[ev.type]}"
-                          draggable={DRAGGABLE.has(ev.type)}
-                          on:dragstart={e => onChipDragStart(ev, e)}
-                        >
-                          <span class="pl-row-ic">{@html ICON[ev.type]}</span>
-                          {#if ev.time}<span class="pl-row-tm">{String(ev.time).slice(0, 5)}</span>{/if}
-                          <span class="pl-row-title">{ev.title}</span>
-                        </div>
-                      {/each}
-                      {#if events.length > 3}<div class="pl-row-more">+{events.length - 3} more</div>{/if}
-                    </div>
-                  {:else}
-                    <div class="pl-chips">
-                      {#each groups as g}
-                        <span
-                          class="pl-chip {g.important ? 'imp' : ''}"
-                          style="color:{g.color}"
-                          draggable={DRAGGABLE.has(g.type)}
-                          on:dragstart={e => onChipDragStart({ id: (events.find(e2 => e2.type === g.type) ?? {}).id, type: g.type, time: (events.find(e2 => e2.type === g.type) ?? {}).time }, e)}
-                        >
-                          <span class="pl-chip-ic">{@html ICON[g.type]}</span>
-                          {#if g.count > 1}<span class="pl-chip-n">{g.count}</span>{/if}
-                        </span>
-                      {/each}
-                    </div>
-                  {/if}
-                {/if}
-                {#if !groups.length && !dd.outside}
-                  <span class="pl-add" aria-hidden="true">+</span>
-                {/if}
-              </div>
+        <Chip small label="{importantOnly ? '★' : '☆'} Solo importantes" color={PALETTE.gold} on={importantOnly} on:click={() => (importantOnly = !importantOnly)} />
+      </svelte:fragment>
+      <div class="pl-board {expanded ? 'expanded' : ''}">
+        <div class="pl-layout">
+          <!-- Row labels Mon-Sun -->
+          <div class="pl-rowlabels">
+            <div class="pl-monthbar"></div>
+            {#each ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'] as d, i}
+              <div class="pl-rowlbl {i >= 5 ? 'weekend' : ''}">{d}</div>
+            {/each}
+          </div>
+          <!-- Scrollable grid -->
+          <div class="pl-scroll" use:centerToday>
+            <!-- Month headers -->
+            <div class="pl-monthrow">
+              {#each gridData.months as m}
+                <div class="pl-monthlbl" style="width:calc(var(--cw) * {m.weeks})">{m.label}</div>
+              {/each}
             </div>
-          {/each}
+            <!-- Day grid -->
+            <div class="pl-grid">
+              {#each gridData.dates as dd, i}
+                {@const events = visibleEvents(cal.days?.[dd.date] ?? [], importantOnly)}
+                {@const groups = groupByType(events)}
+                {@const isToday = dd.date === todayStr}
+                {@const cls = ['pl-cell', dd.outside ? 'outside' : '', isToday ? 'today' : '', events.length ? 'has' : '', (dd.dow === 0 || dd.dow === 6) ? 'weekend' : '', dragOverDay === dd.date ? 'dragover' : '', (weekOfToday >= 0 && Math.floor(i / 7) === weekOfToday) ? 'thisweek' : ''].filter(Boolean).join(' ')}
+                <div
+                  class={cls}
+                  style="--d:{Math.floor(i / 7) * 4}ms"
+                  title={events.length ? dayTooltip(events) : ''}
+                  on:click={() => !dd.outside && openDayModal(dd.date)}
+                  role="button"
+                  tabindex={dd.outside ? -1 : 0}
+                  on:keypress={e => e.key === 'Enter' && !dd.outside && openDayModal(dd.date)}
+                  on:dragover={e => { if (!dd.outside) { e.preventDefault(); dragOverDay = dd.date; } }}
+                  on:dragleave={() => { if (dragOverDay === dd.date) dragOverDay = ''; }}
+                  on:drop={e => { if (!dd.outside) { e.preventDefault(); onCellDrop(dd.date); } }}
+                >
+                  <div class="pl-cell-card">
+                    <div class="pl-cell-top">
+                      <span class="pl-num">{dd.day}</span>
+                      {#if isToday}<span class="pl-today-tag">HOY</span>{/if}
+                    </div>
+                    {#if events.length}
+                      {#if expanded}
+                        <div class="pl-rows">
+                          {#each events.slice(0, 3) as ev}
+                            <div
+                              class="pl-row {isImportant(ev) ? 'imp' : ''}"
+                              style="--c:{ev.color ?? TL_COLORS[ev.type]}"
+                              draggable={DRAGGABLE.has(ev.type)}
+                              on:dragstart={e => onChipDragStart(ev, e)}
+                            >
+                              <span class="pl-row-ic">{@html ICON[ev.type]}</span>
+                              {#if ev.time}<span class="pl-row-tm">{String(ev.time).slice(0, 5)}</span>{/if}
+                              <span class="pl-row-title">{ev.title}</span>
+                            </div>
+                          {/each}
+                          {#if events.length > 3}<div class="pl-row-more">+{events.length - 3} more</div>{/if}
+                        </div>
+                      {:else}
+                        <div class="pl-chips">
+                          {#each groups as g}
+                            <span
+                              class="pl-chip {g.important ? 'imp' : ''}"
+                              style="color:{g.color}"
+                              draggable={DRAGGABLE.has(g.type)}
+                              on:dragstart={e => onChipDragStart({ id: (events.find(e2 => e2.type === g.type) ?? {}).id, type: g.type, time: (events.find(e2 => e2.type === g.type) ?? {}).time }, e)}
+                            >
+                              <span class="pl-chip-ic">{@html ICON[g.type]}</span>
+                              {#if g.count > 1}<span class="pl-chip-n">{g.count}</span>{/if}
+                            </span>
+                          {/each}
+                        </div>
+                      {/if}
+                    {/if}
+                    {#if !groups.length && !dd.outside}
+                      <span class="pl-add" aria-hidden="true">+</span>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </div>
         </div>
       </div>
-    </div>
-  </div>
+    </Card>
 
-  <div class="pl-lists">
-    <section class="pl-list">
-      <h3>Hoy y vencido {#if plan?.counts}<small>{plan.counts.overdue} vencidas · {plan.counts.dueToday} hoy</small>{/if}</h3>
-      <ul>
+    <Card title="Hoy y vencido" count={plan?.counts ? `${plan.counts.overdue} vencidas · ${plan.counts.dueToday} hoy` : ''}>
+      <ul class="pl-ul">
         {#if planLoading}
           {#each Array(5) as _, i}<li class="pl-skel-li" aria-hidden="true"><span class="pl-skel-line" style="--i:{i}; width:{88 - (i % 3) * 16}%"></span></li>{/each}
         {/if}
@@ -502,10 +512,9 @@
           {#if !planLoading}<li class="pl-empty">Nada para hoy.</li>{/if}
         {/each}
       </ul>
-    </section>
-    <section class="pl-list">
-      <h3>Próximos 7 días <small>{upcoming.length}</small></h3>
-      <ul>
+    </Card>
+    <Card title="Próximos 7 días" count={upcoming.length}>
+      <ul class="pl-ul">
         {#each upcoming as u}
           <li><button on:click={() => openDayModal(u.date)}>
             <span class="pl-li-day">{dayLabel(u.date)}</span>
@@ -516,10 +525,9 @@
           <li class="pl-empty">Nada en la semana.</li>
         {/each}
       </ul>
-    </section>
-    <section class="pl-list">
-      <h3>Importantes <small>{importantList.length}</small></h3>
-      <ul>
+    </Card>
+    <Card title="Importantes" count={importantList.length}>
+      <ul class="pl-ul">
         {#each importantList as u}
           <li><button on:click={() => openDayModal(u.date)}>
             <span class="pl-li-day" class:late={u.date < todayStr}>{dayLabel(u.date)}</span>
@@ -530,10 +538,9 @@
           <li class="pl-empty">Ninguna tarea con prioridad alta o urgente.</li>
         {/each}
       </ul>
-    </section>
-  </div>
-{/if}
-</div>
+    </Card>
+  {/if}
+</PageShell>
 
 <DayModal
   open={modalOpen}
@@ -549,67 +556,17 @@
 />
 
 <style>
-  /* ── Legend / filter bar ─────────────────────────────────────── */
-  .pl-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    flex-wrap: wrap;
-    margin-bottom: 14px;
-  }
-  .pl-legend {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 14px;
-    font-size: 12px;
-    color: var(--text-2);
-    font-family: var(--font-body);
-  }
-  .pl-legend-item { display: flex; align-items: center; gap: 6px; }
-  .pl-legend-sep { width: 1px; height: 16px; background: var(--border); }
-  .pl-ic { width: 15px; height: 15px; display: inline-flex; }
+  /* ── Calendar card heading: legend ───────────────────────────── */
+  .pl-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-left: 6px; min-width: 0; font-size: 11px; color: var(--text-3); }
+  .pl-legend-item { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .pl-ic { width: 14px; height: 14px; display: inline-flex; }
   .pl-ic :global(svg) { width: 100%; height: 100%; }
   .pl-star { color: var(--gold); font-size: 13px; line-height: 1; }
 
-  .pl-filter {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border: 1px solid var(--border);
-    background: var(--surface-1);
-    color: var(--text-2);
-    border-radius: 999px;
-    padding: 6px 14px;
-    font-size: 12px;
-    font-family: var(--font-body);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: all .15s ease;
-  }
-  .pl-filter:hover { background: var(--surface-2); color: var(--text-1); border-color: var(--border-h); }
-  .pl-filter.active {
-    background: rgba(212, 168, 75, .12);
-    border-color: var(--gold);
-    color: var(--gold);
-  }
-  .pl-filter-star { font-size: 13px; line-height: 1; }
-
-  /* ── The whole page fits the screen: calendar on top, the lists take what is left ── */
-  .pl-page { display: flex; flex-direction: column; gap: 10px; height: calc(100vh - 118px); min-height: 620px; }
-  .pl-page > :global(*) { flex: none; }
-  .pl-page .pl-bar { margin: 0; flex-wrap: wrap; row-gap: 6px; }
-  .pl-page .pl-legend { flex-wrap: wrap; gap: 6px; }
-  .pl-page .pl-sum-item { padding: 4px 10px; }
-  .pl-page .pl-sum-next { margin-left: auto; }
-  .pl-lists { flex: 1 1 auto !important; min-height: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-  .pl-list { display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-1); padding: 10px 10px 6px; }
-  .pl-list h3 { margin: 0 0 6px; font: 700 13px var(--font-display); color: var(--text-1); display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-  .pl-list h3 small { font: 500 11px var(--font-mono); color: var(--gold); }
-  .pl-list ul { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; min-height: 0; }
-  .pl-list li button { width: 100%; display: flex; align-items: flex-start; gap: 8px; padding: 6px 6px; border: 0; border-radius: 8px; background: none; color: var(--text-1); font: inherit; text-align: left; cursor: pointer; }
-  .pl-list li button:hover { background: var(--surface-2); }
+  /* ── The lists under the calendar (they scroll inside their cards) ── */
+  .pl-ul { list-style: none; margin: 0; padding: 0; }
+  .pl-ul li button { width: 100%; display: flex; align-items: flex-start; gap: 8px; padding: 6px 6px; border: 0; border-radius: 8px; background: none; color: var(--text-1); font: inherit; text-align: left; cursor: pointer; }
+  .pl-ul li button:hover { background: var(--surface-2); }
   .pl-li-ic { width: 14px; height: 14px; flex: none; display: inline-flex; margin-top: 2px; }
   .pl-li-ic :global(svg) { width: 100%; height: 100%; }
   .pl-li-day { flex: none; width: 70px; white-space: nowrap; font: 600 11px var(--font-mono); color: var(--text-2); margin-top: 2px; }
@@ -623,7 +580,7 @@
   .pl-loading { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-2); }
   .pl-spin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--gold) 25%, transparent); border-top-color: var(--gold); animation: plSpin .8s linear infinite; }
   @keyframes plSpin { to { transform: rotate(360deg); } }
-  .pl-skel-board { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-1); padding: 30px 12px 10px 52px; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+  .pl-skel-board { padding: 22px 0 4px 40px; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
   .pl-skel-row { display: flex; gap: 4px; }
   .pl-skel-cell { flex: none; width: 46px; height: 34px; border-radius: 8px; }
   .pl-skel-cell, .pl-skel-line {
@@ -638,25 +595,15 @@
   @media (prefers-reduced-motion: reduce) {
     .pl-spin, .pl-skel-cell, .pl-skel-line { animation: none; }
   }
-  @media (max-width: 1100px) {
-    .pl-page { height: auto; }
-    .pl-lists { grid-template-columns: 1fr; }
-    .pl-list ul { max-height: 260px; }
-  }
 
   /* ── Board container ─────────────────────────────────────────── */
   .pl-board {
     --cw: 50px;
     --ch: 38px;
+    /* The Card draws the frame; the board only keeps its cell sizes. */
     position: relative;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background:
-      radial-gradient(120% 80% at 0% 0%, rgba(212, 168, 75, .05), transparent 55%),
-      linear-gradient(180deg, var(--surface-1), var(--bg));
-    padding: 8px 12px 10px;
+    min-width: 0;
     overflow: hidden;
-    box-shadow: 0 1px 0 rgba(255, 255, 255, .02) inset, 0 12px 30px -18px rgba(0, 0, 0, .6);
     animation: plRise .4s ease both;
   }
   @keyframes plRise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
@@ -681,7 +628,7 @@
   }
   .pl-rowlbl.weekend { color: var(--gold); opacity: .5; }
 
-  .pl-scroll { flex: 1; overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--border-h) transparent; }
+  .pl-scroll { flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--border-h) transparent; }
   .pl-scroll::-webkit-scrollbar { height: 8px; }
   .pl-scroll::-webkit-scrollbar-thumb { background: var(--border-h); border-radius: 999px; }
   .pl-scroll::-webkit-scrollbar-track { background: transparent; }
@@ -808,66 +755,6 @@
   }
   .pl-chip.imp .pl-chip-n { color: var(--text-1); }
 
-  /* ── Summary strip ───────────────────────────────────────────── */
-  .pl-summary {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-bottom: 12px;
-  }
-  .pl-sum-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 12px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: var(--surface-1);
-  }
-  .pl-sum-n { font-family: var(--font-mono); font-size: 14px; font-weight: 700; color: var(--text-1); line-height: 1; }
-  .pl-sum-l { font-size: 11px; color: var(--text-3); }
-  .pl-sum-next {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    margin-left: auto;
-    padding: 6px 8px 6px 14px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background:
-      linear-gradient(90deg, transparent, rgba(212, 168, 75, .06)),
-      var(--surface-1);
-    max-width: 100%;
-    overflow: hidden;
-  }
-  .pl-sum-next-lbl {
-    font-family: var(--font-mono);
-    font-size: 8px;
-    font-weight: 700;
-    letter-spacing: .1em;
-    text-transform: uppercase;
-    color: var(--text-3);
-  }
-  .pl-sum-next-title {
-    font-size: 12px;
-    color: var(--text-1);
-    font-weight: 500;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 240px;
-  }
-  .pl-sum-next-cd {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    font-weight: 700;
-    color: var(--gold);
-    background: rgba(212, 168, 75, .12);
-    border-radius: 999px;
-    padding: 3px 8px;
-    white-space: nowrap;
-  }
 
   /* ── Active week column tint ─────────────────────────────────── */
   .pl-cell.thisweek .pl-cell-card { box-shadow: inset 0 0 0 1px rgba(212, 168, 75, .07); }
@@ -895,9 +782,6 @@
     border-color: var(--border-h);
     background: var(--surface-2);
   }
-
-  /* ── Action toggles (density + importance) ───────────────────── */
-  .pl-actions { display: inline-flex; gap: 8px; flex-wrap: wrap; }
 
   /* ── Expanded (titled) mode ──────────────────────────────────── */
   .pl-board.expanded { --cw: 158px; --ch: 98px; }

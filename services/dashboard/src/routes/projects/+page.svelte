@@ -11,6 +11,11 @@
   import { apiFetchRaw, readApiError, rpcPost } from '$lib/api.js';
   import LinkedText from '$lib/components/ui/LinkedText.svelte';
   import Skeleton from '$shared/components/Skeleton.svelte';
+  import PageShell from '$shared/components/page/PageShell.svelte';
+  import StatTile from '$shared/components/page/StatTile.svelte';
+  import Card from '$shared/components/page/Card.svelte';
+  import Btn from '$shared/components/page/Btn.svelte';
+  import { PALETTE } from '$shared/components/page/palette';
   import BriefFields, { emptyBrief, type BriefDraft } from '$lib/components/projects/BriefFields.svelte';
   import DeployAccounts from '$lib/components/projects/DeployAccounts.svelte';
   import ForgeAccess from '$lib/components/projects/ForgeAccess.svelte';
@@ -422,28 +427,39 @@
       ]
     : [];
   $: pendingSteps = steps.filter((s) => !s.done && !s.optional).length;
+  // Header KPIs, from the list the page already loads.
+  $: activeN = projects.filter((p) => p.status === 'active').length;
+  $: pausedN = projects.filter((p) => p.status === 'paused').length;
+  $: draftsN = projects.reduce((n, p) => n + (p.pending_drafts ?? 0), 0);
+  $: leadsN = projects.reduce((n, p) => n + (p.leads ?? 0), 0);
+  $: connectedN = projects.filter((p) => connState(p).cls === 'ok').length;
 </script>
 
 <svelte:window on:click={() => (menuFor = '')} />
 
 <div class="pj k-form">
-{#if error}<div class="banner err" role="alert"><LinkedText text={error} /></div>{/if}
+<PageShell title="Proyectos" sub="{projects.length} proyecto{projects.length === 1 ? '' : 's'} · {activeN} activo{activeN === 1 ? '' : 's'} · {draftsN} borrador{draftsN === 1 ? '' : 'es'} por aprobar" cols="minmax(340px, 31%) minmax(0, 1fr)">
+  <svelte:fragment slot="tiles">
+    <StatTile color={PALETTE.sky} value={projects.length} label="Proyectos" />
+    <StatTile color={PALETTE.emerald} value={activeN} label="Activos" />
+    <StatTile color={PALETTE.slate} value={pausedN} label="Pausados" />
+    <StatTile color={PALETTE.gold} value={draftsN} label="Por aprobar" />
+    <StatTile color={PALETTE.violet} value={leadsN} label="Leads" />
+    <StatTile color={PALETTE.cyan} value={connectedN} label="Datos al día" />
+  </svelte:fragment>
+  <svelte:fragment slot="actions">
+    <Btn variant="primary" on:click={startCreate} disabled={mode === 'create'}>+ Nuevo proyecto</Btn>
+  </svelte:fragment>
 
-<div class="layout">
   <!-- ── List ───────────────────────────────────────── -->
-  <section class="list" aria-label="Tus proyectos">
-    <div class="list-head">
-      <h2>Tus proyectos <span class="count">{projects.length}</span></h2>
-      <button class="btn primary" on:click={startCreate} disabled={mode === 'create'}>+ Nuevo proyecto</button>
-    </div>
-
+  <Card title="Tus proyectos" count={projects.length}>
     {#if loading}
       <Skeleton variant="rows" rows={4} />
     {:else if projects.length === 0}
       <p class="muted pad">Todavía no creaste ninguno.</p>
     {/if}
 
-    <ul>
+    <ul class="list" aria-label="Tus proyectos">
       {#each projects as p (p.id)}
         {@const cs = connState(p)}
         <li class:sel={mode === 'view' && p.id === selectedId} style="--hue: {hueOf(p.id)}">
@@ -453,7 +469,7 @@
               <small>
                 <span class="pill st-{p.status}">{STATUS_LABEL[p.status]}</span>
                 <span class="cdot {cs.cls}" title={cs.label} aria-hidden="true"></span>
-                {(p.offices ?? []).filter((o) => o.active).length || 'sin'} oficina{(p.offices ?? []).filter((o) => o.active).length === 1 ? '' : 's'}
+                <span class="offs">{(p.offices ?? []).filter((o) => o.active).length || 'sin'} oficina{(p.offices ?? []).filter((o) => o.active).length === 1 ? '' : 's'}</span>
               </small>
             </span>
             <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
@@ -473,10 +489,12 @@
         </li>
       {/each}
     </ul>
-  </section>
+  </Card>
 
   <!-- ── Right panel ────────────────────────────────── -->
-  <section class="detail" aria-label={mode === 'create' ? 'Nuevo proyecto' : 'Detalle del proyecto'}>
+  <Card cls="detail">
+    <div class="dwrap" role="region" aria-label={mode === 'create' ? 'Nuevo proyecto' : 'Detalle del proyecto'}>
+    {#if error}<div class="banner err" role="alert"><LinkedText text={error} /></div>{/if}
     {#if mode === 'create'}
       <form class="create" novalidate on:submit|preventDefault={create}>
         <header>
@@ -701,8 +719,9 @@
         <button class="btn primary big" on:click={startCreate}>Crear mi primer proyecto</button>
       </div>
     {/if}
-  </section>
-</div>
+    </div>
+  </Card>
+</PageShell>
 </div>
 
 <style>
@@ -710,7 +729,7 @@
      these hues stay warm and alive whatever theme is on. */
   /* Full-bleed view (+layout FULL_BLEED_VIEWS): the page brings its own thin margin and fills the height. */
   .pj {
-    display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 6px;
+    display: flex; flex-direction: column; flex: 1; min-height: 0;
     --pj-life: #34D399; --pj-life-2: #2DD4BF; --pj-on-life: #052E22;
     --pj-sun: #FBBF24; --pj-sky: #38BDF8; --pj-coral: #FB7185; --pj-violet: #A78BFA;
     --pj-h0: #34D399; --pj-h1: #38BDF8; --pj-h2: #FBBF24; --pj-h3: #FB7185; --pj-h4: #A78BFA; --pj-h5: #A3E635;
@@ -719,30 +738,26 @@
   }
   .banner { border-radius: var(--radius-sm); padding: 9px 12px; margin-bottom: 10px; font-size: 13.5px; }
   .banner.err { background: color-mix(in srgb, var(--pj-coral) 10%, transparent); border: 1px solid var(--pj-coral); color: var(--pj-coral); }
-  .layout { display: grid; grid-template-columns: minmax(280px, 27%) 1fr; gap: 10px; flex: 1; min-height: 0; }
-  section { background: var(--panel, var(--surface-1)); border: 1px solid var(--border); border-radius: 14px; min-height: 0; overflow: auto; }
-  .list { padding: 8px 6px; background: linear-gradient(180deg, color-mix(in srgb, var(--pj-life) 7%, var(--surface-1)), var(--surface-1) 160px); }
-  .detail { padding: 10px 12px; }
+  .pj > :global(.ks-page) { flex: 1; }
+  .dwrap { display: flex; flex-direction: column; min-width: 0; }
   h2 { margin: 0; font-family: var(--font-display); font-size: 18px; color: var(--text-1); font-weight: 600; }
-  .list-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 4px 8px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
-  .list-head h2 { font-size: 15px; display: flex; align-items: center; gap: 8px; }
-  .count { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--pj-life) 18%, transparent); color: var(--pj-life); font-size: 12px; font-weight: 700; }
   ul { list-style: none; margin: 0; padding: 0; }
   .list li { position: relative; display: flex; align-items: center; border-radius: 10px; margin-bottom: 2px; border: 1px solid transparent; transition: background 150ms ease-out, border-color 150ms ease-out; }
   .list li:hover { background: color-mix(in srgb, var(--hue) 6%, transparent); }
   .list li.sel { background: color-mix(in srgb, var(--hue) 11%, var(--surface-1)); border-color: color-mix(in srgb, var(--hue) 45%, transparent); box-shadow: inset 3px 0 0 var(--hue); }
-  .row { flex: 1; display: grid; grid-template-columns: 34px 1fr 60px 44px; align-items: center; gap: 8px; min-height: 50px; padding: 5px 6px 5px 8px; background: none; border: 0; color: var(--text-1); text-align: left; cursor: pointer; font: inherit; border-radius: 10px; }
+  .row { flex: 1; display: grid; grid-template-columns: 34px minmax(0, 1fr) minmax(44px, auto) minmax(44px, auto); align-items: center; gap: 8px; min-height: 50px; padding: 5px 6px 5px 8px; background: none; border: 0; color: var(--text-1); text-align: left; cursor: pointer; font: inherit; border-radius: 10px; }
   .avatar { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; font-family: var(--font-display); font-weight: 700; font-size: 13.5px; color: var(--hue); background: color-mix(in srgb, var(--hue) 16%, transparent); border: 1px solid color-mix(in srgb, var(--hue) 35%, transparent); }
   .avatar.big { width: 40px; height: 40px; border-radius: 11px; font-size: 15px; flex: none; }
   .name { display: flex; flex-direction: column; gap: 3px; font-size: 14.5px; font-weight: 600; min-width: 0; }
-  .name small { display: flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 12px; font-weight: 400; }
+  .name small { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 6px; color: var(--text-2); font-size: 12px; font-weight: 400; }
   .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 999px; line-height: 1.6; vertical-align: middle; }
   .pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
   .st-active { color: var(--pj-life); background: color-mix(in srgb, var(--pj-life) 14%, transparent); }
   .st-paused { color: var(--pj-sun); background: color-mix(in srgb, var(--pj-sun) 14%, transparent); }
   .st-archived { color: var(--text-3); background: var(--surface-2); }
   .num { display: flex; flex-direction: column; align-items: flex-end; font-variant-numeric: tabular-nums; font-size: 16px; font-weight: 700; color: var(--text-2); }
-  .num small { color: var(--text-3); font-size: 10.5px; font-weight: 400; }
+  .num small { color: var(--text-3); font-size: 10.5px; font-weight: 400; white-space: nowrap; }
+  .offs { white-space: nowrap; }
   .num.pending.hot { color: var(--pj-sun); cursor: pointer; border-radius: 8px; transition: background 150ms; }
   .num.pending.hot:hover { background: color-mix(in srgb, var(--pj-sun) 14%, transparent); }
   .num.pending.hot:hover small { text-decoration: underline; }
@@ -783,7 +798,7 @@
   .slug-edit input { flex: 1; min-height: 34px; padding: 6px 9px; font-family: var(--font-mono); font-size: 13px; }
   .actions { display: flex; justify-content: flex-end; gap: 10px; }
   .stack { display: flex; flex-direction: column; gap: 8px; max-width: 760px; }
-  .dhead { display: flex; align-items: center; gap: 10px; margin: -10px -12px 6px; padding: 6px 12px; background: linear-gradient(120deg, color-mix(in srgb, var(--hue) 16%, transparent), transparent 70%); border-bottom: 1px solid color-mix(in srgb, var(--hue) 25%, var(--border)); }
+  .dhead { display: flex; align-items: center; gap: 10px; margin: 0 0 6px; padding: 6px 12px; border-radius: 10px; background: linear-gradient(120deg, color-mix(in srgb, var(--hue) 16%, transparent), transparent 70%); border-bottom: 1px solid color-mix(in srgb, var(--hue) 25%, var(--border)); }
   .dtitle { flex: 1; min-width: 0; }
   .dtitle h2 { display: flex; align-items: center; gap: 10px; font-size: 18px; }
   .dtitle .small { margin-top: 2px; }
@@ -859,6 +874,8 @@
   .how { list-style: none; padding: 0; margin: 6px 0; display: flex; flex-direction: column; gap: 10px; text-align: left; width: 100%; }
   .how li { display: flex; gap: 12px; align-items: center; font-size: 14px; color: var(--text-1); background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
   .how span { display: inline-grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 50%; background: var(--pj-grad); color: var(--pj-on-life); font-weight: 700; font-size: 13px; }
-  @media (max-width: 900px) { .pj { flex: none; } .layout { grid-template-columns: 1fr; } .link-form { flex-wrap: wrap; } }
+  @media (max-width: 900px) { .link-form { flex-wrap: wrap; } }
+  /* A phone has no room for the labels under the two numbers; their titles still say what they are. */
+  @media (max-width: 700px) { .num small { display: none; } .row { gap: 6px; } }
   @media (prefers-reduced-motion: reduce) { .btn, .list li, .tabs button, .toggle, input, select { transition: none; } .btn:active:not(:disabled) { transform: none; } }
 </style>
